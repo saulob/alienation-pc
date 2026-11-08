@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=Alienation PC
+Comment=PC port of Alienation (bring your own game package)
+Exec=AppRun
+Icon=alienation-pc
+Categories=Game;
+Terminal=false
+StartupWMClass=alienation
+Actions=Launcher;
+
+[Desktop Action Launcher]
+Name=Show launcher
+Exec=AppRun --launcher

@@ -1,0 +1,48 @@
+// The Online page's settings in alienation.ini, read the same way by the launcher and the game (the game side is not implemented yet).
+#pragma once
+
+#include <filesystem>
+#include <string_view>
+
+#include "net/online_config.h"
+
+namespace trg {
+class SettingsStore;
+}
+
+namespace aln {
+
+class LauncherSettings;
+
+// Online play for Alienation is not implemented: the Online page stays a dormant foundation, nothing connects.
+inline constexpr bool kOnlinePlayAvailable = false;
+
+inline constexpr char kOnlineEnabledKey[] = "online_enabled";
+inline constexpr char kOnlineNameKey[] = "online_name";
+inline constexpr char kOnlineUdpPortKey[] = "online_udp_port";
+inline constexpr char kOnlineStunKey[] = "online_stun";
+// The UDP port of the last Connection test finished with Online play on; 0: none since Online play was turned on.
+inline constexpr char kConnectionTestPortKey[] = "online_connection_test_port";
+// Whether an in-game Ping panel starts shown; a display preference, reset like the others.
+inline constexpr char kPingDisplayKey[] = "show_ping";
+// Opt-in to the public Lobby; Reset turns it off with the display preferences.
+inline constexpr char kLobbyVisibleKey[] = "show_in_lobby";
+
+// Kept by "Reset all settings": the player's name is not a display preference.
+bool IsOnlineSetting(std::string_view key);
+bool IsValidOnlineSetting(std::string_view key, std::string_view value);
+
+// The saved values with the ALN_* environment overrides not applied (net::apply_environment does that). The lobby and
+// UPnP have no saved setting: only ALN_LOBBY and ALN_UPNP change them.
+net::OnlineConfig ReadOnlineConfig(const std::filesystem::path& settings_file);
+net::OnlineConfig OnlineConfigOf(const trg::SettingsStore& settings);
+
+// With Online play on, PLAY waits for a Connection test finished on the UDP port the game will use, whatever its
+// result. Another port (online_udp_port or ALN_UDP_PORT) asks for a new test.
+bool ConnectionTestNeeded(const trg::SettingsStore& settings, bool online_on, bool testing, uint16_t port);
+// Saved at once: closing the launcher without Save keeps it.
+bool RecordConnectionTest(LauncherSettings& settings, uint16_t port);
+// Online play off forgets the test (pending until Save), so turning it on again asks for a new one.
+void ForgetConnectionTestWhenOff(trg::SettingsStore& settings, bool online_on);
+
+} // namespace aln

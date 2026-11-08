@@ -1,0 +1,25 @@
+Vendored from https://github.com/shadps4-emu/shadPS4 commit b4e7ae776071ceb1dd35004577a8719481e1d258 (GPL-2.0-or-later).
+Directories: src/video_core, src/shader_recompiler, src/common, src/core/libraries/{gnmdriver,videoout}, externals/gcn, externals/sirit, externals/half.
+Also: src/core/libraries/kernel/{orbis_error,posix_error,time,process,equeue}.h, equeue.cpp, src/core/libraries/error_codes.h, src/core/platform.h, src/core/libraries/system/{userservice,systemservice}.h.
+Lineage: taken from uncharted-ndc-native/gpu, itself medievil_pc's copy of the gow3_pc video core. The inherited temporal
+upscaler (FSR 3.1, FSR 4, DLSS, TAA) with its camera and object motion is not part of this tree; libSceVideodec2 is not
+built (the game does not import it).
+libSceAvPlayer (FFmpeg): src/core/libraries/avplayer, src/core/libraries/videodec/video_utils.{h,cpp} and
+src/common/support/avdec.h from upstream commit a808e762. Local changes: worker threads attach a guest TCB before they
+run (avplayer_thread.h), media files open through the runtime's /app0 mapping, the handle streamer is not used.
+Local changes are marked with "aln:" comments.
+Backported from upstream after b4e7ae7 (2026-09-24), recompiler correctness fixes:
+  233562929 V_INTERP_MOV_F32 P10/P20 selectors (#5087), d96278e1e compute shader floating-point
+  mode (#5126), e518a6515 S_SUBB_U32 SCC wrap (#5031), 282e5c792 S_ADDC_U32 SCC carry-out (#5030),
+  fb6367d29 32-bit literals in the high dword of 64-bit floats (#5114), 94e217781 V_BFM_B32 (#5185),
+  d1cb90dbb ADDC (#5200), dd43d1cac V_CVT_PK_U8_F32 (#5194), ef08b1e1f V_ALIGNBIT/ALIGNBYTE (#5186).
+And command processor and Vulkan correctness fixes:
+  12c5978f6 nested indirect buffer task frames freed (#5258), 43e4c4703 submit wait stage masks sized
+  to the wait semaphores (#5231, scheduler part only), 1ac65aa7a sparse backing allocated with device
+  address support (#5233), 2338a06f9 sparse backing offsets in blocks (#5193, buffer cache part only),
+  7ea677e56 packet size read before the packet runs (#5541), e6c79a5fe CE/DE counter waits (#5406).
+  Also: afde63182 copy-with-buffer layer assert (#5299), 92c7a8843 depth/stencil aspect copies (#5261), ee0364a9c mip level
+  clamps (#5453), 14ada48a1 fast clear on the FMask pass (#5283), c64a1e0af CE type-2 padding and Rewind (#5486).
+Reviewed, not applied: f9d07487d CE queue rework (#5446), 1b9d1591c chained IBs (#5542), c09fa46a8 bound read buffers
+  (#5262), the index buffer clamp (#5278 with #5327 and #5358). No upstream fix or root cause exists for the NVIDIA
+  device loss when shooting (shadPS4 #4525); ALN_VK_CRASH_DIAGNOSTIC=1 loads the LunarG crash diagnostic layer.

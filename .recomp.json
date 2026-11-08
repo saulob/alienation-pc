@@ -1,0 +1,29 @@
+{
+  "$schema": "https://recomp.fyi/schema/v1.json",
+  "game": "Alienation",
+  "system": "PS4",
+  "type": "recomp",
+  "original": {
+    "revision": "01.00",
+    "serial": "CUSA00062"
+  },
+  "project": "Alienation PC Port",
+  "status": "in-development",
+  "targets": [
+    "Windows"
+  ],
+  "toolchain": "shadPS4-derived runtime",
+  "approach": "Original PS4 x86-64 game code running directly on the PC through replacement PS4 system libraries and a Vulkan renderer derived from shadPS4",
+  "maintainers": [
+    {
+      "name": "saulob",
+      "link": "https://github.com/saulob"
+    }
+  ],
+  "links": [],
+  "tags": [
+    "launcher",
+    "Vulkan"
+  ],
+  "notes": "Early development: the user's own CUSA00062 (Europe) or CUSA04430 (Asia) 1.00 package is installed by the launcher; the game has not been verified to boot yet. No game files are included."
+}

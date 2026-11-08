@@ -1,0 +1,297 @@
+Third-party material in Alienation PC. The port's own code is GPL-2.0-or-later and its libSceJson2 code (AnyPS5,
+below) GPL-2.0-only, so the program is distributed under GPL-2.0 (LICENSE.txt); its source code is at
+https://github.com/saulob/alienation-pc. The loader, runtime and video core lineage is listed in
+docs/REFERENCES.md and gpu/VENDOR.txt of the source.
+
+In the release package, the licence texts named below are in licenses\<folder>\, and licenses\MSYS2-PACKAGES.txt
+lists the exact version and source package of every DLL that ships next to alienation.exe.
+
+
+========================================================================
+Compiled into alienation.exe
+========================================================================
+
+shadPS4
+  https://github.com/shadps4-emu/shadPS4
+  GPL-2.0-or-later. Copyright the shadPS4 Emulator Project; file headers carry SPDX tags.     licenses\shadPS4
+  - The video core, shader recompiler and GPU command processing: commit
+    b4e7ae776071ceb1dd35004577a8719481e1d258 plus backported fixes (gpu/VENDOR.txt of the source).
+  - The game installer's PS4 package extractor (launcher/pkg_extract.cpp of the source), adapted from
+    src/core/file_format/pkg.cpp, pfs.h, pkg_type.cpp and src/core/crypto at
+    d339b3f7d663ba89bb5b3cd572ead77b41b0f0a8, the last revision before upstream commit
+    be22674f8c1ac84e1cff89947ff4a6753070f21b ("code: Remove fpkg code") removed them. Modified: Windows CNG
+    (bcrypt, part of Windows) or, on Linux, OpenSSL in place of Crypto++, 64-bit file sizes and bounds checks.
+
+AnyPS5
+  https://github.com/boykopovar/AnyPS5
+  GPL-2.0-only. Copyright the AnyPS5 contributors. The GPL-2.0 text is LICENSE.txt.
+  - libSceJson2 (src/runtime_json.cpp of the source): ported from core/libs/prx/libSceJson2/Export.cpp at
+    c547deaacb62e308150db94f7428bf940792a57a, through the Resogun PC port. Unverified cases stop the program.
+
+sirit                       BSD-3-Clause. Copyright (c) 2019, sirit.                             licenses\sirit
+SPIRV-Headers               MIT-style Khronos licence. Copyright 2015-2024 The Khronos Group.    licenses\SPIRV-Headers
+AMD GCN register headers    MIT. Copyright (c) 2014-2021 Advanced Micro Devices, Inc.            text below
+half                        MIT. Copyright (c) 2012-2017 Christian Rau.                          licenses\half
+AMD FidelityFX Super Resolution 1 (ffx_a.h, ffx_fsr1.h)
+                            MIT. Copyright (c) 2021 Advanced Micro Devices, Inc.                 text below
+SMAA 1x                     MIT. Copyright (C) 2013 Jorge Jimenez, Jose I. Echevarria, Belen Masia,
+                            Fernando Navarro, Diego Gutierrez.                                   licenses\SMAA
+DejaVu Sans (embedded font) Bitstream Vera Fonts licence with the Arev additions; DejaVu changes are
+                            public domain. Copyright (c) 2003 Bitstream, Inc.; (c) 2006 Tavmjong Bah.
+                                                                                                 licenses\DejaVu
+Noto Sans 2.015 (embedded font; stands in for the PS4 system font set)
+                            SIL Open Font License 1.1. Copyright 2022 The Noto Project Authors.  licenses\NotoSans
+                            NotoSans-Regular.ttf unmodified from https://github.com/notofonts/notofonts.github.io,
+                            fonts/NotoSans/hinted/ttf at commit 28b15b4b43b7bed62b5cf6e6b0b5ff5846270535.
+Noto Sans TC 2.004 (embedded font; stands in for the PS4 Chinese system font set)
+                            SIL Open Font License 1.1. Copyright 2014-2021 Adobe.                licenses\NotoSansTC
+                            NotoSansTC-Regular.otf unmodified from https://github.com/notofonts/noto-cjk,
+                            Sans/SubsetOTF/TC at commit f8d157532fbfaeda587e826d4cd5b21a49186f7c.
+Dear ImGui 1.92.9b          MIT. Copyright (c) 2014-2025 Omar Cornut.                            licenses\imgui
+magic_enum                  MIT. Copyright (c) 2019 - 2024 Daniil Goncharov.                     licenses\magic_enum
+miniz                       MIT. Copyright 2013-2014 RAD Game Tools and Valve Software;
+                            Copyright 2010-2014 Rich Geldreich and Tenacious Software LLC.       licenses\miniz
+nanosvg                     zlib. Copyright (c) 2013-14 Mikko Mononen.                           licenses\nanosvg
+                            https://github.com/memononen/nanosvg at commit
+                            239e102ec2c691f2902e20ace2ed36ee4a35cfe6. Altered: one cast in
+                            nsvgParseFromFile, marked in nanosvg.h.
+xbyak                       BSD-3-Clause. Copyright (c) 2007 MITSUNARI Shigeo.                   licenses\xbyak
+fmt                         MIT                                                                  licenses\fmt
+Boost (headers)             BSL-1.0                                                              licenses\boost
+tsl robin-map               MIT                                                                  licenses\robin-map
+Vulkan Memory Allocator     MIT                                                                  licenses\VulkanMemoryAllocator
+Vulkan headers              Apache-2.0 OR MIT                                                    licenses\vulkan-headers
+LLVM compiler-rt builtins   Apache-2.0 WITH LLVM-exception                                       licenses\compiler-rt
+
+TRG Launcher 1.1.0 (https://github.com/TekRantGaming/trg-launcher, b384a28c712c9320eea8f9d50639dec49981b6c1)
+  MIT License. Copyright (c) 2026 TekRantGaming.
+
+MIT License
+
+Copyright (c) 2026 TekRantGaming
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+========================================================================
+DLLs next to alienation.exe (MSYS2 CLANG64)
+========================================================================
+
+SDL3                        Zlib                                                                 licenses\SDL3
+FreeType                    FTL (FreeType licence; offered as FTL or GPL-2.0-or-later)           licenses\freetype
+libpng                      libpng licence                                                       licenses\libpng
+Zydis                       MIT                                                                  licenses\zydis
+xxHash                      BSD-2-Clause                                                         licenses\xxhash
+ANGLE (libEGL.dll, libGLESv2.dll), the Direct3D 11 renderer
+                            BSD-3-Clause. Copyright 2018 The ANGLE Project Authors.              licenses\angleproject
+  https://chromium.googlesource.com/angle/angle, revision 890b5d8fa2988e3719e0d80421bf3e927db9cd5c, as built by the
+  MSYS2 angleproject package. libGLESv2.dll also contains, compiled in from that build:
+  - Chromium base code (BSD-3-Clause, Copyright The Chromium Authors, on the same terms as the ANGLE licence)
+  - xxHash                  BSD-2-Clause                                                         licenses\xxhash
+  - SPIRV-Tools             Apache-2.0                                                           licenses\spirv-tools
+  - Vulkan-Loader           Apache-2.0                                                           licenses\vulkan-loader
+  - Vulkan Memory Allocator MIT                                                                  licenses\VulkanMemoryAllocator
+  - cJSON, inside Vulkan-Loader. MIT:
+
+    Copyright (c) 2009-2017 Dave Gamble and cJSON contributors
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+    THE SOFTWARE.
+
+libc++                      Apache-2.0 WITH LLVM-exception                                       licenses\libc++
+winpthreads                 MIT AND BSD-3-Clause-Clear                                           licenses\libwinpthread
+zlib                        Zlib                                                                 licenses\zlib
+bzip2                       bzip2 licence                                                        licenses\bzip2
+HarfBuzz                    MIT ("Old MIT")                                                      licenses\harfbuzz
+Brotli                      MIT                                                                  licenses\brotli
+Graphite2                   MIT (offered as LGPL-2.1+, MPL-2.0, GPL-2.0+ or MIT)                 licenses\graphite2
+PCRE2                       BSD-3-Clause WITH PCRE2-exception                                    licenses\pcre2
+GLib                        LGPL-2.1-or-later                                                    licenses\glib2
+libintl (gettext)           LGPL-2.1-or-later                                                    licenses\gettext-runtime
+libiconv                    LGPL-2.1-or-later                                                    licenses\libiconv
+
+FreeType loads HarfBuzz, which brings Graphite2, GLib, libintl, libiconv, PCRE2 and Brotli with it. GLib, libintl
+and libiconv are LGPL libraries, dynamically linked and replaceable; their source packages are listed in
+licenses\MSYS2-PACKAGES.txt. vulkan-1.dll comes with the graphics driver and is not part of the package.
+
+
+========================================================================
+Shared libraries inside the Linux AppImage (usr/lib)
+========================================================================
+
+SDL3                        Zlib                                       licenses/system/SDL3
+FreeType                    FTL (FreeType licence; offered as FTL or GPL-2.0-or-later)
+libpng                      libpng licence
+Zydis, Zycore               MIT                                        licenses/system/zydis
+xxHash                      BSD-2-Clause                               licenses/system/xxhash
+fmt                         MIT                                        licenses/system/fmt
+OpenSSL (libcrypto 3)       Apache-2.0                                 licenses/system/openssl (game installer: hashes
+                                                                        and package decryption)
+Brotli                      MIT
+bzip2                       bzip2 licence
+libstdc++, libgcc_s         GPL-3.0-or-later WITH GCC-exception-3.1    (fallback copies in usr/lib/compat, used only
+                                                                        when the system's are older)
+
+The libraries with a licence path above are built from pinned sources by packaging/linux/ci-deps.sh; the licence text
+of each Ubuntu package is in licenses/system/<package>/copyright. licenses/SYSTEM-PACKAGES.txt lists every library
+with where it comes from. glibc, the Vulkan loader, the graphics drivers, X11/Wayland and the
+audio libraries come from the player's system and are not part of the AppImage.
+
+
+========================================================================
+AMD GCN register headers (gpu/third_party/gcn/include/gcn)
+========================================================================
+
+Copyright (c) 2014-2021 Advanced Micro Devices, Inc. All Rights Reserved.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+========================================================================
+AMD FidelityFX Super Resolution 1 (ffx_a.h, ffx_fsr1.h)
+========================================================================
+
+Copyright (c) 2021 Advanced Micro Devices, Inc. All rights reserved.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files(the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and / or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions :
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+
+========================================================================
+Application icon: Game Console Ecommerce
+========================================================================
+
+Source: SVG Repo (www.svgrepo.com). The file's own header reads "Uploaded to: SVG Repo, www.svgrepo.com, Generator:
+SVG Repo Mixer Tools". The source file was named game-console-ecommerce-svgrepo-com.svg.
+Modified to use the launcher accent color and a lighter tint of it (shape unchanged): the fills rgb(25,144,167) and
+rgb(144,224,239) became #E0BB32 and #F2E3AA. packaging/icons/app-icon.svg is the only copy kept.
+The ICO and PNG icon files are renderings of the modified SVG (tools/make-app-icon.py).
+
+License: CC0 (public domain dedication), as svgrepo.com/svg/425126, collection "Ecommerce Duotone Filled Icons".
+
+
+========================================================================
+Launcher icon: Heart
+========================================================================
+
+Heart icon
+Source: SVG Repo (www.svgrepo.com), https://www.svgrepo.com/svg/532473/heart
+The file's own header reads "Uploaded to: SVG Repo, www.svgrepo.com, Generator: SVG Repo Mixer Tools". The source
+file was named heart-svgrepo-com.svg.
+Modified to be a white filled heart: the stroke color #000000 became #FFFFFF and a #FFFFFF fill was added (the path is
+unchanged). assets/launcher/sponsor-heart.svg is the only copy kept; assets/launcher/sponsor-heart.png is a 64 x 64
+rendering of it.
+
+License: CC0 (public domain dedication).
+
+
+========================================================================
+Launcher page icons
+========================================================================
+
+The ten sidebar icons, compiled into alienation.exe from assets/launcher/icons of the source. Each one is
+drawn in the sidebar's colours; assets/launcher/icons/SOURCES.md records the source and every change made.
+
+display.svg, attribution required:
+  "Display Television Tv Screen Gadget" by nickylimyeanfen, collection Inc Device Icons.
+  Source: SVG Repo (www.svgrepo.com),
+  https://www.svgrepo.com/svg/381247/display-television-tv-screen-gadget
+  License: CC Attribution License, https://creativecommons.org/licenses/by/ Not CC0.
+  Adapted: renamed from display-television-tv-screen-gadget-svgrepo-com.svg and drawn scaled, in the sidebar's colours.
+
+CC0 (public domain dedication), all from SVG Repo (www.svgrepo.com):
+  play.svg       Play          https://www.svgrepo.com/svg/522228/play
+  graphics.svg   Controls Alt  https://www.svgrepo.com/svg/348105/controls-alt
+  gameplay.svg   Gamepad       https://www.svgrepo.com/svg/523439/gamepad
+  online.svg     Globe         https://www.svgrepo.com/svg/522410/globe
+  cheats.svg     Star Alt 1    https://www.svgrepo.com/svg/532289/star-alt-1
+  controls.svg   Keyboard      https://www.svgrepo.com/svg/524665/keyboard
+  trophies.svg   Achievements  https://www.svgrepo.com/svg/304482/achievements
+  about.svg      About         https://www.svgrepo.com/svg/486929/about
+
+bug-report.svg, MIT License:
+  "Bug File" by Vectopus, collection Atlas Variety Line Icons.
+  Source: SVG Repo (www.svgrepo.com), https://www.svgrepo.com/svg/456346/bug-file
+  Adapted: renamed from bug-file-svgrepo-com.svg and drawn scaled, in the sidebar's colours.
+
+Copyright (c) Vectopus
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

@@ -1,0 +1,140 @@
+// The launcher's view of user\alienation.ini, the file the video core reads at start.
+// The video core reads it the same way (gpu/shim/aln_settings.cpp); booleans are written as 1/0.
+#pragma once
+
+#include <filesystem>
+#include <map>
+#include <span>
+#include <string>
+#include <string_view>
+
+#include "game_profile.h"
+#include "trg/settings.h"
+
+struct AlnRunSettings;
+
+namespace aln {
+
+inline constexpr char kShowLauncherKey[] = "show_launcher";
+inline constexpr char kDisplayModeKey[] = "display_mode";
+inline constexpr char kWindowWidthKey[] = "window_width";
+inline constexpr char kWindowHeightKey[] = "window_height";
+inline constexpr char kMonitorKey[] = "monitor";
+inline constexpr char kVSyncKey[] = "vsync";
+inline constexpr char kPresentationKey[] = "presentation";
+inline constexpr char kUpscaleKey[] = "fsr1";
+inline constexpr char kSharpenKey[] = "rcas";
+inline constexpr char kSharpenStrengthKey[] = "rcas_strength";
+inline constexpr char kRenderResolutionKey[] = "render_resolution";
+inline constexpr char kNativeResolution[] = "native";
+inline constexpr char kAspectRatioKey[] = "aspect_ratio";
+inline constexpr char kDefaultAspectRatio[] = "16:9";
+inline constexpr char kGraphicsCardKey[] = "graphics_card";
+// Which renderer runs the game (gpu/shim/aln_renderer.h, the same keys); read when the game starts.
+inline constexpr char kRendererKey[] = "renderer";
+inline constexpr char kAntiAliasingKey[] = "smaa";
+inline constexpr char kAnisotropyKey[] = "anisotropy";
+inline constexpr char kTextLanguageKey[] = "text_language";
+// A cap on the frames per second reaching the screen (30, 60, 90, 120, 144, 165, 240; 0 is Unlimited). It paces
+// presentation only: the game's own logic rate is unchanged (gpu/shim/aln_frame_pacing.h).
+inline constexpr char kFrameRateKey[] = "frame_rate";
+inline constexpr char kShowFpsTitleKey[] = "show_fps_title";
+inline constexpr char kShowResolutionTitleKey[] = "show_resolution_title";
+inline constexpr char kShowFrameCounterKey[] = "show_fps";
+// Keeps the run log of normal sessions; crash logs are kept whatever it says.
+inline constexpr char kDetailedLoggingKey[] = "detailed_logging";
+// Windows, on: Play starts the game as a separate process that overlay programs can attach to (game_process.h).
+inline constexpr char kAllowOverlayProgramsKey[] = "allow_overlay_programs";
+inline constexpr char kLauncherXKey[] = "launcher_x";
+inline constexpr char kLauncherYKey[] = "launcher_y";
+inline constexpr char kLauncherWidthKey[] = "launcher_width";
+inline constexpr char kLauncherHeightKey[] = "launcher_height";
+inline constexpr char kLauncherMaximizedKey[] = "launcher_maximized";
+inline constexpr char kLauncherFullscreenKey[] = "launcher_fullscreen";
+
+inline constexpr int kDefaultWindowWidth = 1920;
+inline constexpr int kDefaultWindowHeight = 1080;
+
+struct PresentationChoice {
+    std::string_view key;
+    std::string_view name;
+};
+
+// How the rendered frame fits the window or display, in launcher order; the first is the default.
+inline constexpr PresentationChoice kPresentationChoices[] = {
+    {"letterbox", "Letterbox"},
+    {"stretch", "Stretch"},
+};
+inline constexpr char kDefaultPresentation[] = "letterbox";
+
+struct RendererChoice {
+    std::string_view key;
+    std::string_view name;
+};
+
+inline constexpr RendererChoice kRendererChoices[] = {
+    {"auto", "Auto"},
+    {"vulkan", "Vulkan"},
+    {"opengl", "OpenGL (experimental)"},
+#ifdef _WIN32
+    {"d3d11", "Direct3D 11 (experimental)"},
+#endif
+};
+inline constexpr char kDefaultRenderer[] = "vulkan";
+
+using Values = std::map<std::string, std::string, std::less<>>;
+
+struct ManagedSetting {
+    std::string_view key;
+    std::string_view default_value;
+};
+
+// Every setting the launcher stores, with the value the game uses when the file does not set it.
+std::span<const ManagedSetting> ManagedSettings();
+
+// The launcher window's own placement, kept apart from the game's window settings and from Reset.
+bool IsLauncherPlacementSetting(std::string_view key);
+
+// False for a value the game would not accept for the key (it uses the default then, and so does the launcher).
+bool IsValidSetting(std::string_view key, std::string_view value);
+
+std::string FrameRateLabel(int fps);
+
+// Pending launcher edits over the saved values. Nothing is written until Save() or SaveNow(); lines of the file
+// the launcher does not manage (other keys, comments) are kept as they are.
+class LauncherSettings final : public trg::SettingsStore {
+public:
+    explicit LauncherSettings(std::filesystem::path file);
+
+    std::string Get(std::string_view key, std::string_view def = {}) const override;
+    void Set(std::string_view key, std::string value) override;
+    bool Has(std::string_view key) const { return pending_.find(key) != pending_.end(); }
+    bool Save() override;
+    void ResetToDefaults() override;
+
+    // Writes some settings now and leaves the other pending edits pending.
+    bool SaveNow(const Values& values);
+
+    const std::filesystem::path& file() const { return file_; }
+
+private:
+    bool WriteFile(const Values& changes);
+
+    std::filesystem::path file_;
+    Values saved_;
+    Values pending_;
+};
+
+// A saved text_language that is not one of `languages` (not empty) becomes the first of them. True when it changed
+// (pending until Save).
+bool NormalizeTextLanguage(trg::SettingsStore& settings, std::span<const TextLanguage> languages);
+
+// The launcher opens when the game files are not ready, or when the setting is On or Shift is held, unless it was
+// skipped once. A game that is not ready always shows it: it is where the files are installed.
+bool LauncherWanted(bool game_ready, bool show_setting, bool shift_held, bool skip_once);
+
+// The "Settings:" lines of the run log (aln_log_settings_summary).
+std::string SettingsSummary(const LauncherSettings& settings, const GameBuild* build,
+                            std::span<const TextLanguage> languages, const AlnRunSettings* run);
+
+} // namespace aln
