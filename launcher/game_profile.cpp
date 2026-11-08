@@ -18,7 +18,7 @@ constexpr const char* kAsia100DataFiles[] = {
     "video/splash.mp4", "video/splash_SIE.mp4", "video/title.mp4",
 };
 
-// The executable's own localizations, by the SCE system language ids that name them.
+// The executable's own localizations, by the SCE system language ids that name them. English first, then by name.
 constexpr TextLanguage kAlienationLanguages[] = {
     {"english", "English", 1},
     {"chinese_traditional", "Chinese (Traditional)", 10},
@@ -32,13 +32,34 @@ constexpr TextLanguage kAlienationLanguages[] = {
     {"korean", "Korean", 9},
     {"norwegian", "Norwegian", 15},
     {"polish", "Polish", 16},
-    {"portuguese", "Portuguese (Portugal)", 7},
     {"portuguese_brazil", "Portuguese (Brazil)", 17},
+    {"portuguese", "Portuguese (Portugal)", 7},
     {"russian", "Russian", 8},
-    {"spanish", "Spanish (Spain)", 3},
     {"spanish_latin_america", "Spanish (Latin America)", 20},
+    {"spanish", "Spanish (Spain)", 3},
     {"swedish", "Swedish", 13},
 };
+
+// The display configuration's default size: mov dword [rdi+0x34], 1080 and mov dword [rdi+0x30], 1920. The engine sizes
+// its frontbuffers and every render script's RENDER_RESOLUTION_X/Y from it.
+// The game's startup functions (two identical copies, the same offsets in both builds) set the size of the GPU heap that
+// holds the render targets and textures: mov qword [rbp-0x78], 1 GiB. The heap's allocator returns a null block when it
+// is full and the game never checks it, so a larger target needs a larger heap.
+constexpr AlnResolutionSite kEurope100ResolutionSites[] = {
+    {0x3bb, 4, {0x48, 0xc7, 0x45, 0x88}, 0x40000000, 0, 1},
+    {0x47b, 4, {0x48, 0xc7, 0x45, 0x88}, 0x40000000, 0, 1},
+    {0x1fa8da, 3, {0xc7, 0x47, 0x34}, 1080, 1, 0},
+    {0x1fa8e1, 3, {0xc7, 0x47, 0x30}, 1920, 0, 0},
+};
+constexpr AlnResolutionSite kAsia100ResolutionSites[] = {
+    {0x3bb, 4, {0x48, 0xc7, 0x45, 0x88}, 0x40000000, 0, 1},
+    {0x47b, 4, {0x48, 0xc7, 0x45, 0x88}, 0x40000000, 0, 1},
+    {0x1fb4ea, 3, {0xc7, 0x47, 0x34}, 1080, 1, 0},
+    {0x1fb4f1, 3, {0xc7, 0x47, 0x30}, 1920, 0, 0},
+};
+
+constexpr AlnFrameRatePatch kEurope100FrameRate = {0x2507b0, {0x48, 0x8b, 0x47, 0x28}, {0x31, 0xc0, 0xc3, 0x90}};
+constexpr AlnFrameRatePatch kAsia100FrameRate = {0x2513c0, {0x48, 0x8b, 0x47, 0x28}, {0x31, 0xc0, 0xc3, 0x90}};
 
 constexpr GameBuild kGameBuilds[] = {
     {
@@ -51,8 +72,9 @@ constexpr GameBuild kGameBuilds[] = {
         "CUSA00062 1.00",
         "Europe",
         kBase100Layers,
-        {},
+        kEurope100ResolutionSites,
         kAlienationLanguages,
+        &kEurope100FrameRate,
     },
     {
         "CUSA04430",
@@ -64,8 +86,9 @@ constexpr GameBuild kGameBuilds[] = {
         "CUSA04430 1.00",
         "Asia",
         kBase100Layers,
-        {},
+        kAsia100ResolutionSites,
         kAlienationLanguages,
+        &kAsia100FrameRate,
     },
 };
 

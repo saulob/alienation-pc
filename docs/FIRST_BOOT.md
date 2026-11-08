@@ -86,36 +86,60 @@ scheduling parameters, user colours and a few dialog calls.
 
 Whether startup reaches the game's entry, the first call the runtime cannot answer, the renderer's behaviour with this
 game's shaders, the sound path Wwise picks (Audio3d or AudioOut), frame pacing, and whether the language list (shared by
-both builds; the localization database is in the game data) matches each build. Render resolution and aspect ratio stay
-native until sites are verified in each executable.
+both builds; the localization database is in the game data) matches each build.
 
-## 60 FPS patch (CUSA00062 1.00 only, not applied)
+## Frame rate
 
-The community shadPS4 patch "60 FPS v0.2 - application timestep x0.5 - VBlank 120 Hz" (r3ntonboy, `TitleID` CUSA00062,
-`AppVer` 01.00, `AppElf` eboot.bin, its note: "Gameplay validation pending") writes two 8-byte lines. shadPS4 places
-eboot patch addresses relative to 0x400000, which puts them at the EUR image offsets below:
+The engine starts at 59.94 FPS (`SetFps(59.94f)` at EUR `0x1402f4f`). The display turns the rate into a flip rate:
+`flip_rate = clamp(round(1 / (fps * vblank_period)) - 1, 0, 2)` (`0x1fbc20`), so 59.94 flips every vblank and 29.97
+every second one. The game's scripts (`stream.dat`) call `engine_set_fps` five times with a float constant (two with
+29.97, three with 59.94), so the 30 FPS the port showed comes from those script calls, not from the port's vblank.
 
-| Patch address | Image offset | Original | Patched |
-|---|---|---|---|
-| `0x018035FC` | `0x14035FC` | `C5FA5905F4B83801` `vmulss xmm0,xmm0,[0x278EEF8]` | `C5FA5905B0A53000` `vmulss xmm0,xmm0,[0x170DBB4]` |
-| `0x01803632` | `0x1403632` | `C5FA5905BEB83801` `vmulss xmm0,xmm0,[0x278EEF8]` | `C5FA59057AA53000` `vmulss xmm0,xmm0,[0x170DBB4]` |
+The port makes the binding return at once (EUR `0x2507b0`, Asia `0x2513c0`: `mov rax,[rdi+0x28]` becomes
+`xor eax,eax; ret`; `launcher/frame_rate.c`), so the startup 59.94 stays and the delta time stays `1 / fps`. Nothing
+else is touched. Static evidence only: whether Havok stepping, animation, scripted timers and cutscenes stay correct at
+59.94 in the campaign levels, which were tuned at 29.97, needs a gameplay test.
 
-Each line keeps the instruction and changes only its RIP-relative operand. `0x278EEF8` is the engine tunable
-`an__delta_t_multiplier` (zero-initialized data, set to 1.0 and registered by a static initializer at `0xcc840`); these
-two instructions are its only readers. `0x170DBB4` is a read-only `0.5f`. The readers are two adjacent virtual
-functions: the application update at `0x1403610`, which scales the frame delta once and passes it to two subsystems,
-and `0x14035F0`, which forwards the scaled delta to one child. So the patch fixes the delta at half of each frame's
-time, and the game keeps normal speed only if it also runs twice as many frames, which the patch gets from a 120 Hz
-vblank.
+The community shadPS4 patch (halves the delta at EUR `0x14035FC` / `0x1403632` and needs a 120 Hz vblank) is not used.
 
-The port does not apply it:
+## Render resolution and aspect ratio
 
-- The runtime's vblank is a fixed 60 Hz (`gpu/shim/core/emulator_settings.h`, checked by `tests/frame_pacing_tests.cpp`).
-  The patch alone would run the game at half speed.
-- Nothing shows yet that every timed system (Havok stepping, animation, the frame-skip catch-up, scripted timers and
-  `determinism_sync`) follows the scaled delta, rather than its own clock or a fixed step.
-- `an__delta_t_multiplier` is a tunable, so a script that sets it is overridden.
-- At the same addresses, CUSA04430 holds unrelated bytes, so the patch must never be applied to that build.
+The engine's display configuration defaults to 1920 x 1080 (`mov dword [rdi+0x34], 1080` / `mov dword [rdi+0x30], 1920`
+in the constructor at EUR `0x1fa8a0`). The display builds its frontbuffers and the
+`RENDER_RESOLUTION_X/Y` every render script sizes its targets from out of that pair. The launcher writes the chosen size
+into both immediates (EUR image offsets `0x1fa8da` / `0x1fa8e1`, Asia `0x1fb4ea` / `0x1fb4f1`) after checking the
+original instruction. The AvPlayer surfaces (EUR `0xcbf8d`, `0xcc011`) stay 1080p on purpose.
 
-What remains is a 120 Hz vblank mode limited to CUSA00062 1.00, and a gameplay test of movement, physics, weapons,
-timers and cutscenes at 60 FPS against the same scenes at 30 FPS.
+The constructor's heap sizes are not used: the game's startup function (EUR `0x380` and `0x440`, Asia the same
+offsets) overwrites them with 1 GiB, `0x46000000` and `0x14000000` (`mov qword [rbp-0x78], imm32` at `0x3bb` and
+`0x47b`), the three direct allocations in the log. The first is the heap whose allocator (vtable `0x1f5dfb0`, allocate
+at `0x12a22b0`) serves the render targets and textures (the manager's `+0x10` getter has 25 callers). A full heap
+makes it return a null block, which the texture constructor at EUR `0xfa870` stores and then clears with `memset`
+(call at `0xfaaa6`): that is the crash at 3360 x 1440. The port grows that one literal with the target's pixel count
+(2 MiB steps, below 2 GiB, the limit of the 32-bit immediate; native and smaller targets keep 1 GiB) in both
+startup functions and gives the direct pool the same amount on top of 5056 MiB. The other two heaps are left alone.
+
+Every run now logs `Patch:` (the display size read back from the image), `VideoOut: ... display buffers registered`,
+the AvPlayer lifecycle and, when guest flips stop for 5 s, a thread snapshot (`ALN_BOOT_DIAGNOSTIC=0` turns that
+off). A normal exit logs `Process: exit()` or `Window: closed`; `tools/build.ps1 -Run` appends the exit code to the
+log. A run that ends with none of these was ended from outside the process or by a fast-fail (Windows reports
+in the Application event log).
+
+Not verified: that the camera and HUD follow the new shape (a 16:9 default of 1.7777 sits at EUR `0x17ccfd0` and
+`2/1920`, `2/1080` at `0x17c0d78`), that every post-process target scales with the script globals, and whether the
+graphics memory pools hold 1440p and above. These need a gameplay test.
+
+## Crash reports (Windows)
+
+An unrecovered exception writes `CRASH:` into the numbered log: the exception and access, `rip` with its module or guest
+offset, the fault address and its memory state, the startup phase, render size, last video and last checkpoint, then
+the detailed report (registers, frames, modules, recent guest memory operations) and `alienation_NNN.dmp` next to the
+log (thread stacks and the module list, no game memory). The process ends with the exception code, which
+`tools/build.ps1 -Run` prints and appends to the log. `alienation_NNN.dmp` always belongs to `alienation_NNN.log`; its
+comment stream names the process, exception and log. A fault inside a library (FFmpeg, a driver, the C runtime) is logged
+first as `Diagnostics: first-chance ... UNCONFIRMED candidate` with registers, the code addresses on the stack (the
+caller of the library function) and the recent guest memory operations, and left to its owner when a handler can be
+reached from that stack. Guest code has no unwind data, so below a guest frame no handler and no unhandled-exception
+filter is ever reached and Windows ends the process silently: such a fault is reported at once. Overlay and capture
+DLLs can replace the filter: it is checked every second and after the GPU starts, and a replacement is logged and
+undone. `build.ps1 -Run` prints the last first-chance fault when a run ends without a crash report, as unconfirmed.

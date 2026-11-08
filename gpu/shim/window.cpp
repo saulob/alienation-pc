@@ -133,9 +133,6 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title, GraphicsApi api
     }
     ApplyDisplayMode(AlnSettings::Get().display_mode);
     SDL_ShowWindow(window);
-    if (const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(window))) {
-        AlnSettings::Get().display_refresh_hz = mode->refresh_rate;
-    }
     int w = 0, h = 0;
     SDL_GetWindowSizeInPixels(window, &w, &h);
     width = w;
@@ -391,7 +388,11 @@ bool WindowSDL::PollEvents() {
             break;
         }
         case SDL_EVENT_QUIT:
+            std::printf("Window: SDL quit event (close request from the system, not the game)\n");
+            is_open = false;
+            break;
         case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+            std::printf("Window: close requested on the window\n");
             is_open = false;
             break;
         default:

@@ -26,16 +26,13 @@ Working in the launcher:
 
 - Install from your own `.pkg`, with the build identified by its metadata and executable hash; other builds are refused
 - Graphics card and renderer selection, window mode, monitor, VSync, presentation, SMAA, anisotropic filtering,
-  FSR 1 and RCAS, frame-rate cap (presentation only), frame counter
+  FSR 1 and RCAS, frame counter, render resolution (native to 4K) and aspect ratio (16:9, 16:10, 21:9, 32:9, 4:3, 5:4),
+  and a 59.94 FPS engine target; the last three are untested in game
 - Keyboard mapping, Xbox and PlayStation controllers, up to four local players' controllers
 - Trophies page, bug report page, update check against this repository, GitHub Sponsors link
 
 Not available yet:
 
-- Render resolution and aspect ratio other than the game's own: no render-size site is verified in this executable
-- 60 FPS: the community shadPS4 patch matches the European `CUSA00062` 1.00 executable byte for byte, but it halves the
-  engine's frame timestep and relies on a 120 Hz vblank the port does not provide, so it is not applied
-  ([docs/FIRST_BOOT.md](docs/FIRST_BOOT.md))
 - Online play: the Online page is present but disabled; the launcher makes no online connection
 
 ## Building (Windows)

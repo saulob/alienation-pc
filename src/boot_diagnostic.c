@@ -26,7 +26,7 @@ static uint64_t now_ms(void) {
 
 static void read_setting(void) {
     const char *value = getenv("ALN_BOOT_DIAGNOSTIC");
-    enabled = value && atoi(value) > 0;
+    enabled = !value || atoi(value) > 0;
     started_ms = now_ms();
 }
 
@@ -51,7 +51,9 @@ void aln_boot_diag_event(const char *format, ...) {
     va_start(args, format);
     vsnprintf(text, sizeof(text), format, args);
     va_end(args);
-    printf("BootDiag: +%.3f s %s%s\n", elapsed_s(), text, n == MAX_EVENTS ? " (event limit reached)" : "");
+    aln_checkpoint_note(text);
+    printf("BootDiag: +%.3f s [thread %lu] %s%s\n", elapsed_s(), aln_thread_id(), text,
+           n == MAX_EVENTS ? " (event limit reached)" : "");
 }
 
 static uint64_t counter(int which) { return __atomic_load_n(&counters[which], __ATOMIC_RELAXED); }

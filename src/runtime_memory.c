@@ -26,13 +26,19 @@
 #include <unistd.h>
 #endif
 /* sceKernelGetDirectMemorySize on retail PS4: 5056 MiB. ALN_DMEM_MB raises it. */
+#define POOL_MAX_MB 16384
+static uint64_t pool_extra;
+void runtime_memory_set_direct_extra(uint64_t bytes) { pool_extra = bytes; }
 static uint64_t pool_size_bytes(void) {
     static uint64_t size;
     if (!size) {
         const char *env = getenv("ALN_DMEM_MB");
         uint64_t mb = env ? strtoull(env, NULL, 10) : 0;
-        if (mb < 5056 || mb > 16384) mb = 5056;
+        if (mb < 5056 || mb > POOL_MAX_MB) mb = 5056;
+        mb += (pool_extra + (1u << 20) - 1) >> 20;
+        if (mb > POOL_MAX_MB) mb = POOL_MAX_MB;
         size = mb * 1024 * 1024;
+        printf("Runtime: direct memory pool %" PRIu64 " MiB\n",mb);
     }
     return size;
 }
@@ -139,6 +145,36 @@ typedef struct { int kind; uintptr_t address; uint64_t size; } PendingHook;
 static PendingHook *pending; static size_t pending_count, pending_capacity;
 static size_t allocations, maps, flexible_maps, protects, queries;
 static uint64_t live_bytes, flexible_bytes;
+
+typedef struct { const char *what; uintptr_t address; uint64_t size; uint32_t tick, thread; } MemoryEvent;
+static MemoryEvent memory_events[32];
+static unsigned memory_event_count;
+
+static void note_memory(const char *what, uintptr_t address, uint64_t size) {
+    const unsigned slot = __atomic_fetch_add(&memory_event_count, 1, __ATOMIC_RELAXED) % 32;
+#ifdef _WIN32
+    const uint32_t thread = GetCurrentThreadId();
+#else
+    const uint32_t thread = (uint32_t)(uintptr_t)pthread_self();
+#endif
+    memory_events[slot] = (MemoryEvent){what, address, size, (uint32_t)(clock() * 1000 / CLOCKS_PER_SEC), thread};
+}
+
+/* Newest last; read without a lock while other threads may still write, so an entry can be torn. */
+size_t runtime_memory_recent(char *out, size_t size, uintptr_t focus) {
+    size_t at = 0;
+    const unsigned count = __atomic_load_n(&memory_event_count, __ATOMIC_RELAXED);
+    for (unsigned i = count > 16 ? count - 16 : 0; i < count && at + 160 < size; ++i) {
+        const MemoryEvent e = memory_events[i % 32];
+        if (!e.what) continue;
+        const int covers = focus && focus >= e.address && focus - e.address < e.size;
+        const int n = snprintf(out + at, size - at, "Runtime: memory op %u: %s %#" PRIxPTR "+%#" PRIx64 " thread %u at %u ms%s\n", i,
+                               e.what, e.address, e.size, e.thread, e.tick, covers ? "  <- contains the faulting address" : "");
+        if (n < 0) break;
+        at += (size_t)n < size - at ? (size_t)n : size - at - 1;
+    }
+    return at;
+}
 
 /* Logged three times per source line: games probe some sizes on purpose. */
 static int32_t mem_fail(int32_t code, int line) {
@@ -577,7 +613,10 @@ static ABI int32_t direct_map(void **out, uint64_t size, int prot, int flags, in
     int32_t result=map_direct_locked(out,size,prot,flags,physical,alignment);
     write_unlock();
     flush_hooks();
-    if (!result) printf("Runtime: mapped direct memory %p, size=%" PRIu64 ", prot=0x%x\n", *out, size, prot);
+    if (!result) {
+        note_memory("map direct",(uintptr_t)*out,size);
+        printf("Runtime: mapped direct memory %p, size=%" PRIu64 ", prot=0x%x\n", *out, size, prot);
+    }
     return result;
 }
 static ABI int32_t direct_map_named(void **out, uint64_t size, int prot, int flags, int64_t physical,
@@ -586,6 +625,7 @@ static ABI int32_t direct_map_named(void **out, uint64_t size, int prot, int fla
 }
 static int32_t unmap_locked(uintptr_t start, uint64_t size) {
     if (start%PAGE || !size) return INVALID;
+    note_memory("unmap",start,size);
     uint64_t end=start+align_up(size,PAGE);
     for (size_t i=vma_index(start); i<vma_count && vmas[i].start<end; ++i)
         if (vmas[i].kind!=KIND_RESERVED) {
@@ -656,7 +696,10 @@ static ABI int32_t map_flexible(void **inout, uint64_t size, int prot, int flags
     int32_t result=map_flexible_locked(inout,size,prot,flags);
     write_unlock();
     flush_hooks();
-    if (!result) printf("Runtime: mapped flexible memory %p, size=%" PRIu64 ", prot=0x%x\n", *inout, size, prot);
+    if (!result) {
+        note_memory("map flexible",(uintptr_t)*inout,size);
+        printf("Runtime: mapped flexible memory %p, size=%" PRIu64 ", prot=0x%x\n", *inout, size, prot);
+    }
     else fprintf(stderr,"Runtime: flexible map of %" PRIu64 " bytes failed (0x%x), in use=%" PRIu64 "\n",
                  size, (unsigned)result, flexible_bytes);
     return result;

@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "aln_frame_rate.h"
 #include "aln_resolution.h"
 
 #ifdef __cplusplus
@@ -108,6 +109,7 @@ typedef struct {
     const char *label;
     const AlnResolutionSite *resolution_sites; /* empty: the build runs only at its native size */
     size_t resolution_site_count;
+    const AlnFrameRatePatch *frame_rate;
     const char *title_id;
     const char *version;         /* the build's profile version */
     const char *eboot_sha256;

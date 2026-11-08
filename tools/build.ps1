@@ -156,6 +156,22 @@ finally {
     Pop-Location
 }
 Write-Host "alienation.exe exit code $code"
+$sessionLog = Get-ChildItem (Join-Path $PSScriptRoot '..\build\logs') -Filter 'alienation_*.log' -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime | Select-Object -Last 1
+if ($sessionLog) {
+    Add-Content -LiteralPath $sessionLog.FullName -Value "[run] alienation.exe exit code $code"
+    if ($code -ne 0) {
+        $logText = Get-Content -LiteralPath $sessionLog.FullName -Raw
+        if ($logText -notmatch 'CRASH: the process ends with exit code') {
+            $candidates = [regex]::Matches($logText, 'Diagnostics: first-chance [^\r\n]*UNCONFIRMED[^\r\n]*')
+            if ($candidates.Count -gt 0) {
+                Write-Warn 'The process ended without a crash report. Last first-chance fault in the log (UNCONFIRMED, not proven to be the cause):'
+                Write-Host $candidates[$candidates.Count - 1].Value
+            }
+            else { Write-Warn 'The process ended without a crash report or a first-chance fault in the log.' }
+        }
+    }
+}
 if ($code -eq $loadExecExit) { Write-Host 'The game requested sceSystemServiceLoadExec (see the LoadExec lines above).' }
 elseif ($stopExits.ContainsKey($code)) { Write-Host "$($stopExits[$code]) (see the STOP lines in the log)" }
 elseif ($code -lt 0) { Write-Host ('CRASH: exception 0x{0:X8}; the report is in the log' -f $code) }

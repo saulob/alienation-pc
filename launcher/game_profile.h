@@ -7,6 +7,7 @@
 #include <string>
 #include <string_view>
 
+#include "aln_frame_rate.h"
 #include "aln_resolution.h"
 
 namespace aln {
@@ -43,6 +44,7 @@ struct GameBuild {
     std::span<const PackageLayer> layers; // base package first; the last layer is the finished game
     std::span<const AlnResolutionSite> resolution_sites; // empty until verified in this build's executable
     std::span<const TextLanguage> text_languages;        // the first is the default
+    const AlnFrameRatePatch* frame_rate;                 // the verified engine_set_fps binding
 };
 
 // The supported builds.

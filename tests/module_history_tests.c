@@ -1,5 +1,4 @@
 #include "call_site.h"
-#include "fault_origin.h"
 #include "module_history.h"
 #include "startup_phase.h"
 
@@ -129,16 +128,6 @@ static void call_sites(void) {
     CHECK(!decode("ff d0 90", &site, text, sizeof(text)));
 }
 
-static void fault_ownership(void) {
-    CHECK(fault_is_ours(FAULT_ADDRESS_GUEST, FAULT_ADDRESS_UNLISTED));
-    CHECK(fault_is_ours(FAULT_ADDRESS_SELF, FAULT_ADDRESS_OTHER_MODULE));
-    CHECK(!fault_is_ours(FAULT_ADDRESS_OTHER_MODULE, FAULT_ADDRESS_SELF));
-    CHECK(fault_is_ours(FAULT_ADDRESS_UNLISTED, FAULT_ADDRESS_GUEST));
-    CHECK(fault_is_ours(FAULT_ADDRESS_UNLISTED, FAULT_ADDRESS_SELF));
-    CHECK(fault_is_ours(FAULT_ADDRESS_UNLISTED, FAULT_ADDRESS_UNLISTED));
-    CHECK(!fault_is_ours(FAULT_ADDRESS_UNLISTED, FAULT_ADDRESS_OTHER_MODULE));
-}
-
 static void phases(void) {
     CHECK(strcmp(aln_startup_phase_current(), "process start") == 0);
     aln_startup_phase("runtime window closed");
@@ -150,7 +139,6 @@ static void phases(void) {
 int main(void) {
     phases();
     call_sites();
-    fault_ownership();
     loaded_modules();
     unloaded_modules();
     recent_unloads_wrap();

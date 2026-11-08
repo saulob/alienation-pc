@@ -7,6 +7,7 @@
 #include "core/libraries/avplayer/avplayer_impl.h"
 #include "core/libraries/libs.h"
 #include "boot_diagnostic.h"
+#include "startup_phase.h"
 
 #include <string_view>
 
@@ -17,6 +18,7 @@ s32 PS4_SYSV_ABI sceAvPlayerAddSource(AvPlayerHandle handle, const char* filenam
     if (handle == nullptr) {
         return ORBIS_AVPLAYER_ERROR_INVALID_PARAMS;
     }
+    aln_crash_context_set_video(filename);
     const s32 result = handle->AddSource(filename);
     aln_boot_diag_event("AvPlayer %p: add source %s -> %#x", static_cast<void*>(handle),
                         filename ? filename : "(null)", unsigned(result));

@@ -41,6 +41,7 @@ void runtime_log_mark_crash(void);
 
 /* Records the file this run writes; called by runtime_log_start. */
 void runtime_log_set_session_path(const char *path);
+const char *runtime_log_session_path(void);
 
 /* Idempotent: discards this run's log when the decision above says so. Registered by
  * runtime_log_install_cleanup for normal exits and called explicitly before hard exits. */

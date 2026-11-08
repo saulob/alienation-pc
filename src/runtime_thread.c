@@ -7,6 +7,7 @@
  * the same 9-byte instruction with another displacement. */
 #define _GNU_SOURCE
 #include "runtime.h"
+#include "startup_phase.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -304,6 +305,7 @@ static ABI int32_t attr_set_guard(ThreadAttr **slot,uint64_t size) {
 
 /* Linux thread names hold 15 characters; longer ones would be rejected. */
 static void set_host_name(const char *name) {
+    aln_thread_label_set(name);
     char host[16]={0};
     memcpy(host,name,strnlen(name,sizeof(host)-1));
     pthread_setname_np(pthread_self(),host);

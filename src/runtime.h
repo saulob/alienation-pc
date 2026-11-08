@@ -20,6 +20,7 @@ typedef void (ABI *GuestCallback)(void);
 /* Ends the process without atexit handlers or C++ static destructors: those would tear down the video core under the
  * window, GPU, audio and guest threads, which keep running. */
 static inline __attribute__((noreturn)) void runtime_exit(int status) {
+    fprintf(stderr,"Runtime: process ends with status %d\n",status);
     fflush(NULL);
     _Exit(status);
 }
@@ -75,6 +76,10 @@ uintptr_t runtime_json_resolve(const char *name);
 void runtime_json_report(void);
 uintptr_t runtime_aln_resolve(const char *name);
 void runtime_aln_set_neo_mode(int on);
+/* Direct memory on top of the retail pool, for the larger GPU heap of a larger render target; before the first query. */
+void runtime_memory_set_direct_extra(uint64_t bytes);
+/* The last guest memory maps and unmaps as "Runtime: memory op" lines; a range holding `focus` is marked. */
+size_t runtime_memory_recent(char *out, size_t size, uintptr_t focus);
 void runtime_set_language(int ps4_language);
 void runtime_user_login(int player);
 int runtime_user_player(int32_t user);

@@ -123,23 +123,18 @@ constexpr char kUpscaleHelp[] =
 constexpr char kSharpenHelp[] =
     "Sharpens the final picture (AMD RCAS). It applies when the window is the size of the render resolution, or "
     "together with FSR 1 in a bigger window.";
-constexpr char kAspectRatioHelp[] = "Sets the game's target rendering format and the Window size choices.";
+constexpr char kAspectRatioHelp[] =
+    "Sets the shape of the render target and the Window size choices. Shapes other than 16:9 are experimental: the "
+    "game's HUD and menus are laid out for 16:9.";
 constexpr char kRenderResolutionHelp[] =
     "The resolution the game renders at. It is separate from the window size: the picture is scaled to the window. "
     "1440p and above need a powerful graphics card.";
-constexpr char kRestrictedAspectRatioHelp[] =
-    "This game build renders at 16:9; the other aspect ratios are not available for it.";
-constexpr char kRestrictedRenderResolutionHelp[] =
-    "This game build renders at its original size; the custom render resolutions are not available for it.";
 constexpr char kAntiAliasingHelp[] =
     "SMAA smooths jagged edges on the finished picture, at a small cost in performance.";
 constexpr char kAnisotropyHelp[] =
     "Sharper textures on floors and walls seen at an angle. Game uses the game's own filtering.";
 constexpr char kTextLanguageHelp[] =
     "The console language the game is told at start. The game also has its own language option in its menus.";
-constexpr char kFrameRateHelp[] =
-    "A cap on the frames reaching the screen. It never changes the game's own rate, speed or physics: the game keeps "
-    "its original frame rate, and a higher cap shows the last frame again until the next one.";
 constexpr char kShowFpsTitleHelp[] = "Shows the frame rate in the window title: Alienation | FPS: 60.00";
 constexpr char kShowResolutionTitleHelp[] =
     "Shows the game's render resolution in the window title: Alienation | 1920x1080";
@@ -625,7 +620,7 @@ private:
             return {name, "Resolution, anti-aliasing and texture filtering.", [this](trg::Ui& ui) { PageGraphics(ui); },
                     nullptr, nullptr};
         case PageId::kGameplay:
-            return {name, "Frame rate cap, readouts and console language.", [this](trg::Ui& ui) { PageGameplay(ui); },
+            return {name, "Readouts and console language.", [this](trg::Ui& ui) { PageGameplay(ui); },
                     nullptr, nullptr};
         case PageId::kControls:
             return {name, "Controller and keyboard.", [this](trg::Ui& ui) { PageControls(ui); }, nullptr, nullptr};
@@ -797,13 +792,10 @@ private:
         ui.Row("Monitor", kMonitorHelp);
         MonitorCombo();
         std::vector<trg::Option> aspects;
-        const bool restricted = RestrictedToNativeResolution(build_);
         for (const AlnAspectRatio& aspect : aln_aspect_ratios) {
-            if (!restricted || std::string_view(aspect.key) == kDefaultAspectRatio) {
-                aspects.push_back({aspect.key, aspect.name});
-            }
+            aspects.push_back({aspect.key, aspect.name});
         }
-        ui.Combo("Aspect Ratio", restricted ? kRestrictedAspectRatioHelp : kAspectRatioHelp, kAspectRatioKey,
+        ui.Combo("Aspect Ratio", kAspectRatioHelp, kAspectRatioKey,
                  kDefaultAspectRatio, aspects);
         if (&SavedAspectRatio() != &previous_aspect) {
             const int height = settings_.GetInt(kWindowHeightKey, kDefaultWindowHeight);
@@ -888,15 +880,11 @@ private:
     }
 
     void PageGraphics(trg::Ui& ui) {
-        const bool custom = !RestrictedToNativeResolution(build_);
         std::vector<trg::Option> options;
         for (const AlnResolution& resolution : aln_resolutions) {
-            if (custom || std::string_view(resolution.key) == kNativeResolution) {
-                options.push_back({resolution.key, ResolutionLabel(resolution)});
-            }
+            options.push_back({resolution.key, ResolutionLabel(resolution)});
         }
-        ui.Combo("Render resolution", custom ? kRenderResolutionHelp : kRestrictedRenderResolutionHelp,
-                 kRenderResolutionKey, kNativeResolution, options);
+        ui.Combo("Render resolution", kRenderResolutionHelp, kRenderResolutionKey, kNativeResolution, options);
         ui.Toggle("Anti-aliasing", kAntiAliasingHelp, kAntiAliasingKey, false, "Off", "SMAA");
         ui.Combo("Texture filtering", kAnisotropyHelp, kAnisotropyKey, "0",
                  {{"0", "Game"}, {"2", "2x"}, {"4", "4x"}, {"8", "8x"}, {"16", "16x"}});
@@ -904,11 +892,6 @@ private:
     }
 
     void PageGameplay(trg::Ui& ui) {
-        std::vector<trg::Option> frame_rates;
-        for (const int fps : {30, 60, 90, 120, 144, 165, 240, 0}) {
-            frame_rates.push_back({std::to_string(fps), FrameRateLabel(fps)});
-        }
-        ui.Combo("Frame rate cap", kFrameRateHelp, kFrameRateKey, "60", frame_rates);
         ui.Toggle("Frame rate in title", kShowFpsTitleHelp, kShowFpsTitleKey, false, "Off", "On");
         ui.Toggle("Render resolution in title", kShowResolutionTitleHelp, kShowResolutionTitleKey, false, "Off", "On");
         ui.Toggle("Frame counter", kFrameCounterHelp, kShowFrameCounterKey, false, "Hidden", "Shown");

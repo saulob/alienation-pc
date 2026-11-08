@@ -120,7 +120,7 @@ if (WIN32)
     # Relink when the application icon, the manifest or the version changes.
     set_source_files_properties(src/alienation.rc PROPERTIES OBJECT_DEPENDS
         "${CMAKE_SOURCE_DIR}/packaging/icons/app-icon.ico;${CMAKE_SOURCE_DIR}/src/alienation.manifest;${CMAKE_BINARY_DIR}/generated/aln_version.h")
-    set(ALN_PLATFORM_SOURCES src/compat_win.c src/module_diagnostics.c src/module_history.c src/call_site.c src/runtime_log.c src/alienation.rc)
+    set(ALN_PLATFORM_SOURCES src/compat_win.c src/crash_guard.c src/module_diagnostics.c src/module_history.c src/call_site.c src/runtime_log.c src/alienation.rc)
 else()
     set(ALN_PLATFORM_SOURCES src/runtime_log_posix.c)
 endif()
@@ -174,6 +174,20 @@ add_executable(aln-image-format-tests EXCLUDE_FROM_ALL tests/image_format_tests.
 target_include_directories(aln-image-format-tests PRIVATE src)
 target_compile_definitions(aln-image-format-tests PRIVATE ALN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_compile_options(aln-image-format-tests PRIVATE -Wall -Wextra -Werror)
+
+# Focused tests of the render resolution and frame rate patches (tools/test.ps1); not part of the default build.
+add_executable(aln-resolution-patch-tests EXCLUDE_FROM_ALL tests/resolution_patch_tests.c launcher/resolution.c launcher/frame_rate.c)
+target_include_directories(aln-resolution-patch-tests PRIVATE launcher)
+target_compile_options(aln-resolution-patch-tests PRIVATE -Wall -Wextra -Werror)
+
+# Focused tests of the Windows crash reporting: each case crashes an isolated child process through the production
+# handlers and checks the log, the minidump and the exit code (tools/test.ps1); not part of the default build.
+if (WIN32)
+    add_executable(aln-crash-guard-tests EXCLUDE_FROM_ALL tests/crash_guard_tests.c src/crash_guard.c src/runtime_log.c
+        src/runtime_session_log.c src/startup_phase.c)
+    target_include_directories(aln-crash-guard-tests PRIVATE src)
+    target_compile_options(aln-crash-guard-tests PRIVATE -Wall -Wextra -Werror -fno-omit-frame-pointer)
+endif()
 
 # Focused tests of libSceRtc through the import resolver (tools/test.ps1, tools/build.sh --test); not part of the default
 # build.
@@ -313,13 +327,6 @@ set_target_properties(aln-present-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_
 target_include_directories(aln-present-tests PRIVATE gpu/shim)
 target_compile_definitions(aln-present-tests PRIVATE ALN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_compile_options(aln-present-tests PRIVATE -Wall -Wextra -Werror)
-
-# Focused tests of the Frame rate setting's presentation pacing (tools/test.ps1); not part of the default build.
-add_executable(aln-frame-pacing-tests EXCLUDE_FROM_ALL tests/frame_pacing_tests.cpp)
-set_target_properties(aln-frame-pacing-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
-target_include_directories(aln-frame-pacing-tests PRIVATE gpu/shim)
-target_compile_definitions(aln-frame-pacing-tests PRIVATE ALN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
-target_compile_options(aln-frame-pacing-tests PRIVATE -Wall -Wextra -Werror)
 
 # Focused tests of the AvPlayer worker threads joining themselves and each other (tools/test.ps1); not part of the default build.
 add_executable(aln-avplayer-thread-tests EXCLUDE_FROM_ALL tests/avplayer_thread_tests.cpp)

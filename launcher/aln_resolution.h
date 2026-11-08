@@ -41,10 +41,18 @@ AlnResolution aln_render_target(const AlnResolution *resolution, const AlnAspect
 typedef struct {
     uint32_t offset; /* image offset of the opcode */
     uint8_t opcode_length;
-    uint8_t opcode[2];
+    uint8_t opcode[4];
     uint32_t value;  /* the original immediate */
     int height;
+    int pixel_budget; /* value is the GPU heap's byte size: it grows with the render target (aln_scaled_budget) */
 } AlnResolutionSite;
+
+/* The native 1920x1080 heap size grown with the target's pixel count, in 2 MiB steps, never below native and below
+ * 2 GiB, the limit of a sign-extended 32-bit immediate. */
+uint32_t aln_scaled_budget(uint32_t native_bytes, const AlnResolution *target);
+
+/* What the largest budget site adds to the retail heap: the direct memory the runtime must offer besides its pool. */
+uint64_t aln_budget_growth(const AlnResolutionSite *sites, size_t count, const AlnResolution *target);
 
 /* Writes the resolution's width and height into every site after checking each one still holds the original
  * instruction. Returns 0 and a message in `error` when the image does not match; nothing is written then. */

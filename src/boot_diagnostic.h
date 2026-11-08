@@ -1,4 +1,4 @@
-/* ALN_BOOT_DIAGNOSTIC=1: bounded lifecycle events, and a snapshot of thread waits when guest flips stop. */
+/* On unless ALN_BOOT_DIAGNOSTIC=0: bounded lifecycle events, and a snapshot of thread waits when guest flips stop. */
 #ifndef ALN_BOOT_DIAGNOSTIC_H
 #define ALN_BOOT_DIAGNOSTIC_H
 

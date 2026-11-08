@@ -33,7 +33,6 @@ static int aligned_width(int height, const AlnAspectRatio *aspect) {
 
 AlnResolution aln_render_target(const AlnResolution *resolution, const AlnAspectRatio *aspect) {
     AlnResolution target = *resolution;
-    if (aspect == &aln_aspect_ratios[0]) return target;
     const long budget = 3840L * 2160;
     int height = resolution->height;
     while (height > 8 && (long)aligned_width(height, aspect) * height > budget) height -= 8;
@@ -41,6 +40,27 @@ AlnResolution aln_render_target(const AlnResolution *resolution, const AlnAspect
     target.height = height;
     if (target.width > 1920 || height > 1080 || (long)target.width * height > 1920L * 1080) target.pro_memory = 1;
     return target;
+}
+
+uint32_t aln_scaled_budget(uint32_t native_bytes, const AlnResolution *target) {
+    const uint64_t native_pixels = 1920u * 1080u;
+    const uint64_t step = 2u << 20;
+    const uint64_t limit = 0x7fe00000u;
+    const uint64_t pixels = (uint64_t)target->width * (uint64_t)target->height;
+    uint64_t bytes = ((uint64_t)native_bytes * pixels + native_pixels - 1) / native_pixels;
+    bytes = (bytes + step - 1) / step * step;
+    if (bytes < native_bytes) bytes = native_bytes;
+    return (uint32_t)(bytes < limit ? bytes : (limit > native_bytes ? limit : native_bytes));
+}
+
+uint64_t aln_budget_growth(const AlnResolutionSite *sites, size_t count, const AlnResolution *target) {
+    uint64_t growth = 0;
+    for (size_t i = 0; i < count; ++i) {
+        if (!sites[i].pixel_budget) continue;
+        const uint64_t site_growth = aln_scaled_budget(sites[i].value, target) - sites[i].value;
+        if (site_growth > growth) growth = site_growth;
+    }
+    return growth;
 }
 
 static int fail(char *error, size_t size, const char *what, uint32_t offset) {
@@ -61,7 +81,8 @@ int aln_apply_resolution(unsigned char *image, uint64_t image_size, const AlnRes
             return fail(error, error_size, "unexpected instruction", site->offset);
     }
     for (size_t i = 0; i < count; ++i) {
-        const uint32_t value = (uint32_t)(sites[i].height ? resolution->height : resolution->width);
+        const uint32_t value = sites[i].pixel_budget ? aln_scaled_budget(sites[i].value, resolution)
+                                                     : (uint32_t)(sites[i].height ? resolution->height : resolution->width);
         memcpy(image + sites[i].offset + sites[i].opcode_length, &value, 4);
     }
     return 1;

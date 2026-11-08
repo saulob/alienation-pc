@@ -95,7 +95,7 @@ if ! grep -qs "CMAKE_BUILD_TYPE:STRING=$config" "$build_dir/CMakeCache.txt" || [
 fi
 step 'Building'
 targets=(alienation)
-tests=(aln-image-format-tests aln-runtime-tests aln-runtime-overlay-tests aln-module-history-tests aln-rtc-tests aln-ime-keyboard-tests aln-json2-tests aln-thread-cancel-tests aln-tiling-tests aln-renderer-selection-tests aln-opengl-backend-tests aln-opengl-perf-tests aln-cursor-tests aln-window-tests aln-sdl-compat-tests aln-present-tests aln-frame-pacing-tests aln-trophy-tests aln-incident-tests aln-update-tests)
+tests=(aln-image-format-tests aln-resolution-patch-tests aln-runtime-tests aln-runtime-overlay-tests aln-module-history-tests aln-rtc-tests aln-ime-keyboard-tests aln-json2-tests aln-thread-cancel-tests aln-tiling-tests aln-renderer-selection-tests aln-opengl-backend-tests aln-opengl-perf-tests aln-cursor-tests aln-window-tests aln-sdl-compat-tests aln-present-tests aln-trophy-tests aln-incident-tests aln-update-tests)
 ((test)) && targets+=("${tests[@]}")
 ninja -C "$build_dir" "${targets[@]}"
 loader=$build_dir/bin/alienation

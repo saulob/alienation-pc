@@ -17,12 +17,12 @@
 #include <sys/resource.h>
 #endif
 #include "common/assert.h"
-#include "aln_frame_pacing.h"
 #include "aln_latency_trace.h"
 #include "aln_present.h"
 #include "aln_settings.h"
 #include "aln_toggles.h"
 #include "boot_diagnostic.h"
+#include "startup_phase.h"
 #include "aln_overlay.h"
 #include "video_core/renderer_vulkan/vk_frame_capture.h"
 #include "common/debug.h"
@@ -272,6 +272,8 @@ int VideoOutDriver::RegisterBuffers(VideoOutPort* port, s32 startIndex, void* co
              attribute->aspect_ratio, static_cast<u32>(attribute->tiling_mode), attribute->width,
              attribute->height, attribute->pitch_in_pixel, attribute->option);
 
+    std::printf("VideoOut: %d display buffers registered, %ux%u (pitch %u)\n", bufferNum, unsigned(attribute->width),
+                unsigned(attribute->height), unsigned(attribute->pitch_in_pixel));
     auto& group = port->groups[group_index];
     std::memcpy(&group.attrib, attribute, sizeof(BufferAttribute));
     group.is_occupied = true;
@@ -355,17 +357,15 @@ int VideoOutDriver::ChangeBufferAttribute(VideoOutPort* port, s32 attributeIndex
 
 void VideoOutDriver::Flip(const Request& req) {
     aln_boot_diag_count(ALN_DIAG_FLIP);
-    const bool present =
-        AlnFramePacing::PresentsFlip(AlnSettings::Get().frame_rate.load(), flips_consumed++);
+    static const bool first_flip = (aln_checkpoint("VideoOut: first guest flip"), true);
+    (void)first_flip;
     // Update HDR status before presenting, then present the frame on the swap thread.
-    RunPresenter([this, frame = req.frame, hdr = req.port->is_hdr, submitted = req.submitted, present] {
-        if (!present) {
-            presenter->RetireFrame(frame);
-            return;
-        }
+    RunPresenter([this, frame = req.frame, hdr = req.port->is_hdr, submitted = req.submitted] {
         presenter->SetHDR(hdr);
         presenter->Present(frame);
         aln_boot_diag_count(ALN_DIAG_PRESENT);
+        static const bool first_present = (aln_checkpoint("VideoOut: first frame presented"), true);
+        (void)first_present;
         if (AlnLatencyTrace::enabled) {
             TracePresent(submitted);
         }
@@ -659,45 +659,6 @@ void VideoOutDriver::DrawLastFrame() {
     }, true);
 }
 
-void VideoOutDriver::RepeatLastFrame() {
-    RunPresenter([this] {
-        const auto frame = presenter->PrepareLastFrame();
-        if (frame != nullptr) {
-            presenter->Present(frame, true);
-        }
-    }, true);
-}
-
-namespace {
-constexpr auto kLimiterSpinWindow = std::chrono::microseconds(500);
-
-// A coarse wait can return about a millisecond late, so it stops short and the rest is yielded.
-void WaitUntilSlot(std::chrono::steady_clock::time_point slot) {
-    using Clock = std::chrono::steady_clock;
-    const auto coarse = slot - Clock::now() - kLimiterSpinWindow;
-#ifdef _WIN32
-    thread_local const HANDLE timer =
-        CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
-    if (coarse > Clock::duration::zero()) {
-        LARGE_INTEGER due;
-        due.QuadPart = -std::chrono::duration_cast<std::chrono::nanoseconds>(coarse).count() / 100;
-        if (timer && SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE)) {
-            WaitForSingleObject(timer, INFINITE);
-        } else {
-            std::this_thread::sleep_for(coarse);
-        }
-    }
-#else
-    if (coarse > Clock::duration::zero()) {
-        std::this_thread::sleep_for(coarse);
-    }
-#endif
-    while (Clock::now() < slot) {
-        std::this_thread::yield();
-    }
-}
-} // namespace
-
 bool VideoOutDriver::SubmitFlip(VideoOutPort* port, s32 index, s64 flip_arg,
                                 bool is_eop /*= false*/) {
     {
@@ -757,17 +718,8 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
     Common::SetCurrentThreadRealtime(vblank_period);
 
     Common::AccurateTimer timer{vblank_period};
-    const int target_fps = AlnSettings::Get().frame_rate.load();
-    const double display_hz = AlnSettings::Get().display_refresh_hz;
-    bool vsync = AlnSettings::Get().vsync;
-    AlnFramePacing::FrameLimiter limiter{AlnFramePacing::RepeatCadenceHz(target_fps, vsync, display_hz),
-                                         std::chrono::steady_clock::now()};
-    const std::string cadence_text =
-        limiter.Enabled() ? std::to_string(AlnFramePacing::RepeatCadenceHz(target_fps, vsync, display_hz)) + " FPS"
-                          : "none";
-    std::printf("VideoOut: vblank %u Hz, frame rate %s, repeat cadence %s, VSync %s\n",
-                EmulatorSettings.GetVblankFrequency(), AlnFramePacing::ModeName(target_fps).c_str(),
-                cadence_text.c_str(), vsync ? "on" : "off");
+    std::printf("VideoOut: vblank %u Hz, VSync %s\n", EmulatorSettings.GetVblankFrequency(),
+                AlnSettings::Get().vsync ? "on" : "off");
     if (AlnLatencyTrace::enabled) {
         std::printf("Latency trace: on (ALN_INPUT_LATENCY_TRACE=1), pad and present lines every 5 s\n");
     }
@@ -784,13 +736,6 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
 
     while (!token.stop_requested()) {
         timer.Start();
-        const auto tick_start = std::chrono::steady_clock::now();
-        if (const bool vsync_now = AlnSettings::Get().vsync; vsync_now != vsync) {
-            vsync = vsync_now;
-            limiter = AlnFramePacing::FrameLimiter{AlnFramePacing::RepeatCadenceHz(target_fps, vsync, display_hz),
-                                                   tick_start};
-        }
-        const auto tick_deadline = tick_start + vblank_period;
 
         if (DebugState.IsGuestThreadsPaused()) {
             DrawLastFrame();
@@ -818,7 +763,6 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
                     }
                 }
             } else {
-                limiter.Release(tick_start);
                 Flip(request);
                 FRAME_END;
             }
@@ -846,20 +790,6 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
             vblank_status.process_time = Libraries::Kernel::sceKernelGetProcessTime();
             vblank_status.tsc = Libraries::Kernel::sceKernelReadTsc();
             main_port.vblank_cv.notify_all();
-        }
-
-        // Frame rate above 60: the game makes one new frame per vblank, so the slots left before the next one
-        // show the last frame again.
-        while (limiter.Enabled() && main_port.is_open && !token.stop_requested()) {
-            const auto slot = limiter.NextSlot();
-            if (slot >= tick_deadline) {
-                break;
-            }
-            if (std::chrono::steady_clock::now() < slot) {
-                WaitUntilSlot(slot);
-            }
-            limiter.Release(std::chrono::steady_clock::now());
-            RepeatLastFrame();
         }
 
         timer.End();

@@ -25,6 +25,8 @@ $tests = [ordered]@{
     'aln-thread-cancel-tests'      = 'thread cancellation tests'
     'aln-avplayer-thread-tests'    = 'AvPlayer thread join tests'
     'aln-image-format-tests'       = 'boot image and content profile contract'
+    'aln-resolution-patch-tests'   = 'render resolution and frame rate patch tests'
+    'aln-crash-guard-tests'        = 'crash reporting (isolated crashing child processes)'
     'aln-runtime-overlay-tests'    = 'guest file overlay tests'
     'aln-tiling-tests'             = 'GPU tiling tests'
     'aln-gds-lane-offset-tests'    = 'GPU GDS lane offset tests'
@@ -37,7 +39,6 @@ $tests = [ordered]@{
     'aln-window-tests'             = 'window fit tests'
     'aln-sdl-compat-tests'         = 'SDL compatibility tests'
     'aln-present-tests'            = 'presentation tests'
-    'aln-frame-pacing-tests'       = 'frame pacing tests'
     'aln-trophy-tests'             = 'trophy tests'
     'aln-incident-tests'           = 'bug report tests'
     'aln-update-tests'             = 'updater tests (no network)'
@@ -63,6 +64,8 @@ if (-not $python) { $failed.Add('game_profile_tests.py (Python 3 not found)') }
 else {
     & $python.Exe @($python.Args) '-I' (Join-Path $script:RepoRoot 'tests\game_profile_tests.py')
     if ($LASTEXITCODE -ne 0) { $failed.Add("game_profile_tests.py (exit code $LASTEXITCODE)") }
+    & $python.Exe @($python.Args) '-I' (Join-Path $script:RepoRoot 'tests\patch_site_tests.py')
+    if ($LASTEXITCODE -ne 0) { $failed.Add("patch_site_tests.py (exit code $LASTEXITCODE)") }
 }
 
 if ($failed.Count) {

@@ -4,6 +4,7 @@
 #include <chrono>
 #include <xxhash.h>
 #include "aln_toggles.h"
+#include "startup_phase.h"
 #include "video_core/renderer_vulkan/vk_frame_capture.h"
 #include "common/debug.h"
 #include "core/debug_state.h"
@@ -2721,6 +2722,8 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
         state.height = proxy.height;
         target_scale = {float(size.width) / 1920.0f, float(size.height) / 1080.0f};
     }
+    static const bool first_pass = (aln_checkpoint("GPU: first render pass %ux%u", state.width, state.height), true);
+    (void)first_pass;
     if (FrameCapture::Active()) {
         std::array<const VideoCore::ImageInfo*, AmdGpu::NUM_COLOR_BUFFERS> colors{};
         for (u32 cb = 0; cb < state.num_color_attachments; ++cb) {

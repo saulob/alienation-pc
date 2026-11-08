@@ -123,9 +123,6 @@ inline constexpr Choice kAntiAliasing[] = {{"0", "Off"}, {"1", "SMAA"}};
 inline constexpr Choice kDisplayModes[] = {{"windowed", "Windowed"}, {"borderless", "Borderless Fullscreen"}};
 inline constexpr Choice kPresentations[] = {{"letterbox", "Letterbox"}, {"stretch", "Stretch"}};
 inline constexpr Choice kAnisotropy[] = {{"0", "Game"}, {"2", "2x"}, {"4", "4x"}, {"8", "8x"}, {"16", "16x"}};
-inline constexpr Choice kFrameRates[] = {{"30", "30 FPS"},   {"60", "60 FPS"}, {"90", "90 FPS"},
-                                         {"120", "120 FPS"}, {"144", "144 FPS"},         {"165", "165 FPS"},
-                                         {"240", "240 FPS"}, {"0", "Unlimited"}};
 inline constexpr Choice kStrengths[] = {
     {"0", "0%"},   {"5", "5%"},   {"10", "10%"}, {"15", "15%"}, {"20", "20%"}, {"25", "25%"}, {"30", "30%"},
     {"35", "35%"}, {"40", "40%"}, {"45", "45%"}, {"50", "50%"}, {"55", "55%"}, {"60", "60%"}, {"65", "65%"},
@@ -143,7 +140,6 @@ enum class Id {
     SharpeningStrength,
     AntiAliasing,
     TextureFiltering,
-    FrameRate,
     FrameRateInTitle,
     ResolutionInTitle,
     FrameCounter,
@@ -187,8 +183,6 @@ inline constexpr Setting kSettings[] = {
      "SMAA smooths jagged edges on the finished picture, at a small cost in speed.", Apply::Live, kAntiAliasing},
     {Id::TextureFiltering, Page::Graphics, "anisotropy", "Texture filtering",
      "Sharper textures seen at an angle. Game uses the game's own filtering.", Apply::Restart, kAnisotropy},
-    {Id::FrameRate, Page::Gameplay, "frame_rate", "Frame rate",
-     "A cap on the frames shown. The game's own frame rate and speed do not change.", Apply::Restart, kFrameRates},
     {Id::FrameRateInTitle, Page::Gameplay, "show_fps_title", "Frame rate in title",
      "Shows the frame rate in the window title.", Apply::Live, kOffOn},
     {Id::ResolutionInTitle, Page::Gameplay, "show_resolution_title", "Render resolution in title",
@@ -240,7 +234,6 @@ inline std::string Current(const AlnSettings::Values& v, Id id) {
     case Id::SharpeningStrength: return std::to_string(v.rcas_strength.load());
     case Id::AntiAliasing: return flag(v.smaa);
     case Id::TextureFiltering: return std::to_string(v.anisotropy.load());
-    case Id::FrameRate: return std::to_string(v.frame_rate.load());
     case Id::FrameRateInTitle: return flag(v.show_fps_title);
     case Id::ResolutionInTitle: return flag(v.show_resolution_title);
     case Id::FrameCounter: return flag(v.show_fps);
@@ -270,8 +263,7 @@ inline void ApplyLive(AlnSettings::Values& v, Id id, std::string_view value) {
     case Id::AspectRatio:
     case Id::Renderer:
     case Id::RenderResolution:
-    case Id::TextureFiltering:
-    case Id::FrameRate: break;
+    case Id::TextureFiltering: break;
     }
 }
 

@@ -35,9 +35,6 @@ inline constexpr char kRendererKey[] = "renderer";
 inline constexpr char kAntiAliasingKey[] = "smaa";
 inline constexpr char kAnisotropyKey[] = "anisotropy";
 inline constexpr char kTextLanguageKey[] = "text_language";
-// A cap on the frames per second reaching the screen (30, 60, 90, 120, 144, 165, 240; 0 is Unlimited). It paces
-// presentation only: the game's own logic rate is unchanged (gpu/shim/aln_frame_pacing.h).
-inline constexpr char kFrameRateKey[] = "frame_rate";
 inline constexpr char kShowFpsTitleKey[] = "show_fps_title";
 inline constexpr char kShowResolutionTitleKey[] = "show_resolution_title";
 inline constexpr char kShowFrameCounterKey[] = "show_fps";
@@ -97,8 +94,6 @@ bool IsLauncherPlacementSetting(std::string_view key);
 
 // False for a value the game would not accept for the key (it uses the default then, and so does the launcher).
 bool IsValidSetting(std::string_view key, std::string_view value);
-
-std::string FrameRateLabel(int fps);
 
 // Pending launcher edits over the saved values. Nothing is written until Save() or SaveNow(); lines of the file
 // the launcher does not manage (other keys, comments) are kept as they are.

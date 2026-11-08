@@ -14,7 +14,7 @@
 #include "aln_launcher.h"
 #include "startup_phase.h"
 #include "boot_diagnostic.h"
-#include "fault_origin.h"
+#include "aln_frame_rate.h"
 #include "aln_resolution.h"
 #include "runtime_log.h"
 #include "aln_image_format.h"
@@ -24,6 +24,8 @@
 #endif
 #ifdef _WIN32
 #include <windows.h>
+#include <signal.h>
+#include "crash_guard.h"
 #include "module_diagnostics.h"
 #else
 #include <sys/mman.h>
@@ -141,6 +143,7 @@ __asm__(".text\n.globl enter_on_stack\nenter_on_stack:\n"
         " mov %rbp,%rsp\n pop %rbp\n ret\n");
 #endif
 static ABI void guest_exit(void) { puts("Runtime: process finalizer callback reached"); }
+static void log_process_exit(void) { printf("Process: exit() reached in phase '%s'\n",aln_startup_phase_current()); }
 static void log_cpu(void) {
     char name[64], sets[96];
     const IsaHostFeatures host=isa_host_features();
@@ -171,26 +174,11 @@ static int annotate_address(char *out, size_t size, uintptr_t address) {
 static void describe_address(char *out, size_t size, uintptr_t address) {
     if (!annotate_address(out,size,address)) snprintf(out,size,"%p",(void *)address);
 }
-static int fatal_reported;
-static DWORD fatal_thread;
-static char fatal_line[768];
-static LONG fatal_exception(EXCEPTION_POINTERS *info) {
-    if (__atomic_exchange_n(&fatal_reported,1,__ATOMIC_ACQ_REL)) {
-        /* A fault inside the report itself ends the process instead of waiting for itself. */
-        if (__atomic_load_n(&fatal_thread,__ATOMIC_ACQUIRE)==GetCurrentThreadId()) {
-            if (fatal_line[0]) runtime_log_write_direct(fatal_line);
-            TerminateProcess(GetCurrentProcess(),3);
-        }
-        Sleep(INFINITE);
-    }
-    __atomic_store_n(&fatal_thread,GetCurrentThreadId(),__ATOMIC_RELEASE);
-    runtime_log_mark_crash();
+static void crash_detail(EXCEPTION_POINTERS *info) {
     const EXCEPTION_RECORD *record=info->ExceptionRecord;
     const CONTEXT *c=info->ContextRecord;
     char where[MAX_PATH+64];
     describe_address(where,sizeof(where),(uintptr_t)c->Rip);
-    snprintf(fatal_line,sizeof(fatal_line),"FATAL exception 0x%08lx at %p (%s) thread %lu\n",
-             record->ExceptionCode,(void *)c->Rip,where,GetCurrentThreadId());
     if (record->ExceptionCode==EXCEPTION_ACCESS_VIOLATION && record->NumberParameters>=2)
         fprintf(stderr,"Fault: %s access to %p at %s (thread %lu)\n",
                 record->ExceptionInformation[0]==1 ? "write" : record->ExceptionInformation[0]==8 ? "execute" : "read",
@@ -204,6 +192,12 @@ static LONG fatal_exception(EXCEPTION_POINTERS *info) {
     module_diagnostics_report_backtrace(c,(uintptr_t)image,0x20000000);
     fprintf(stderr,"  rax=%016llx rbx=%016llx rcx=%016llx rdx=%016llx\n  rsi=%016llx rdi=%016llx rbp=%016llx rsp=%016llx\n",
             c->Rax,c->Rbx,c->Rcx,c->Rdx,c->Rsi,c->Rdi,c->Rbp,c->Rsp);
+    {
+        static char operations[3072];
+        const int fault_address=record->ExceptionCode==EXCEPTION_ACCESS_VIOLATION && record->NumberParameters>=2;
+        const size_t length=runtime_memory_recent(operations,sizeof(operations),fault_address ? (uintptr_t)record->ExceptionInformation[1] : 0);
+        if (length) fputs(operations,stderr);
+    }
     if (gpu_enabled) alngpu_dump_guest_writes(info);
     /* Top stack words: after a call through a null pointer [rsp] is the caller's return address. */
     uintptr_t words[8];
@@ -224,22 +218,28 @@ static LONG fatal_exception(EXCEPTION_POINTERS *info) {
         rbp=frame[0];
     }
     runtime_log_flush();
-    runtime_log_write_direct(fatal_line);
-    TerminateProcess(GetCurrentProcess(),3);
-    return EXCEPTION_CONTINUE_SEARCH;
 }
-static FaultAddress classify_fault_address(uintptr_t address, HMODULE self) {
-    HMODULE module=NULL;
-    if (image && address-(uintptr_t)image<0x20000000) return FAULT_ADDRESS_GUEST;
-    if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCSTR)address,&module) || !module)
-        return FAULT_ADDRESS_UNLISTED;
-    return module==self ? FAULT_ADDRESS_SELF : FAULT_ADDRESS_OTHER_MODULE;
+static void abort_signal(int sig) {
+    (void)sig;
+    aln_crash_guard_report_here("abort() was called: an uncaught C++ exception, a pure virtual call or a failed library check",
+                                0x40000015u,3);
 }
-static FaultAddress classify_caller(const CONTEXT *c, HMODULE self) {
-    uintptr_t caller=0;
-    SIZE_T got=0;
-    if (!ReadProcessMemory(GetCurrentProcess(),(void *)c->Rsp,&caller,sizeof(caller),&got) || got!=sizeof(caller)) return FAULT_ADDRESS_UNLISTED;
-    return classify_fault_address(caller,self);
+static void purecall(void) { aln_crash_guard_report_here("pure virtual call",0x40000015u,3); }
+/* MinGW makes a failed C runtime parameter check non-fatal (the call fails with EINVAL); the first ones are logged. */
+static void invalid_parameter(const wchar_t *e, const wchar_t *f, const wchar_t *fl, unsigned line, uintptr_t r) {
+    static volatile LONG count;
+    (void)e; (void)f; (void)fl; (void)line; (void)r;
+    if (InterlockedIncrement(&count)>8) return;
+    void *frames[4];
+    char text[512], where[160];
+    int length=snprintf(text,sizeof(text),"Diagnostics: an invalid C runtime parameter (non-fatal), called from:");
+    const USHORT n=RtlCaptureStackBackTrace(1,4,frames,NULL);
+    for (USHORT i=0;i<n && length>0 && (size_t)length<sizeof(text)-170;++i) {
+        describe_address(where,sizeof(where),(uintptr_t)frames[i]);
+        length+=snprintf(text+length,sizeof(text)-(size_t)length,"%s%s",i ? ", " : " ",where);
+    }
+    snprintf(text+length,sizeof(text)-(size_t)length,"\n");
+    runtime_log_write_direct(text);
 }
 static LONG CALLBACK vectored_fault(EXCEPTION_POINTERS *info) {
     const EXCEPTION_RECORD *record=info->ExceptionRecord;
@@ -272,20 +272,8 @@ static LONG CALLBACK vectored_fault(EXCEPTION_POINTERS *info) {
             return EXCEPTION_CONTINUE_EXECUTION;
         }
     }
-    if (code==EXCEPTION_ACCESS_VIOLATION || code==EXCEPTION_ILLEGAL_INSTRUCTION || code==EXCEPTION_PRIV_INSTRUCTION ||
-        code==EXCEPTION_STACK_OVERFLOW || code==EXCEPTION_INT_DIVIDE_BY_ZERO || code==EXCEPTION_DATATYPE_MISALIGNMENT) {
-        /* Faults in guest code, the loader or the runtime end the process with a report; drivers
-         * and system libraries may handle their own exceptions. */
-        HMODULE self=GetModuleHandleA(NULL);
-        const FaultAddress at=classify_fault_address((uintptr_t)info->ContextRecord->Rip,self);
-        if (fault_is_ours(at,at==FAULT_ADDRESS_UNLISTED ? classify_caller(info->ContextRecord,self) : at))
-            return fatal_exception(info);
-    }
-    /* ALN_STRICT_HANDLES=1: a closed or invalid handle used anywhere is reported (diagnostics). */
-    if (code==0xC0000008 /* STATUS_INVALID_HANDLE */) return fatal_exception(info);
-    return EXCEPTION_CONTINUE_SEARCH;
+    return aln_crash_guard_vectored(info);
 }
-static LONG WINAPI unhandled_fault(EXCEPTION_POINTERS *info) { return fatal_exception(info); }
 /* Guest code reads its TCB with `mov rax, gs:[0]` (the boot image builder rewrote fs:[0]); on Windows
  * the displacement becomes the TEB TLS slot that holds the guest TCB (runtime_thread.c). */
 uint32_t runtime_thread_tcb_offset(void);
@@ -537,14 +525,21 @@ int main(int argc, char **argv) {
         strftime(stamp,sizeof(stamp),"%Y-%m-%dT%H:%M:%S",localtime(&now));
         printf("[run] %s\n[run] %s\n[run] log %s\n[run] prepared root %s\n",stamp,command_line(argc,argv),log_path,app0);
         atexit(runtime_log_flush);
+        atexit(log_process_exit);
         runtime_log_set_detailed(aln_detailed_logging(settings_file));
         runtime_log_install_cleanup();
         if (!aln_logs_directory(paths.logs_dir,log_path,log_folder,sizeof(log_folder)))
             snprintf(log_folder,sizeof(log_folder),"%s",paths.logs_dir);
     } else fprintf(stderr,"Cannot create the log %s\n",log_file ? log_file : paths.logs_dir);
 #ifdef _WIN32
+    {
+        static const AlnCrashHooks crash_hooks={crash_detail,module_diagnostics_describe,runtime_memory_recent};
+        aln_crash_guard_install(&crash_hooks);
+    }
     AddVectoredExceptionHandler(1, vectored_fault);
-    SetUnhandledExceptionFilter(unhandled_fault);
+    signal(SIGABRT,abort_signal);
+    _set_invalid_parameter_handler(invalid_parameter);
+    _set_purecall_handler(purecall);
 #endif
     if (game_child) {
         puts("Startup: game-only child process");
@@ -612,6 +607,10 @@ int main(int argc, char **argv) {
     aspect_ratio=&aln_aspect_ratios[aln_aspect_ratio(settings_file,paths.image_dir)];
     render_target=aln_render_target(render_resolution,aspect_ratio);
     runtime_aln_set_neo_mode(render_target.pro_memory);
+    if (known_build)
+        runtime_memory_set_direct_extra(
+            aln_budget_growth(game_build.resolution_sites,game_build.resolution_site_count,&render_target));
+    aln_crash_context_set_display(render_target.width,render_target.height,render_resolution->key,aspect_ratio->key);
     runtime_set_language(aln_text_language(settings_file,paths.image_dir,app0));
     runtime_pad_set_settings(settings_file);
     printf("Overlay compatibility: %s game process\n",game_child ? "separate" : "original");
@@ -771,6 +770,7 @@ int main(int argc, char **argv) {
         printf("GPU: window and presenter ready; SDK 0x%08x, %u HLE symbols\n",(unsigned)sdk,alngpu_symbol_count());
 #ifdef _WIN32
         module_diagnostics_report();
+        aln_crash_guard_verify();
 #endif
     }
     unsigned char *traps = allocate(round_page((import_count + 1) * 32));
@@ -843,6 +843,30 @@ int main(int argc, char **argv) {
             snprintf(message,sizeof(message),"%s, game build %s",error,game_build.label);
             fail_running(message);
         }
+        uint32_t patched_width=0,patched_height=0,heap_bytes=0;
+        for (size_t i=0;i<game_build.resolution_site_count;++i) {
+            const AlnResolutionSite *site=&game_build.resolution_sites[i];
+            uint32_t value;
+            memcpy(&value,image+site->offset+site->opcode_length,sizeof(value));
+            if (site->pixel_budget) heap_bytes=value;
+            else if (site->height) patched_height=value;
+            else patched_width=value;
+        }
+        printf("Patch: game display size sites hold %ux%u (%zu sites)\n",patched_width,patched_height,
+               game_build.resolution_site_count);
+        if (heap_bytes)
+            printf("Patch: GPU heap holds %u MiB (retail 1024 MiB), direct memory pool +%llu MiB\n",heap_bytes>>20,
+                   (unsigned long long)(aln_budget_growth(game_build.resolution_sites,game_build.resolution_site_count,
+                                                          &render_target)>>20));
+    }
+    if (known_build && game_build.frame_rate) {
+        char error[320];
+        if (!aln_apply_frame_rate(image,size,game_build.frame_rate,error,sizeof(error))) {
+            char message[400];
+            snprintf(message,sizeof(message),"%s, game build %s",error,game_build.label);
+            fail_running(message);
+        }
+        printf("Frame rate: the game's engine_set_fps script calls are ignored; the engine's startup target stays 59.94\n");
     }
     printf("Display: render resolution %dx%d (%s), aspect ratio %s\n",render_target.width,render_target.height,
            render_resolution->key,aspect_ratio->name);
@@ -864,6 +888,9 @@ int main(int argc, char **argv) {
     if (!executable_entry) fail("entry is not executable");
     printf("Mapped %" PRIu64 " bytes, %" PRIu64 " segments; applied %" PRIu64 " relocations\n", size, ns, nr);
     aln_startup_phase("guest image mapped");
+#ifdef _WIN32
+    aln_crash_guard_set_guest((uintptr_t)image,size);
+#endif
     if (native_libc) {
         for (uint64_t m=0;m<module_count;++m) {
             int init_executable=0;

@@ -496,6 +496,7 @@ extern "C" int aln_game_build(const char* image_dir, AlnGameBuild* out) {
     out->label = build->label;
     out->resolution_sites = build->resolution_sites.data();
     out->resolution_site_count = build->resolution_sites.size();
+    out->frame_rate = build->frame_rate;
     out->title_id = build->title_id;
     out->version = build->version;
     out->eboot_sha256 = build->eboot_sha256;

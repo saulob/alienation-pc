@@ -40,7 +40,6 @@ constexpr ManagedSetting kBaseSettings[] = {
     {kAntiAliasingKey, "0"},
     {kAnisotropyKey, "0"},
     {kTextLanguageKey, "english"},
-    {kFrameRateKey, "60"},
     {kShowFpsTitleKey, "0"},
     {kShowResolutionTitleKey, "0"},
     {kShowFrameCounterKey, "0"},
@@ -105,9 +104,6 @@ bool IsValidSetting(std::string_view key, std::string_view value) {
             return std::any_of(languages.begin(), languages.end(),
                                [&](const TextLanguage& language) { return value == language.key; });
         });
-    }
-    if (key == kFrameRateKey) {
-        return one_of({"30", "60", "90", "120", "144", "165", "240", "0"});
     }
     if (key == kPresentationKey) {
         return std::any_of(std::begin(kPresentationChoices), std::end(kPresentationChoices),
@@ -216,13 +212,6 @@ bool LauncherSettings::WriteFile(const Values& changes) {
     return file.Save();
 }
 
-std::string FrameRateLabel(int fps) {
-    if (fps == 0) {
-        return "Unlimited";
-    }
-    return std::to_string(fps) + " FPS";
-}
-
 bool NormalizeTextLanguage(trg::SettingsStore& settings, std::span<const TextLanguage> languages) {
     const std::string saved = settings.Get(kTextLanguageKey, languages.front().key);
     const std::string_view effective = ResolveTextLanguage(languages, saved).key;
@@ -286,8 +275,7 @@ std::string SettingsSummary(const LauncherSettings& settings, const GameBuild* b
     line("Online Play off (not available for Alienation yet)");
 
     const std::string mode = settings.Get(kDisplayModeKey, "windowed");
-    line(std::string("Window ") + (mode == "borderless" ? "Borderless Fullscreen" : "Windowed") + ", frame rate cap " +
-         FrameRateLabel(std::atoi(settings.Get(kFrameRateKey, "60").c_str())) + ", frame counter " +
+    line(std::string("Window ") + (mode == "borderless" ? "Borderless Fullscreen" : "Windowed") + ", frame counter " +
          OnOff(settings.GetBool(kShowFrameCounterKey, false)) + ", frame rate in title " +
          OnOff(settings.GetBool(kShowFpsTitleKey, false)) + ", render resolution in title " +
          OnOff(settings.GetBool(kShowResolutionTitleKey, false)));

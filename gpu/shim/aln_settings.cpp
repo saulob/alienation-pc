@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "aln_settings.h"
-#include "aln_frame_pacing.h"
 #include "aln_graphics.h"
 #include "aln_keys.h"
 #include "aln_renderer.h"
@@ -91,8 +90,6 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.show_fps_title = ParseBool(value, v.show_fps_title);
     } else if (key == "show_resolution_title") {
         v.show_resolution_title = ParseBool(value, v.show_resolution_title);
-    } else if (key == "frame_rate") {
-        v.frame_rate = AlnFramePacing::ParseFrameRate(value);
     } else if (key == aln_key_actions[ALN_KEY_HOTKEY_WINDOW_MODE].ini_key) {
         if (const int scancode = aln_key_from_name(value.c_str()); scancode != 0) {
             v.window_mode_key = scancode;

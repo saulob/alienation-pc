@@ -44,10 +44,6 @@ struct Values {
     std::string render_resolution{"native"}, aspect_ratio{"16:9"};
     // What the running game build supports (Feature bits), set by the loader.
     std::atomic<unsigned> features{AllFeatures};
-    // Set by the window: the refresh rate of the display it opened on; 0 when unknown.
-    std::atomic<double> display_refresh_hz{0.0};
-    // Presentation pacing (driver.cpp). 0: Unlimited.
-    std::atomic<int> frame_rate{60};
     // The window mode switch as an SDL scancode (aln_keys.h).
     std::atomic<int> window_mode_key{SDL_SCANCODE_F11};
 };
