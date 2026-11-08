@@ -323,6 +323,45 @@ static void report_call_site(const CONTEXT *context, uintptr_t return_address, u
     }
 }
 
+static int is_executable_image(uintptr_t address) {
+    MEMORY_BASIC_INFORMATION info;
+    if (!VirtualQuery((const void *)address, &info, sizeof(info)) || info.State != MEM_COMMIT || info.Type != MEM_IMAGE) return 0;
+    return (info.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)) != 0;
+}
+
+/* Return addresses on the faulting stack: a frame without unwind data (driver code) ends the unwind above, while the
+ * callers in the game's executable are usually a few slots up. A word counts when a call instruction ends at it. */
+static void report_stack_scan(const CONTEXT *fault, uintptr_t stack_low, uintptr_t stack_high, uintptr_t guest_base,
+                              size_t guest_size) {
+    enum { SCAN_BYTES = 16 * 1024, SCAN_HITS = 12 };
+    char text[320];
+    unsigned hits = 0;
+    const uintptr_t start = (uintptr_t)fault->Rsp & ~(uintptr_t)7;
+    for (uintptr_t slot = start; slot + sizeof(uint64_t) <= stack_high && slot - start < SCAN_BYTES && hits < SCAN_HITS;
+         slot += sizeof(uint64_t)) {
+        uint64_t value = 0;
+        uint8_t bytes[9];
+        CallSite site;
+        if (slot < stack_low || !read_memory(slot, &value, sizeof(value)) || value < MIN_USER_ADDRESS) continue;
+        if (!is_executable_image((uintptr_t)value) || !read_memory((uintptr_t)value - sizeof(bytes), bytes, sizeof(bytes)) ||
+            !call_site_decode(bytes, sizeof(bytes), &site))
+            continue;
+        describe_pc(text, sizeof(text), (uintptr_t)value, guest_base, guest_size);
+        fprintf(stderr, "Crash: stack return [rsp+%#llx] %p %s\n", (unsigned long long)(slot - start), (void *)(uintptr_t)value, text);
+        ++hits;
+    }
+}
+
+void module_diagnostics_report_thread_name(void) {
+    typedef HRESULT(WINAPI * GetThreadDescriptionFn)(HANDLE, PWSTR *);
+    const GetThreadDescriptionFn get_description =
+        (GetThreadDescriptionFn)(void *)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "GetThreadDescription");
+    PWSTR name = NULL;
+    if (!get_description || FAILED(get_description(GetCurrentThread(), &name)) || !name) return;
+    if (name[0]) fprintf(stderr, "Crash: thread name %ls\n", name);
+    LocalFree(name);
+}
+
 /* Native frames from the exception context with the unwind data of the loaded modules; no DbgHelp and no allocation. */
 void module_diagnostics_report_backtrace(const CONTEXT *fault, uintptr_t guest_base, size_t guest_size) {
     const NT_TIB *tib = (const NT_TIB *)NtCurrentTeb();
@@ -353,4 +392,5 @@ void module_diagnostics_report_backtrace(const CONTEXT *fault, uintptr_t guest_b
         }
         if (!context.Rip || (uintptr_t)context.Rsp <= previous_sp) break;
     }
+    report_stack_scan(fault, stack_low, stack_high, guest_base, guest_size);
 }

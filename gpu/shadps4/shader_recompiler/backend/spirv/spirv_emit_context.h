@@ -222,6 +222,8 @@ public:
     Id false_value{};
     Id u8_one_value{};
     Id u8_zero_value{};
+    u32 shared_memory_size{};
+
     Id u16_zero_value{};
     Id u32_one_value{};
     Id u32_zero_value{};

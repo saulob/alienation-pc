@@ -86,9 +86,6 @@ Liverpool::~Liverpool() {
 }
 
 void Liverpool::ProcessCommands() {
-    if (num_commands && rasterizer) {
-        rasterizer->DrainDrawPipe(Vulkan::DrawPipe::ReasonCommands); // aln: commands touch the caches
-    }
     // Process incoming commands with high priority
     while (num_commands) {
         Common::UniqueFunction<void> callback{};
@@ -97,6 +94,11 @@ void Liverpool::ProcessCommands() {
             callback = std::move(command_queue.front());
             command_queue.pop();
             --num_commands;
+        }
+        // Commands touch the caches and record: the draw recording thread must be done first,
+        // including for commands queued after any earlier check.
+        if (rasterizer) {
+            rasterizer->DrainDrawPipe(Vulkan::DrawPipe::ReasonCommands);
         }
         callback();
     }
@@ -587,8 +589,10 @@ void Liverpool::ApplyGraphicsRegisterPacket(Regs& regs, const PM4Header* header,
         break;
     }
     case PM4ItOpcode::IndexBufferSize:
-        regs.num_indices = reinterpret_cast<const PM4CmdDrawIndexBufferSize*>(header)->num_indices;
-        mark_field(regs.num_indices);
+        // The index buffer capacity of indirect draws; the draw count comes from their args.
+        regs.max_index_size =
+            reinterpret_cast<const PM4CmdDrawIndexBufferSize*>(header)->num_indices;
+        mark_field(regs.max_index_size);
         break;
     case PM4ItOpcode::EventWrite: {
         const auto* event = reinterpret_cast<const PM4CmdEventWrite*>(header);
@@ -737,7 +741,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
         RESUME_GFX(ce_task);
     }
 
-    const auto base_addr = reinterpret_cast<uintptr_t>(dcb.data());
+    auto base_addr = reinterpret_cast<uintptr_t>(dcb.data());
     while (!dcb.empty()) {
         ProcessCommands();
 
@@ -1265,6 +1269,13 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
             }
             case PM4ItOpcode::IndirectBuffer: {
                 const auto* indirect_buffer = reinterpret_cast<const PM4CmdIndirectBuffer*>(header);
+                if (indirect_buffer->chain) {
+                    // A chained buffer replaces the current one: the CP never comes back to the
+                    // rest of this buffer, which in reused segments still holds old commands.
+                    dcb = {indirect_buffer->Address<const u32>(), indirect_buffer->ib_size};
+                    base_addr = reinterpret_cast<uintptr_t>(dcb.data());
+                    continue;
+                }
                 auto task = ProcessGraphics(
                     {indirect_buffer->Address<const u32>(), indirect_buffer->ib_size}, {});
                 // Tasks start suspended: the nested body (and its scan) runs on this resume.
@@ -1428,6 +1439,14 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
         }
         case PM4ItOpcode::IndirectBuffer: {
             const auto* indirect_buffer = reinterpret_cast<const PM4CmdIndirectBuffer*>(header);
+            if constexpr (is_indirect) {
+                if (indirect_buffer->chain) {
+                    acb = {indirect_buffer->Address<const u32>(), indirect_buffer->ib_size};
+                    base_addr = reinterpret_cast<VAddr>(acb.data());
+                    acb_size = acb.size_bytes();
+                    continue;
+                }
+            }
             auto task = ProcessCompute<true>(
                 {indirect_buffer->Address<const u32>(), indirect_buffer->ib_size}, vqid);
             RESUME_ASC(task, vqid);

@@ -3,6 +3,7 @@
 
 #include "common/debug.h"
 #include "common/elf_info.h"
+#include "common/gpu_trace.h"
 #include "common/io_file.h"
 #include "common/path_util.h"
 #include "common/singleton.h"
@@ -183,6 +184,7 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
 }
 
 Presenter::~Presenter() {
+    draw_scheduler.ReleaseRecording();
 
     draw_scheduler.Finish();
     present_scheduler.Finish();
@@ -291,8 +293,10 @@ Frame* Presenter::PrepareLastFrame() {
         if (result == vk::Result::eTimeout) {
             continue;
         }
+        Common::GpuTrace::VulkanFailure("frmfence", s32(result));
         ASSERT_MSG(result != vk::Result::eErrorDeviceLost,
                    "Device lost during waiting for a frame");
+        UNREACHABLE_MSG("Frame fence wait failed: {}", vk::to_string(result));
     }
 
     auto& scheduler = flip_scheduler;
@@ -771,12 +775,13 @@ Frame* Presenter::GetRenderFrame() {
 
     // Wait for the presentation to be finished so all frame resources are free
     while (wait() != vk::Result::eSuccess) {
-        ASSERT_MSG(result != vk::Result::eErrorDeviceLost,
-                   "Device lost during waiting for a frame");
-        // Retry if the waiting times out
         if (result == vk::Result::eTimeout) {
             continue;
         }
+        Common::GpuTrace::VulkanFailure("prsfence", s32(result));
+        ASSERT_MSG(result != vk::Result::eErrorDeviceLost,
+                   "Device lost during waiting for a frame");
+        UNREACHABLE_MSG("Present fence wait failed: {}", vk::to_string(result));
     }
 
     const u64 expected_size = expected_frame_size.load(std::memory_order_relaxed);

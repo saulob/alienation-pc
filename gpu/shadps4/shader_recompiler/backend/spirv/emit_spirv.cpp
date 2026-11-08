@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <span>
 #include <type_traits>
 #include <utility>
@@ -11,6 +12,7 @@
 #include "common/func_traits.h"
 #include "shader_recompiler/backend/spirv/emit_spirv.h"
 #include "shader_recompiler/backend/spirv/emit_spirv_instructions.h"
+#include "shader_recompiler/backend/spirv/geometry_output.h"
 #include "shader_recompiler/backend/spirv/spirv_emit_context.h"
 #include "shader_recompiler/frontend/translate/translate.h"
 #include "shader_recompiler/ir/basic_block.h"
@@ -43,7 +45,7 @@ static constexpr spv::ExecutionMode GetInputPrimitiveType(AmdGpu::PrimitiveType 
 static constexpr spv::ExecutionMode GetOutputPrimitiveType(AmdGpu::GsOutputPrimitiveType type) {
     switch (type) {
     case AmdGpu::GsOutputPrimitiveType::PointList:
-        return spv::ExecutionMode::OutputVertices;
+        return spv::ExecutionMode::OutputPoints;
     case AmdGpu::GsOutputPrimitiveType::LineStrip:
         return spv::ExecutionMode::OutputLineStrip;
     case AmdGpu::GsOutputPrimitiveType::TriangleStrip:
@@ -436,7 +438,7 @@ void DefineEntryPoint(const Info& info, EmitContext& ctx, Id main) {
         ctx.AddExecutionMode(main, GetInputPrimitiveType(ctx.runtime_info.hw.gs.in_primitive));
         ctx.AddExecutionMode(main, GetOutputPrimitiveType(ctx.runtime_info.hw.gs.out_primitive[0]));
         ctx.AddExecutionMode(main, spv::ExecutionMode::OutputVertices,
-                             ctx.runtime_info.hw.gs.output_vertices);
+                             GeometryOutputVertices(info, ctx.runtime_info, ctx.profile));
         ctx.AddExecutionMode(main, spv::ExecutionMode::Invocations,
                              ctx.runtime_info.hw.gs.num_invocations);
         break;

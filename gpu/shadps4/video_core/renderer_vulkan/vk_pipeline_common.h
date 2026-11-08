@@ -7,6 +7,7 @@
 #include "shader_recompiler/runtime_info.h"
 #include "video_core/renderer_vulkan/vk_common.h"
 
+#include <atomic>
 #include <boost/container/small_vector.hpp>
 
 namespace Shader {
@@ -57,6 +58,8 @@ public:
         return is_compute;
     }
 
+    void TraceUse(u32 groups_x = 0, u32 groups_y = 0, u32 groups_z = 0) const;
+
     using DescriptorWrites = std::vector<vk::WriteDescriptorSet>;
     void BindResources(DescriptorWrites& set_writes, const Shader::PushData& push_data) const;
 
@@ -73,6 +76,7 @@ protected:
     std::array<const Shader::Info*, Shader::MaxStageTypes> stages{};
     bool uses_push_descriptors{};
     bool is_compute;
+    mutable std::atomic<bool> first_use_traced{};
 };
 
 } // namespace Vulkan

@@ -56,6 +56,11 @@ public:
     ~BufferCache();
 
     /// Returns a pointer to GDS device local buffer.
+    /// Bound for indexed draws whose index range is empty or unmapped (reads index 0).
+    [[nodiscard]] const Buffer* GetNullIndexBuffer() const noexcept {
+        return null_index_buffer.get();
+    }
+
     [[nodiscard]] const Buffer* GetGdsBuffer() const noexcept {
         return &gds_buffer;
     }
@@ -166,6 +171,7 @@ private:
 
     std::unique_ptr<FaultManager> fault_manager;
     std::unique_ptr<Buffer> bda_pagetable_buffer;
+    std::unique_ptr<Buffer> null_index_buffer;
 
     std::array<const Buffer*, MAX_ARENA_PAGES> address_space{};
     u64 arena_page_bits{MAX_ARENA_PAGE_BITS};

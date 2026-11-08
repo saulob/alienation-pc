@@ -3,6 +3,7 @@
 
 #include <boost/container/small_vector.hpp>
 #include "aln_toggles.h"
+#include "common/gpu_trace.h"
 #include "video_core/buffer_cache/buffer.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
@@ -58,6 +59,8 @@ static std::pair<u32, u32> SanitizeCopyLayers(const VideoCore::ImageInfo& src_in
             LOG_WARNING(Render_Vulkan,
                         "Coercing copy source layers {} and destination layers {} to minimum.",
                         src_layers, dst_layers);
+            Common::GpuTrace::Record(Common::GpuTrace::Event::CopyLayersCoerced, src_layers,
+                                     dst_layers);
             src_layers = dst_layers = std::min(src_layers, dst_layers);
         }
     } else {
@@ -808,8 +811,8 @@ void Runtime::AccessBuffer(const VideoCore::Buffer* handle, u64 offset, u64 size
     };
 
     constexpr static vk::AccessFlags2 READ_MASK =
-        vk::AccessFlagBits2::eIndexRead | vk::AccessFlagBits2::eVertexAttributeRead |
-        vk::AccessFlagBits2::eUniformRead | vk::AccessFlagBits2::eShaderRead |
+        vk::AccessFlagBits2::eIndirectCommandRead | vk::AccessFlagBits2::eIndexRead |
+        vk::AccessFlagBits2::eVertexAttributeRead | vk::AccessFlagBits2::eUniformRead | vk::AccessFlagBits2::eShaderRead |
         vk::AccessFlagBits2::eColorAttachmentRead |
         vk::AccessFlagBits2::eDepthStencilAttachmentRead | vk::AccessFlagBits2::eTransferRead |
         vk::AccessFlagBits2::eMemoryRead;

@@ -351,6 +351,21 @@ public:
         return vk11_props.subgroupSize;
     }
 
+    /// Logs heap budgets and the driver's fault report (VK_EXT_device_fault) after device loss.
+    void ReportDeviceFault() const;
+
+    bool IsMaintenance5Supported() const {
+        return maintenance_5;
+    }
+
+    u32 MaxGeometryOutputVertices() const {
+        return properties.limits.maxGeometryOutputVertices;
+    }
+
+    u32 MaxGeometryTotalOutputComponents() const {
+        return properties.limits.maxGeometryTotalOutputComponents;
+    }
+
     /// Returns the maximum size of compute shared memory.
     u32 MaxComputeSharedMemorySize() const {
         return properties.limits.maxComputeSharedMemorySize;
@@ -488,6 +503,8 @@ private:
     void CollectPhysicalMemoryInfo();
     void CollectImageFormatInfo();
     void CollectToolingInfo() const;
+    void LogDispatchModules() const;
+
 
     /// Gets the supported feature flags for a format.
     [[nodiscard]] vk::FormatFeatureFlags2 GetFormatFeatureFlags(vk::Format format) const;
@@ -551,6 +568,7 @@ private:
     bool image_view_min_lod{};
     bool shader_clock{};
     bool supports_memory_budget{};
+    bool device_fault{};
     bool supports_block_texel_view{};
     u64 total_memory_budget{};
     std::vector<size_t> valid_heaps;

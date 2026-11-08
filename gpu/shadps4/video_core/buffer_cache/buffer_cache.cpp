@@ -13,6 +13,7 @@
 #include "aln_copy_pool.h"
 #include "aln_toggles.h"
 #include "common/alignment.h"
+#include "common/gpu_trace.h"
 #include "core/memory.h"
 #include "video_core/amdgpu/liverpool.h"
 #include "video_core/buffer_cache/buffer.h"
@@ -29,6 +30,7 @@
 namespace VideoCore {
 
 static constexpr size_t GDS_BUFFER_SIZE = 64_KB;
+static constexpr size_t NULL_INDEX_BUFFER_SIZE = 16;
 static constexpr size_t STREAM_BUFFER_SIZE = 128_MB;
 
 static constexpr auto ARENA_USAGE =
@@ -101,6 +103,9 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
     bda_pagetable_buffer = std::make_unique<Buffer>(
         instance, 0, bda_pagetable_size, MemoryType::DeviceLocal, "BDA Page Table Buffer");
     runtime.FillBuffer(bda_pagetable_buffer.get(), 0u, bda_pagetable_size, 0u);
+    null_index_buffer = std::make_unique<Buffer>(instance, 0, NULL_INDEX_BUFFER_SIZE,
+                                                 MemoryType::DeviceLocal, "Null Index Buffer");
+    runtime.FillBuffer(null_index_buffer.get(), 0u, NULL_INDEX_BUFFER_SIZE, 0u);
 }
 
 BufferCache::~BufferCache() = default;
@@ -333,6 +338,8 @@ const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
     const u64 first_addr = first_arena ? first_arena->cpu_addr : (first_page << arena_page_bits);
     const u64 first_size = first_arena ? first_arena->size_bytes : arena_page_size;
     const u64 last_size = last_arena ? last_arena->size_bytes : arena_page_size;
+    Common::GpuTrace::Record(Common::GpuTrace::Event::ArenaMigration, first_addr,
+                             first_size + last_size, first_size, last_size);
 
     const u64 base_block = first_addr >> block_shift;
     const u64 total_size = first_size + last_size;
@@ -633,7 +640,14 @@ void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
 
     info.AddWait(signal_sema, signal_tick);
     auto submit_result = instance.GetGraphicsQueue().bindSparse(sparse_info);
+    Common::GpuTrace::Record(Common::GpuTrace::Event::SparseBind, signal_tick, buffer_binds.size(),
+                             u32(submit_result));
+    if (submit_result != vk::Result::eSuccess) {
+        Common::GpuTrace::VulkanFailure("sparse", s32(submit_result), signal_tick);
+    }
     ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
+    ASSERT_MSG(submit_result == vk::Result::eSuccess, "Sparse bind failed: {}",
+               vk::to_string(submit_result));
 
     pending_binds.clear();
 }

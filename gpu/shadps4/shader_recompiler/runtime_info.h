@@ -169,9 +169,9 @@ struct HwGeometryRuntimeInfo {
     u64 vs_copy_hash;
 
     bool operator==(const HwGeometryRuntimeInfo& other) const {
-        return num_outputs == other.num_outputs && outputs == other.outputs && num_invocations &&
-               other.num_invocations && output_vertices == other.output_vertices &&
-               in_primitive == other.in_primitive &&
+        return num_outputs == other.num_outputs && outputs == other.outputs &&
+               num_invocations == other.num_invocations &&
+               output_vertices == other.output_vertices && in_primitive == other.in_primitive &&
                std::ranges::equal(out_primitive, other.out_primitive) &&
                vs_copy_hash == other.vs_copy_hash;
     }
@@ -353,5 +353,17 @@ struct fmt::formatter<Shader::HwStage> {
     auto format(const Shader::HwStage stage, format_context& ctx) const {
         constexpr static std::array names = {"fs", "vs", "gs", "es", "hs", "ls", "cs"};
         return fmt::format_to(ctx.out(), "{}", names[static_cast<size_t>(stage)]);
+    }
+};
+
+template <>
+struct fmt::formatter<Shader::SwStage> {
+    constexpr auto parse(format_parse_context& ctx) {
+        return ctx.begin();
+    }
+    auto format(const Shader::SwStage stage, format_context& ctx) const {
+        constexpr static std::array names = {"fs", "tcs", "tes", "vs", "gs", "cs"};
+        const auto index = static_cast<size_t>(stage);
+        return fmt::format_to(ctx.out(), "{}", index < names.size() ? names[index] : "unknown");
     }
 };

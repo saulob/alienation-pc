@@ -13,6 +13,7 @@
 #include "aln_threads.h"
 
 #include "common/hash.h"
+#include "common/shader_crash_context.h"
 #include "common/thread.h"
 #include "common/io_file.h"
 #include "common/path_util.h"
@@ -328,6 +329,8 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         .max_viewport_width = instance.GetMaxViewportWidth(),
         .max_viewport_height = instance.GetMaxViewportHeight(),
         .max_shared_memory_size = instance.MaxComputeSharedMemorySize(),
+        .max_geometry_output_vertices = instance.MaxGeometryOutputVertices(),
+        .max_geometry_total_output_components = instance.MaxGeometryTotalOutputComponents(),
         .supported_spirv = SpirvVersion1_6,
         .subgroup_size = instance.SubgroupSize(),
         .sparse_page_shift = sparse_page_shift,
@@ -481,6 +484,9 @@ bool PipelineCache::QueueShader(Program& program, HwStage stage, SwStage l_stage
         if (reused) {
             ++g_aln_pool_reuses;
         }
+        const Common::ShaderCrash::Scope crash_scope{fmt::format("{}", build->info.hw_stage),
+                                                     fmt::format("{}", build->info.sw_stage),
+                                                     build->info.pgm_hash, build->permutation};
         // aln: the GPU thread waits until all guest reads and specialization are captured.
         build->ir.emplace(Shader::TranslateProgram(build->code, *build->pools, build->info,
                                                    build->runtime, profile));

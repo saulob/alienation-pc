@@ -16,6 +16,7 @@
 #include "aln_toggles.h"
 #include "video_core/renderer_vulkan/vk_wait_diagnostics.h"
 #include "common/assert.h"
+#include "common/gpu_trace.h"
 #include "common/debug.h"
 #include "common/thread.h"
 #include "imgui/renderer/texture_manager.h"
@@ -107,11 +108,11 @@ void Scheduler::BeginRendering(const RenderState& new_state) {
     };
 
     if (!recording_threaded) {
-        current_cmdbuf.beginRendering(rendering_info);
+        ReplayBeginRendering(current_cmdbuf, rendering_info);
         return;
     }
     // The attachment infos live on this stack frame: the recorded closure keeps copies.
-    Record([info = rendering_info, color_attachments, depth_attachment,
+    Record([this, info = rendering_info, color_attachments, depth_attachment,
             stencil_attachment](vk::CommandBuffer cmdbuf) mutable {
         info.pColorAttachments = color_attachments.data();
         if (info.pDepthAttachment) {
@@ -120,8 +121,65 @@ void Scheduler::BeginRendering(const RenderState& new_state) {
         if (info.pStencilAttachment) {
             info.pStencilAttachment = &stencil_attachment;
         }
-        cmdbuf.beginRendering(info);
+        ReplayBeginRendering(cmdbuf, info);
     });
+}
+
+namespace {
+enum class RenderingMismatch : u64 { EndWithoutBegin = 1, BeginWhileOpen = 2, OpenAtSubmit = 3 };
+
+void ReportRenderingMismatch(RenderingMismatch kind) {
+    static std::atomic<u32> reported{};
+    Common::GpuTrace::Record(Common::GpuTrace::Event::RenderingMismatch, u64(kind));
+    if (reported.fetch_add(1, std::memory_order_relaxed) < 4) {
+        LOG_WARNING(Render_Vulkan, "Unpaired dynamic rendering in the command buffer ({})",
+                    kind == RenderingMismatch::EndWithoutBegin  ? "end without begin"
+                    : kind == RenderingMismatch::BeginWhileOpen ? "begin while open"
+                                                                : "open at submission");
+    }
+}
+} // namespace
+
+// vkCmdBeginRendering inside an open instance and vkCmdEndRendering outside one are invalid;
+// the driver may dereference a render state that does not exist.
+void Scheduler::ReplayBeginRendering(vk::CommandBuffer cmdbuf, const vk::RenderingInfo& info) {
+    if (replay_rendering.Begin()) {
+        ReportRenderingMismatch(RenderingMismatch::BeginWhileOpen);
+        cmdbuf.endRendering();
+    }
+    cmdbuf.beginRendering(info);
+}
+
+void Scheduler::ReplayEndRendering(vk::CommandBuffer cmdbuf) {
+    if (!replay_rendering.End()) {
+        ReportRenderingMismatch(RenderingMismatch::EndWithoutBegin);
+        return;
+    }
+    cmdbuf.endRendering();
+}
+
+void Scheduler::TakeOverOrFail(u32 tid, std::source_location origin) {
+    if (recording_takeover && recording_takeover(recording_takeover_context)) {
+        recording_owner.Claim(tid);
+        recording_takeovers.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    FailForeignRecording(tid, origin);
+}
+
+void Scheduler::FailForeignRecording(u32 tid, std::source_location origin) {
+    const u32 owner = recording_owner.Owner();
+    Common::GpuTrace::Record(Common::GpuTrace::Event::ForeignRecording, tid, owner,
+                             reinterpret_cast<u64>(origin.file_name()), origin.line());
+    char name[64], owner_name[64];
+    Common::GpuTrace::ThreadName(tid, name, sizeof(name));
+    Common::GpuTrace::ThreadName(owner, owner_name, sizeof(owner_name));
+    LOG_CRITICAL(Render_Vulkan,
+                 "Thread {} ({}) records into the command buffer while thread {} ({}) owns "
+                 "recording, at {}:{}",
+                 tid, name, owner, owner_name, origin.file_name(), origin.line());
+    ASSERT_MSG(false, "Cross-thread Vulkan recording");
+    std::abort();
 }
 
 void Scheduler::EndRendering() {
@@ -129,7 +187,7 @@ void Scheduler::EndRendering() {
         return;
     }
     is_rendering = false;
-    Record([](vk::CommandBuffer cmdbuf) { cmdbuf.endRendering(); });
+    Record([this](vk::CommandBuffer cmdbuf) { ReplayEndRendering(cmdbuf); });
 }
 
 void Scheduler::TraceDirectRecording(void* caller) {
@@ -193,7 +251,7 @@ void Scheduler::SignalAfterHostCopies(std::function<void()> signal) {
             done->fetch_add(1, std::memory_order_release);
         });
     });
-    KickRecording(true);
+    HandOffRecording(true);
 }
 
 void Scheduler::WaitDeferredSignals() {
@@ -203,7 +261,7 @@ void Scheduler::WaitDeferredSignals() {
         return;
     }
     AlnStats::WaitTimer timer{AlnStats::host_copies_wait_ns};
-    KickRecording(true);
+    HandOffRecording(true);
     while (deferred_signals_done->load(std::memory_order_acquire) < issued) {
         // Helps the copy threads the signals wait for.
         AlnCopyPool::WaitAsync();
@@ -215,7 +273,7 @@ void Scheduler::WaitHostCopies() {
     if (host_copies_done.load(std::memory_order_acquire) < host_copies_issued) {
         AlnStats::WaitTimer timer{AlnStats::host_copies_wait_ns};
         AlnStats::host_copy_waits.fetch_add(1, std::memory_order_relaxed);
-        KickRecording(true);
+        HandOffRecording(true);
         while (host_copies_done.load(std::memory_order_acquire) < host_copies_issued) {
             std::this_thread::yield();
         }
@@ -224,13 +282,21 @@ void Scheduler::WaitHostCopies() {
     AlnCopyPool::WaitAsync();
 }
 
-void Scheduler::KickRecording(bool force) {
+void Scheduler::KickRecording(bool force, std::source_location origin) {
     if (!recording_threaded) {
         return;
     }
-    recording_owner.store(std::this_thread::get_id(), std::memory_order_relaxed);
+    CheckRecordingThread(origin);
     // Callers kick where nobody holds the raw command buffer: deferral resumes.
     direct_mode = false;
+    HandOffRecording(force);
+}
+
+void Scheduler::HandOffRecording(bool force, std::source_location origin) {
+    if (!recording_threaded) {
+        return;
+    }
+    CheckRecordingThread(origin);
     // Batches of tens of KiB keep the queue handoff cheap relative to the work it carries.
     if (!force && full_chunks.empty() && record_chunk->Size() < 32 * 1024) {
         return;
@@ -238,14 +304,19 @@ void Scheduler::KickRecording(bool force) {
     if (full_chunks.empty() && record_chunk->Empty()) {
         return;
     }
+    // Fault handling records inline on this thread, so the current chunk is never left null.
+    std::unique_ptr<RecordChunk> filled;
+    if (!record_chunk->Empty()) {
+        filled = std::exchange(record_chunk, AcquireChunk());
+    }
     bool wake;
     {
         std::scoped_lock lk{recorder_mutex};
         for (auto& chunk : full_chunks) {
             recorder_queue.push_back(std::move(chunk));
         }
-        if (!record_chunk->Empty()) {
-            recorder_queue.push_back(std::move(record_chunk));
+        if (filled) {
+            recorder_queue.push_back(std::move(filled));
         }
         wake = recorder_sleeping;
         queued_chunks.store(recorder_queue.size(), std::memory_order_release);
@@ -255,16 +326,13 @@ void Scheduler::KickRecording(bool force) {
     if (wake) {
         recorder_cv.notify_one();
     }
-    if (!record_chunk) {
-        record_chunk = AcquireChunk();
-    }
 }
 
 void Scheduler::SyncRecording() {
     if (!recording_threaded) {
         return;
     }
-    KickRecording(true);
+    HandOffRecording(true);
     AlnStats::WaitTimer timer{AlnStats::sync_recording_ns};
     std::unique_lock lk{recorder_mutex};
     recorder_idle_cv.wait(lk, [this] { return recorder_queue.empty() && !recorder_busy; });
@@ -392,6 +460,7 @@ void Scheduler::AllocateWorkerCommandBuffers() {
     };
 
     current_cmdbuf = command_pool.Commit();
+    replay_rendering.Reset();
     Check(current_cmdbuf.begin(begin_info));
 
     // Invalidate dynamic state so it gets applied to the new command buffer.
@@ -431,6 +500,10 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
     SyncRecording();
     // Guest memory copies into staging read by this submission (copy threads).
     WaitHostCopies();
+    if (replay_rendering.IsOpen()) {
+        ReportRenderingMismatch(RenderingMismatch::OpenAtSubmit);
+        ReplayEndRendering(current_cmdbuf);
+    }
     Check(current_cmdbuf.end());
 
     const vk::Semaphore timeline = work_semaphore.Handle();
@@ -460,10 +533,23 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
 
     ImGui::Core::TextureManager::Submit();
     auto submit_result = instance.GetGraphicsQueue().submit(submit_info, info.fence);
+    Common::GpuTrace::Record(Common::GpuTrace::Event::Submit, signal_value, info.num_wait_semas,
+                             info.num_wait_semas ? info.wait_ticks[0] : 0, u32(submit_result));
+    Common::GpuTrace::SetSubmittedTick(signal_value);
+    Common::GpuTrace::SetPendingWork(num_pending_ops.load(std::memory_order_relaxed),
+                                     queued_chunks.load(std::memory_order_relaxed));
+    Common::GpuTrace::SetRecordingOwner(recording_owner.Owner(), recording_owner.Changes(),
+                                        recording_takeovers.load(std::memory_order_relaxed));
+    if (submit_result != vk::Result::eSuccess) {
+        Common::GpuTrace::VulkanFailure("submit", s32(submit_result), signal_value);
+    }
     ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
+    ASSERT_MSG(submit_result == vk::Result::eSuccess, "Queue submit failed: {}",
+               vk::to_string(submit_result));
 
     work_semaphore.Refresh();
     AllocateWorkerCommandBuffers();
+    direct_mode = false;
 
     // Apply pending operations
     PopPendingOperations();

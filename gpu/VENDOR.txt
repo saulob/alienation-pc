@@ -23,3 +23,16 @@ And command processor and Vulkan correctness fixes:
 Reviewed, not applied: f9d07487d CE queue rework (#5446), 1b9d1591c chained IBs (#5542), c09fa46a8 bound read buffers
   (#5262), the index buffer clamp (#5278 with #5327 and #5358). No upstream fix or root cause exists for the NVIDIA
   device loss when shooting (shadPS4 #4525); ALN_VK_CRASH_DIAGNOSTIC=1 loads the LunarG crash diagnostic layer.
+GDS lane rank removal lives in ir/passes/gds_lane_offset.cpp and rewrites only the matched operand, so a rank shared by several DataAppend/DataConsume users is kept.
+Backported (2026-11-08): 612713d5 geometry invocation count compare (#5078), 2f40f87b MBCNT lowered with its
+  ballot on wave32 hosts (#5116, as in the Odin Sphere port), c34ca21f EXEC scope after an empty branch (#5220),
+  4c7b287f ReadLane elimination before the ring passes (#5169), the GDS write tracking of c6b24ec1. From the Odin
+  Sphere port: bounded LDS loads and stores, the staging pool lock, the recorder chunk exchange, VK_EXT_device_fault.
+Local: geometry shaders declare OutputPoints for point output (upstream emits OutputVertices) and OutputVertices
+  bounded by the GSVS ring layout and the device limits (geometry_output.cpp).
+Backported (2026-11-08, second pass): c09fa46a vertex/index/indirect buffer read tracking (#5262), 00276961 +
+  e9f2c54c + 23c41333 index buffer capacity, mapped-range clamp and null index buffer (#5278/#5327/#5358),
+  1b9d1591 chained indirect buffers (#5542), d9cf41ba InverseBallot immediates (#5202), de278985 GS EmitCut
+  (#5487). From Resogun: replay-side dynamic rendering pairing, SubgroupLocalInvocationId not Flat in vertex
+  shaders, sample_index with an existing BaryCoord, EmitUndefU64. From Odin Sphere: image barriers cover the
+  destination stages, image allocation over budget and in system memory when the card is full.

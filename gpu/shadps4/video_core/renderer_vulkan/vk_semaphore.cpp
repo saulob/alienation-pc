@@ -6,6 +6,7 @@
 #include "video_core/renderer_vulkan/vk_semaphore.h"
 
 #include "common/assert.h"
+#include "common/gpu_trace.h"
 
 namespace Vulkan {
 
@@ -34,12 +35,16 @@ void Semaphore::Refresh() {
     do {
         this_tick = gpu_tick.load(std::memory_order_acquire);
         auto [counter_result, cntr] = instance.GetDevice().getSemaphoreCounterValue(*semaphore);
+        if (counter_result != vk::Result::eSuccess) {
+            Common::GpuTrace::VulkanFailure("semread", s32(counter_result), this_tick);
+        }
         ASSERT_MSG(counter_result == vk::Result::eSuccess,
                    "Failed to get master semaphore value: {}", vk::to_string(counter_result));
         counter = cntr;
         if (counter < this_tick) {
             return;
         }
+        Common::GpuTrace::SetCompletedTick(counter);
     } while (!gpu_tick.compare_exchange_weak(this_tick, counter, std::memory_order_release,
                                              std::memory_order_relaxed));
 }
@@ -62,12 +67,18 @@ void Semaphore::Wait(u64 tick) {
         .pValues = &tick,
     };
 
+    Common::GpuTrace::Record(Common::GpuTrace::Event::BlockingWait, tick, gpu_tick.load());
     for (;;) {
         const vk::Result result = instance.GetDevice().waitSemaphores(&wait_info, WAIT_TIMEOUT);
         if (result == vk::Result::eSuccess) {
             break;
         }
+        if (result == vk::Result::eTimeout) {
+            continue;
+        }
+        Common::GpuTrace::VulkanFailure("semwait", s32(result), tick);
         ASSERT_MSG(result != vk::Result::eErrorDeviceLost, "Device lost while waiting for the GPU");
+        UNREACHABLE_MSG("Timeline semaphore wait failed: {}", vk::to_string(result));
     }
     Refresh();
 }

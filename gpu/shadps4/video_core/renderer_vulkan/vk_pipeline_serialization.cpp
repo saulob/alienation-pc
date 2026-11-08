@@ -32,7 +32,7 @@
 
 namespace Serialization {
 /* You should increment versions below once corresponding serialization scheme is changed. */
-static constexpr u32 ShaderBinaryVersion = 7u; // aln: interpolated integer fix (Pascal)
+static constexpr u32 ShaderBinaryVersion = 8u; // aln: geometry output mode and vertex count
 static constexpr u32 ShaderMetaVersion = 7u; // aln: ImageResource::needs_native
 static constexpr u32 PipelineKeyVersion = 5u; // aln: Info layout (ImageResource::needs_native)
 } // namespace Serialization

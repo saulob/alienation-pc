@@ -17,7 +17,9 @@
 #include <vector>
 #include <fmt/ranges.h>
 
+#include "aln_vk_layers.h"
 #include "common/assert.h"
+#include "common/gpu_trace.h"
 #include "common/logging/log.h"
 #include "common/path_util.h"
 #include "core/emulator_settings.h"
@@ -438,6 +440,15 @@ vk::UniqueInstance CreateInstance(Frontend::WindowSystemType window_type, bool e
     auto [instance_result, instance] = vk::createInstanceUnique(instance_ci_chain.get());
     ASSERT_MSG(instance_result == vk::Result::eSuccess, "Failed to create instance: {}",
                vk::to_string(instance_result));
+    if (window_type != Frontend::WindowSystemType::Headless) {
+        const std::string implicit = AlnVkLayers::DescribeImplicitLayers();
+        std::printf("Vulkan layers: implicit (enabled by the loader, not requested): %s\n",
+                    implicit.c_str());
+        Common::GpuTrace::SetLayerSummary(
+            fmt::format("requested {}; implicit {}", layers.empty() ? "none" : layers_string,
+                        implicit)
+                .c_str());
+    }
 
     VULKAN_HPP_DEFAULT_DISPATCHER.init(*instance);
 

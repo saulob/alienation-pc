@@ -4,6 +4,7 @@
 #include "aln_toggles.h"
 #include <ranges>
 #include "common/assert.h"
+#include "common/gpu_trace.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
@@ -102,7 +103,7 @@ void UniqueImage::Destroy() {
 void UniqueImage::Create(const vk::ImageCreateInfo& image_ci) {
     this->image_ci = image_ci;
     ASSERT(!image);
-    const VmaAllocationCreateInfo alloc_ci = {
+    VmaAllocationCreateInfo alloc_ci = {
         .flags = VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT,
         .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
         .requiredFlags = 0,
@@ -116,6 +117,25 @@ void UniqueImage::Create(const vk::ImageCreateInfo& image_ci) {
     VmaAllocationInfo alloc_info{};
     VkResult result = vmaCreateImage(allocator, &image_ci_unsafe, &alloc_ci, &unsafe_image,
                                      &allocation, &alloc_info);
+    // A full card keeps the image over budget, then in system memory, instead of ending the game.
+    if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY) {
+        alloc_ci.flags &= ~VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
+        LOG_WARNING(Render_Vulkan, "Allocating image {}x{}x{} over budget", image_ci.extent.width,
+                    image_ci.extent.height, image_ci.extent.depth);
+        Common::GpuTrace::Record(Common::GpuTrace::Event::AllocationFallback, image_ci.extent.width,
+                                 image_ci.extent.height, 1);
+        result = vmaCreateImage(allocator, &image_ci_unsafe, &alloc_ci, &unsafe_image, &allocation,
+                                &alloc_info);
+    }
+    if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY) {
+        alloc_ci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+        LOG_WARNING(Render_Vulkan, "Out of video memory: image {}x{}x{} in system memory",
+                    image_ci.extent.width, image_ci.extent.height, image_ci.extent.depth);
+        Common::GpuTrace::Record(Common::GpuTrace::Event::AllocationFallback, image_ci.extent.width,
+                                 image_ci.extent.height, 2);
+        result = vmaCreateImage(allocator, &image_ci_unsafe, &alloc_ci, &unsafe_image, &allocation,
+                                &alloc_info);
+    }
     ASSERT_MSG(result == VK_SUCCESS, "Failed allocating image with error {}",
                vk::to_string(vk::Result{result}));
     image = vk::Image{unsafe_image};
@@ -244,6 +264,9 @@ void Image::GetBarriers(Barriers& barriers, vk::ImageLayout dst_layout, vk::Acce
                         std::optional<SubresourceRange> subres_range) {
     auto& last_state = backing->state;
     auto& subresource_states = backing->subresource_states;
+    const auto needs_barrier = [&](const State& state) {
+        return NeedsBarrier(state, dst_layout, dst_mask, dst_stage);
+    };
 
     const bool needs_partial_transition =
         subres_range &&
@@ -278,11 +301,7 @@ void Image::GetBarriers(Barriers& barriers, vk::ImageLayout dst_layout, vk::Acce
                 ASSERT(subres_idx < subresource_states.size());
                 auto& state = subresource_states[subres_idx];
 
-                constexpr auto write_flags = vk::AccessFlagBits2::eTransferWrite |
-                                             vk::AccessFlagBits2::eShaderWrite |
-                                             vk::AccessFlagBits2::eMemoryWrite;
-                const bool is_write = static_cast<bool>(state.access_mask & write_flags);
-                if (state.layout != dst_layout || state.access_mask != dst_mask || is_write) {
+                if (needs_barrier(state)) {
                     barriers.emplace_back(vk::ImageMemoryBarrier2{
                         .srcStageMask = state.pl_stage,
                         .srcAccessMask = state.access_mask,
@@ -312,11 +331,7 @@ void Image::GetBarriers(Barriers& barriers, vk::ImageLayout dst_layout, vk::Acce
             subresource_states.clear();
         }
     } else { // Full resource transition
-        constexpr auto write_flags = vk::AccessFlagBits2::eTransferWrite |
-                                     vk::AccessFlagBits2::eShaderWrite |
-                                     vk::AccessFlagBits2::eMemoryWrite;
-        const bool is_write = static_cast<bool>(last_state.access_mask & write_flags);
-        if (last_state.layout == dst_layout && last_state.access_mask == dst_mask && !is_write) {
+        if (!needs_barrier(last_state)) {
             return;
         }
 

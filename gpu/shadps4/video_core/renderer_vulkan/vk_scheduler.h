@@ -20,6 +20,8 @@
 
 #include "aln_toggles.h"
 #include "common/assert.h"
+#include "common/gpu_trace.h"
+#include "video_core/renderer_vulkan/vk_recording_state.h"
 #include "common/interval_set.h"
 #include "common/unique_function.h"
 #include "video_core/amdgpu/regs_color.h"
@@ -585,7 +587,7 @@ public:
 
     /// Returns false (and leaves `func` untouched) when the chunk has no room.
     template <typename Func>
-    bool Push(Func&& func) {
+    bool Push(Func&& func, std::source_location origin) {
         using Command = TypedCommand<std::decay_t<Func>>;
         static_assert(sizeof(Command) <= Capacity, "recorded command is too large");
         const size_t offset = (used + alignof(Command) - 1) & ~(alignof(Command) - 1);
@@ -593,6 +595,7 @@ public:
             return false;
         }
         auto* command = new (storage + offset) Command(std::forward<Func>(func));
+        command->origin = origin;
         if (last) {
             last->next = command;
         } else {
@@ -625,10 +628,12 @@ public:
     void Execute(vk::CommandBuffer cmdbuf) {
         for (CommandBase* command = first; command;) {
             CommandBase* const next = command->next;
+            Common::GpuTrace::SetReplaySite(command->origin.file_name(), command->origin.line());
             command->Execute(cmdbuf);
             command->~CommandBase();
             command = next;
         }
+        Common::GpuTrace::SetReplaySite(nullptr, 0);
         first = last = nullptr;
         used = 0;
         oversized.clear();
@@ -659,6 +664,7 @@ private:
         virtual ~CommandBase() = default;
         virtual void Execute(vk::CommandBuffer cmdbuf) = 0;
         CommandBase* next{};
+        std::source_location origin;
     };
     template <typename Func>
     struct TypedCommand final : CommandBase {
@@ -730,7 +736,9 @@ public:
     /// recording this first waits until all commands passed to Record() are recorded, then
     /// records directly (Record() included, so callers may mix both) until the next
     /// KickRecording() or submission.
-    [[gnu::noinline]] vk::CommandBuffer CommandBuffer() {
+    [[gnu::noinline]] vk::CommandBuffer CommandBuffer(
+        std::source_location origin = std::source_location::current()) {
+        CheckRecordingThread(origin);
         if (recording_threaded && !direct_mode) {
             SyncRecording();
             direct_mode = true;
@@ -746,7 +754,8 @@ public:
     /// Records `func(vk::CommandBuffer)` in order with other commands. The closure must own
     /// everything it uses (capture by value): it may run later on the recording thread.
     template <typename Func>
-    void Record(Func&& func) {
+    void Record(Func&& func, std::source_location origin = std::source_location::current()) {
+        CheckRecordingThread(origin);
         if (!recording_threaded || direct_mode) {
             func(current_cmdbuf);
             return;
@@ -757,10 +766,9 @@ public:
             func(current_cmdbuf);
             return;
         }
-        if (!record_chunk->Push(std::forward<Func>(func))) {
-            full_chunks.push_back(std::move(record_chunk));
-            record_chunk = AcquireChunk();
-            const bool pushed = record_chunk->Push(std::forward<Func>(func));
+        if (!record_chunk->Push(std::forward<Func>(func), origin)) {
+            full_chunks.push_back(std::exchange(record_chunk, AcquireChunk()));
+            const bool pushed = record_chunk->Push(std::forward<Func>(func), origin);
             ASSERT(pushed);
         }
     }
@@ -773,29 +781,31 @@ public:
 
     /// Makes room for `bytes` of RecordData() plus the command that uses them in the current
     /// chunk: data and command must share a chunk, which is recycled once executed.
-    void ReserveRecordData(size_t bytes) {
+    void ReserveRecordData(size_t bytes,
+                           std::source_location origin = std::source_location::current()) {
         if (!IsRecordingDeferred()) {
             return;
         }
+        CheckRecordingThread(origin);
         if (bytes + 1024 > RecordChunk::Capacity) {
             bytes = 0; // RecordData() places it out of line; keep room for the command
         }
         if (RecordChunk::Capacity - record_chunk->Size() < bytes + 1024) {
-            full_chunks.push_back(std::move(record_chunk));
-            record_chunk = AcquireChunk();
+            full_chunks.push_back(std::exchange(record_chunk, AcquireChunk()));
         }
     }
 
     /// Copies `data` into recording storage that lives until the command that uses it has
     /// been recorded (the same chunk). With threaded recording off, returns `data` itself.
     template <typename T>
-    std::span<const T> RecordData(std::span<const T> data) {
+    std::span<const T> RecordData(std::span<const T> data,
+                                  std::source_location origin = std::source_location::current()) {
         if (!IsRecordingDeferred() || data.empty()) {
             return data;
         }
         // Room for the data and the command that follows it, so both stay in one chunk.
         const size_t bytes = data.size_bytes();
-        ReserveRecordData(bytes + alignof(T));
+        ReserveRecordData(bytes + alignof(T), origin);
         auto* dst = static_cast<T*>(record_chunk->Allocate(bytes, alignof(T)));
         if (!dst) {
             dst = static_cast<T*>(record_chunk->AllocateOversized(bytes));
@@ -804,15 +814,40 @@ public:
         return {dst, data.size()};
     }
 
-    /// Hands recorded commands to the recording thread. Called at points where no caller holds
-    /// the raw command buffer (end of draws and dispatches); small batches are kept.
-    void KickRecording(bool force = false);
+    /// Hands recorded commands to the recording thread and ends direct recording. Called at
+    /// points where no caller holds the raw command buffer (end of draws and dispatches); small
+    /// batches are kept.
+    void KickRecording(bool force = false,
+                       std::source_location origin = std::source_location::current());
 
-    /// aln: whether this thread is the one recording into the current chunk (the last to kick
-    /// recording). Other threads (draw preparation workers) must not Record(): KickRecording
-    /// hands the chunk to the recorder and briefly leaves none.
+    /// aln: makes the calling thread the one that records into the current chunk. The draw
+    /// pipeline hands recording over: stage B while it runs packets, stage A after a drain.
+    void ClaimRecording() noexcept {
+        recording_owner.Claim(Common::GpuTrace::CurrentThreadId());
+    }
+
+    /// aln: lets a thread that is not the owner take recording over when nothing else is
+    /// producing (the GPU command thread with the draw pipeline idle). Without it, or when it
+    /// refuses, a foreign recording is fatal.
+    using RecordingTakeover = bool (*)(void* context);
+    void SetRecordingTakeover(RecordingTakeover takeover, void* context) noexcept {
+        recording_takeover_context = context;
+        recording_takeover = takeover;
+    }
+
+    /// aln: the next thread to record becomes the owner (shutdown, tests).
+    void ReleaseRecording() noexcept {
+        recording_owner.Claim(0);
+    }
+
+    [[nodiscard]] u32 RecordingOwnerThread() const noexcept {
+        return recording_owner.Owner();
+    }
+
+    /// aln: whether this thread records into the current chunk. Other threads (draw preparation
+    /// workers) must not Record().
     [[nodiscard]] bool OwnsRecording() const noexcept {
-        return recording_owner.load(std::memory_order_relaxed) == std::this_thread::get_id();
+        return recording_owner.Owner() == Common::GpuTrace::CurrentThreadId();
     }
 
     /// Waits until every recorded command is in the command buffer.
@@ -901,6 +936,26 @@ public:
 private:
     void AllocateWorkerCommandBuffers();
 
+    void ReplayBeginRendering(vk::CommandBuffer cmdbuf, const vk::RenderingInfo& info);
+    void ReplayEndRendering(vk::CommandBuffer cmdbuf);
+
+    /// Queues the recorded chunks without ending direct recording: a caller of an internal
+    /// wait may still hold the raw command buffer.
+    void HandOffRecording(bool force,
+                          std::source_location origin = std::source_location::current());
+
+    void CheckRecordingThread(std::source_location origin) {
+        if (!recording_threaded) {
+            return;
+        }
+        const u32 tid = Common::GpuTrace::CurrentThreadId();
+        if (!recording_owner.Allows(tid)) [[unlikely]] {
+            TakeOverOrFail(tid, origin);
+        }
+    }
+    void TakeOverOrFail(u32 tid, std::source_location origin);
+    [[noreturn, gnu::noinline]] void FailForeignRecording(u32 tid, std::source_location origin);
+
     std::unique_ptr<RecordChunk> AcquireChunk();
 
     void RecorderThread(std::stop_token stoken);
@@ -931,9 +986,13 @@ private:
     std::jthread priority_pending_ops_thread;
     RenderState render_state;
     bool is_rendering = false;
+    RenderingScope replay_rendering;
     // aln: threaded recording
     std::unique_ptr<RecordChunk> record_chunk;
-    std::atomic<std::thread::id> recording_owner{}; // see OwnsRecording()
+    RecordingOwner recording_owner; // see ClaimRecording()
+    RecordingTakeover recording_takeover{};
+    void* recording_takeover_context{};
+    std::atomic<u64> recording_takeovers{0};
     std::vector<std::unique_ptr<RecordChunk>> full_chunks;
     std::mutex recorder_mutex;
     std::condition_variable_any recorder_cv;

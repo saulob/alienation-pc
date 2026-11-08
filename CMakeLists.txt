@@ -239,6 +239,28 @@ target_include_directories(aln-tiling-tests PRIVATE gpu/shim gpu/shadps4 tests s
 target_compile_options(aln-tiling-tests PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(aln-tiling-tests PRIVATE alngpu)
 
+# Focused tests of the GDS counter lane offset removal on hand-built IR (tools/test.ps1); not part of the default build.
+add_executable(aln-gds-lane-offset-tests EXCLUDE_FROM_ALL tests/gds_lane_offset_tests.cpp)
+set_target_properties(aln-gds-lane-offset-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_include_directories(aln-gds-lane-offset-tests PRIVATE gpu/shim gpu/shadps4 tests src ${CMAKE_BINARY_DIR}/gpu/include
+    gpu/third_party/gcn/include gpu/third_party/half/include gpu/third_party/xbyak)
+target_link_libraries(aln-gds-lane-offset-tests PRIVATE alngpu)
+
+# Focused tests of the geometry shader output bound and the GPU crash trace (tools/test.ps1); not part of the
+# default build.
+add_executable(aln-gpu-crash-trace-tests EXCLUDE_FROM_ALL tests/gpu_crash_trace_tests.cpp)
+set_target_properties(aln-gpu-crash-trace-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_include_directories(aln-gpu-crash-trace-tests PRIVATE gpu/shim gpu/shadps4 tests src ${CMAKE_BINARY_DIR}/gpu/include
+    gpu/third_party/gcn/include gpu/third_party/half/include gpu/third_party/xbyak)
+target_link_libraries(aln-gpu-crash-trace-tests PRIVATE alngpu)
+
+# Focused tests of the deferred Vulkan command recording (tools/test.ps1); not part of the default build.
+add_executable(aln-gpu-recording-tests EXCLUDE_FROM_ALL tests/gpu_recording_tests.cpp)
+set_target_properties(aln-gpu-recording-tests PROPERTIES CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_include_directories(aln-gpu-recording-tests PRIVATE gpu/shim gpu/shadps4 tests src ${CMAKE_BINARY_DIR}/gpu/include
+    gpu/third_party/gcn/include gpu/third_party/half/include gpu/third_party/xbyak)
+target_link_libraries(aln-gpu-recording-tests PRIVATE alngpu)
+
 # Focused tests of the Renderer setting and the OpenGL requirements (tools/test.ps1); not part of the default build.
 add_executable(aln-renderer-selection-tests EXCLUDE_FROM_ALL tests/renderer_selection_tests.cpp)
 set_target_properties(aln-renderer-selection-tests PROPERTIES CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)

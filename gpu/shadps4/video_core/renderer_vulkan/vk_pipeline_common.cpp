@@ -6,6 +6,7 @@
 #include <boost/container/small_vector.hpp>
 #include <boost/container/static_vector.hpp>
 
+#include "common/gpu_trace.h"
 #include "shader_recompiler/resource.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
@@ -21,6 +22,31 @@ Pipeline::Pipeline(const Instance& instance_, Scheduler& scheduler_, DescriptorH
       is_compute{is_compute_} {}
 
 Pipeline::~Pipeline() = default;
+
+void Pipeline::TraceUse(u32 groups_x, u32 groups_y, u32 groups_z) const {
+    using namespace Common::GpuTrace;
+    const auto hash = [&](Shader::SwStage stage) -> u64 {
+        const auto* info = stages[u32(stage)];
+        return info ? info->pgm_hash : 0;
+    };
+    const bool first = !first_use_traced.exchange(true, std::memory_order_relaxed);
+    if (is_compute) {
+        const u64 cs = hash(Shader::SwStage::Compute);
+        SetLastDispatch(cs, groups_x, groups_y, groups_z);
+        if (first) {
+            Record(Event::PipelineFirstUse, u64(PipelineKind::Compute), cs,
+                   PackGroups(groups_x, groups_y, groups_z));
+        }
+        return;
+    }
+    const u64 vs = hash(Shader::SwStage::Vertex);
+    const u64 gs = hash(Shader::SwStage::Geometry);
+    const u64 ps = hash(Shader::SwStage::Fragment);
+    SetLastGraphics(vs, gs, ps);
+    if (first) {
+        Record(Event::PipelineFirstUse, u64(PipelineKind::Graphics), vs, gs, ps);
+    }
+}
 
 
 void Pipeline::BindResources(DescriptorWrites& set_writes,

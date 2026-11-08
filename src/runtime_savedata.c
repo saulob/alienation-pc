@@ -199,6 +199,7 @@ static ABI int32_t save_umount(const MountPoint *point) {
     int slot=slot_of(point);
     if (slot>=0) { runtime_file_unmount(point->data); slots[slot].used=0; }
     pthread_mutex_unlock(&lock);
+    if (slot>=0) printf("Runtime: save data unmounted from %s\n",point->data);
     return slot>=0 ? 0 : ERR_NOT_FOUND;
 }
 #define BLOCK_SIZE 32768

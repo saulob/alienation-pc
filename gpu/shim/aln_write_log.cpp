@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "aln_write_log.h"
+#include "common/gpu_trace.h"
 
 #include <array>
 #include <atomic>
@@ -86,6 +87,7 @@ void Record(std::uint64_t address, const void* data, std::uint64_t size, Source 
 
 extern "C" void alngpu_dump_guest_writes(void* ucontext) {
     using namespace AlnWriteLog;
+    Common::GpuTrace::Dump("native fault");
     if (Mode() == 0) {
         return;
     }

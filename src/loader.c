@@ -200,6 +200,7 @@ static LONG fatal_exception(EXCEPTION_POINTERS *info) {
     module_diagnostics_report_crash((uintptr_t)c->Rip,
         record->ExceptionCode==EXCEPTION_ACCESS_VIOLATION && record->NumberParameters>=2 ? (uintptr_t)record->ExceptionInformation[1] : (uintptr_t)c->Rip,
         (uintptr_t)image,0x20000000);
+    module_diagnostics_report_thread_name();
     module_diagnostics_report_backtrace(c,(uintptr_t)image,0x20000000);
     fprintf(stderr,"  rax=%016llx rbx=%016llx rcx=%016llx rdx=%016llx\n  rsi=%016llx rdi=%016llx rbp=%016llx rsp=%016llx\n",
             c->Rax,c->Rbx,c->Rcx,c->Rdx,c->Rsi,c->Rdi,c->Rbp,c->Rsp);

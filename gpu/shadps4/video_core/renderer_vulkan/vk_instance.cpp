@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <boost/container/static_vector.hpp>
@@ -10,6 +11,8 @@
 
 #include "common/assert.h"
 #include "common/debug.h"
+#include "aln_vk_layers.h"
+#include "common/gpu_trace.h"
 #include "common/types.h"
 #include "imgui/renderer/imgui_core.h"
 #include "aln_graphics.h"
@@ -122,6 +125,26 @@ bool IsDeviceUsable(vk::PhysicalDevice physical) {
 Instance::Instance(s32 index, bool validation)
     : Instance(Frontend::WindowSystemInfo{}, index, validation, false) {}
 
+namespace {
+std::atomic<const Instance*> fault_instance{};
+
+void ReportFaultOfRegisteredInstance() {
+    if (const Instance* instance = fault_instance.load(std::memory_order_acquire)) {
+        instance->ReportDeviceFault();
+    }
+}
+
+void RegisterFaultReporter(const Instance* instance) {
+    fault_instance.store(instance, std::memory_order_release);
+    Common::GpuTrace::SetFaultReporter(&ReportFaultOfRegisteredInstance);
+}
+
+void UnregisterFaultReporter(const Instance* instance) {
+    const Instance* expected = instance;
+    fault_instance.compare_exchange_strong(expected, nullptr);
+}
+} // namespace
+
 Instance::Instance(const Frontend::WindowSystemInfo& window_info, s32 physical_device_index,
                    bool enable_validation, bool enable_crash_diagnostic)
     : instance{CreateInstance(window_info.type, enable_validation, enable_crash_diagnostic)},
@@ -225,11 +248,73 @@ Instance::Instance(const Frontend::WindowSystemInfo& window_info, s32 physical_d
     CollectPhysicalMemoryInfo();
     CollectImageFormatInfo();
     CollectToolingInfo();
+    RegisterFaultReporter(this);
 }
 
 Instance::~Instance() {
+    UnregisterFaultReporter(this);
     ImGui::Core::Shutdown(GetDevice());
     vmaDestroyAllocator(allocator);
+}
+
+
+// The module each device entry point resolves to: the driver, or a layer that intercepts it.
+void Instance::LogDispatchModules() const {
+    const auto& d = VULKAN_HPP_DEFAULT_DISPATCHER;
+    const auto module = [](auto function) {
+        return AlnVkLayers::ModuleOf(reinterpret_cast<const void*>(function));
+    };
+    const std::string dispatch =
+        fmt::format("vkQueueSubmit {}, vkQueuePresentKHR {}, vkCmdDraw {}, vkCmdBeginRendering {}, "
+                    "vkCmdPushDescriptorSetKHR {}",
+                    module(d.vkQueueSubmit), module(d.vkQueuePresentKHR), module(d.vkCmdDraw),
+                    module(d.vkCmdBeginRendering), module(d.vkCmdPushDescriptorSetKHR));
+    fmt::print("GPU: Vulkan dispatch: {}\n", dispatch);
+    Common::GpuTrace::SetDispatchSummary(dispatch.c_str());
+}
+
+void Instance::ReportDeviceFault() const {
+    if (supports_memory_budget) {
+        vk::PhysicalDeviceMemoryBudgetPropertiesEXT budget{};
+        vk::PhysicalDeviceMemoryProperties2 props{.pNext = &budget};
+        physical_device.getMemoryProperties2(&props);
+        for (u32 heap = 0; heap < props.memoryProperties.memoryHeapCount; ++heap) {
+            LOG_CRITICAL(Render_Vulkan, "Heap {}: {} MiB used of {} MiB budget, size {} MiB", heap,
+                         budget.heapUsage[heap] >> 20, budget.heapBudget[heap] >> 20,
+                         props.memoryProperties.memoryHeaps[heap].size >> 20);
+        }
+    }
+    if (!device_fault) {
+        LOG_CRITICAL(Render_Vulkan, "Device fault report unavailable (no VK_EXT_device_fault)");
+        return;
+    }
+    vk::DeviceFaultCountsEXT counts{};
+    if (device->getFaultInfoEXT(&counts, nullptr) != vk::Result::eSuccess) {
+        return;
+    }
+    std::vector<vk::DeviceFaultAddressInfoEXT> addresses(counts.addressInfoCount);
+    std::vector<vk::DeviceFaultVendorInfoEXT> vendor_infos(counts.vendorInfoCount);
+    counts.vendorBinarySize = 0;
+    vk::DeviceFaultInfoEXT info{
+        .pAddressInfos = addresses.data(),
+        .pVendorInfos = vendor_infos.data(),
+    };
+    const vk::Result result = device->getFaultInfoEXT(&counts, &info);
+    if (result != vk::Result::eSuccess && result != vk::Result::eIncomplete) {
+        return;
+    }
+    LOG_CRITICAL(Render_Vulkan, "Device fault: {}", info.description.data());
+    for (u32 i = 0; i < counts.addressInfoCount; ++i) {
+        const auto& address = addresses[i];
+        LOG_CRITICAL(Render_Vulkan, "{} at {:#x} (precision {:#x})",
+                     vk::to_string(address.addressType), address.reportedAddress,
+                     address.addressPrecision);
+    }
+    for (u32 i = 0; i < counts.vendorInfoCount; ++i) {
+        const auto& vendor = vendor_infos[i];
+        LOG_CRITICAL(Render_Vulkan, "Vendor fault {:#x} data {:#x}: {}", vendor.vendorFaultCode,
+                     vendor.vendorFaultData, vendor.description.data());
+    }
 }
 
 std::string Instance::GetDriverVersionName() {
@@ -290,7 +375,7 @@ bool Instance::CreateDevice() {
         vk::PhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR,
         vk::PhysicalDeviceImage2DViewOf3DFeaturesEXT, vk::PhysicalDeviceShaderClockFeaturesKHR,
         vk::PhysicalDevicePipelineBinaryFeaturesKHR,
-        vk::PhysicalDeviceMaintenance5FeaturesKHR>();
+        vk::PhysicalDeviceMaintenance5FeaturesKHR, vk::PhysicalDeviceFaultFeaturesEXT>();
     features = feature_chain.get().features;
 
     const vk::StructureChain properties_chain = physical_device.getProperties2<
@@ -434,6 +519,8 @@ bool Instance::CreateDevice() {
         LOG_INFO(Render_Vulkan, "- shaderSubgroupClock: {}",
                  shader_clock_features.shaderSubgroupClock);
     }
+    device_fault = feature_chain.get<vk::PhysicalDeviceFaultFeaturesEXT>().deviceFault &&
+                   add_extension(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
     const bool calibrated_timestamps =
         TRACY_GPU_ENABLED ? add_extension(VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME) : false;
 
@@ -613,6 +700,9 @@ bool Instance::CreateDevice() {
         vk::PhysicalDeviceShaderClockFeaturesKHR{
             .shaderSubgroupClock = shader_clock_features.shaderSubgroupClock,
         },
+        vk::PhysicalDeviceFaultFeaturesEXT{
+            .deviceFault = true,
+        },
     };
 
     if (!custom_border_color) {
@@ -667,6 +757,9 @@ bool Instance::CreateDevice() {
     if (!shader_clock) {
         device_chain.unlink<vk::PhysicalDeviceShaderClockFeaturesKHR>();
     }
+    if (!device_fault) {
+        device_chain.unlink<vk::PhysicalDeviceFaultFeaturesEXT>();
+    }
 
     auto [device_result, dev] = physical_device.createDeviceUnique(device_chain.get());
     if (device_result != vk::Result::eSuccess) {
@@ -677,6 +770,7 @@ bool Instance::CreateDevice() {
     fmt::print("GPU: Vulkan device extensions: {}\n", fmt::join(enabled_extensions, ", "));
 
     VULKAN_HPP_DEFAULT_DISPATCHER.init(*device);
+    LogDispatchModules();
     pipeline_binaries =
         InitializePipelineBinaryCache(*device, pipeline_binaries, pipeline_binary_global_key);
 
@@ -763,6 +857,8 @@ void Instance::CollectDeviceParameters() {
     LOG_INFO(Render_Vulkan, "GPU_Vulkan_Version: {}", api_version);
     LOG_INFO(Render_Vulkan, "GPU_Vulkan_Extensions: {}", extensions);
     fmt::print("GPU: Vulkan device {} ({}, Vulkan {})\n", model_name, driver_name, api_version);
+    Common::GpuTrace::SetDeviceIdentity(
+        fmt::format("{} ({}, Vulkan {})", model_name, driver_name, api_version).c_str());
     std::fflush(stdout);
 }
 

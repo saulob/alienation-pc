@@ -29,4 +29,7 @@ void module_diagnostics_report_crash(uintptr_t rip, uintptr_t target, uintptr_t 
  * lines that decode the instruction that made it. */
 void module_diagnostics_report_backtrace(const CONTEXT *fault, uintptr_t guest_base, size_t guest_size);
 
+/* "Crash: thread name" for the calling thread, when it has a description (host threads name themselves). */
+void module_diagnostics_report_thread_name(void);
+
 #endif

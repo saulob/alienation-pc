@@ -180,6 +180,20 @@ public:
         vk::AccessFlags2 access_mask = vk::AccessFlagBits2::eNone;
         vk::ImageLayout layout = vk::ImageLayout::eUndefined;
     };
+
+    /// The last barrier made the image visible only to its destination stages: an access in
+    /// other stages needs its own barrier even with the same layout and access.
+    static bool NeedsBarrier(const State& state, vk::ImageLayout dst_layout,
+                             vk::AccessFlags2 dst_mask, vk::PipelineStageFlags2 dst_stage) {
+        constexpr auto write_flags = vk::AccessFlagBits2::eTransferWrite |
+                                     vk::AccessFlagBits2::eShaderWrite |
+                                     vk::AccessFlagBits2::eMemoryWrite;
+        const bool stages_covered =
+            static_cast<bool>(state.pl_stage & vk::PipelineStageFlagBits2::eAllCommands) ||
+            !(dst_stage & ~state.pl_stage);
+        return state.layout != dst_layout || state.access_mask != dst_mask ||
+               static_cast<bool>(state.access_mask & write_flags) || !stages_covered;
+    }
     struct BackingImage {
         UniqueImage image;
         State state;

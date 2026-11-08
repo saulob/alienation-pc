@@ -1,4 +1,5 @@
 // Glue between the C loader (src/alngpu.h) and the vendored shadPS4 video core.
+#include "common/shader_crash_context.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -91,6 +92,8 @@ public:
         info.title = config.title ? config.title : "";
         info.sdk_ver = config.sdk_version;
         info.psf_attributes.raw = config.psf_attributes;
+        Common::ShaderCrash::SetBuildIdentity(
+            fmt::format("{} sdk={:#x} \"{}\"", info.game_serial, info.sdk_ver, info.title));
     }
 };
 

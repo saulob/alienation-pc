@@ -202,6 +202,8 @@ private:
     static bool DrawPipeWanted();
     bool UseDrawPipe() const;
     bool OnStageA() const;
+    /// The GPU command thread may record when no draw packet is in flight.
+    static bool CanTakeRecording(void* rasterizer);
     /// Arguments of an indirect draw: `args` holds `max_count` commands `stride` apart.
     struct IndirectDraw {
         VAddr args;
@@ -285,12 +287,12 @@ private:
     void MarkPass(const GraphicsPipeline* pipeline, const RenderState& state);
     void BindVertexBuffers(const GraphicsPipeline* pipeline,
                            const PreparedDraw* prepared = nullptr);
-    void BindIndexBuffer(u32 index_offset = 0);
+    void BindIndexBuffer(u32 index_offset = 0, bool is_indirect = false);
     /// aln: BindVertexBuffers/BindIndexBuffer in two halves: obtaining the buffers
     /// (vertex_binds, index_bind) and recording the binds.
     void ResolveVertexBuffers(const GraphicsPipeline* pipeline, const PreparedDraw* prepared);
     void EmitVertexBuffers();
-    void ResolveIndexBuffer(u32 index_offset);
+    void ResolveIndexBuffer(u32 index_offset, bool is_indirect = false);
     void EmitIndexBuffer();
 
     void ResetBindings(bool is_compute);
@@ -331,9 +333,9 @@ private:
         const VideoCore::Buffer* buffer;
         u64 offset;
         u32 size;
-        bool is_written;
+        vk::AccessFlags2 src_access;
     };
-    boost::container::static_vector<BoundBuffer, Shader::NUM_BUFFERS> bound_buffers;
+    std::vector<BoundBuffer> bound_buffers;
 
     u32 set_write_index{};
     Pipeline::DescriptorWrites set_writes;
@@ -415,6 +417,7 @@ private:
     struct IndexBind {
         vk::Buffer handle;
         u64 offset;
+        u64 size;
         vk::IndexType type;
     } index_bind{};
     /// The direct draw whose vertex/index buffers BindResources may resolve early.
