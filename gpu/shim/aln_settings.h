@@ -40,6 +40,8 @@ struct Values {
     std::atomic<int> requested_width{0}, requested_height{0};
     std::atomic<int> monitor{1};
     std::atomic<bool> show_fps_title{false}, show_resolution_title{false};
+    // Read once at start by the loader: skips the intro video.
+    std::atomic<bool> skip_intro{false};
     // Read once at start: render_resolution and aspect_ratio as alienation.ini names them (Load() only).
     std::string render_resolution{"native"}, aspect_ratio{"16:9"};
     // What the running game build supports (Feature bits), set by the loader.

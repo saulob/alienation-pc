@@ -90,6 +90,8 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.show_fps_title = ParseBool(value, v.show_fps_title);
     } else if (key == "show_resolution_title") {
         v.show_resolution_title = ParseBool(value, v.show_resolution_title);
+    } else if (key == "skip_intro") {
+        v.skip_intro = ParseBool(value, v.skip_intro);
     } else if (key == aln_key_actions[ALN_KEY_HOTKEY_WINDOW_MODE].ini_key) {
         if (const int scancode = aln_key_from_name(value.c_str()); scancode != 0) {
             v.window_mode_key = scancode;

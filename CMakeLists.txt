@@ -100,7 +100,8 @@ set(ALN_RUNTIME_SOURCES
     src/runtime_sema.c
     src/runtime_services.c
     src/runtime_thread.c
-    src/runtime_time.c)
+    src/runtime_time.c
+    src/skip_intro.c)
 # The built-in system fonts are assembled into runtime_font.c (.incbin): rebuild it when a font changes.
 set(ALN_NOTO_SANS ${CMAKE_SOURCE_DIR}/third_party/fonts/NotoSans-Regular.ttf)
 set(ALN_NOTO_SANS_TC ${CMAKE_SOURCE_DIR}/third_party/fonts/NotoSansTC-Regular.otf)
@@ -179,6 +180,11 @@ target_compile_options(aln-image-format-tests PRIVATE -Wall -Wextra -Werror)
 add_executable(aln-resolution-patch-tests EXCLUDE_FROM_ALL tests/resolution_patch_tests.c launcher/resolution.c launcher/frame_rate.c)
 target_include_directories(aln-resolution-patch-tests PRIVATE launcher)
 target_compile_options(aln-resolution-patch-tests PRIVATE -Wall -Wextra -Werror)
+
+# Focused tests of the Skip Intro hook site checks and the startup video tracking (tools/test.ps1); not part of the default build.
+add_executable(aln-skip-intro-tests EXCLUDE_FROM_ALL tests/skip_intro_tests.c src/skip_intro.c src/guest_hook.c)
+target_include_directories(aln-skip-intro-tests PRIVATE src)
+target_compile_options(aln-skip-intro-tests PRIVATE -Wall -Wextra -Werror)
 
 # Focused tests of the Windows crash reporting: each case crashes an isolated child process through the production
 # handlers and checks the log, the minidump and the exit code (tools/test.ps1); not part of the default build.

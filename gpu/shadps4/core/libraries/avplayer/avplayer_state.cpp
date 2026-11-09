@@ -304,6 +304,13 @@ bool AvPlayerState::Stop() {
     return true;
 }
 
+void AvPlayerState::FinishEarly() {
+    std::shared_lock lock(m_source_mutex);
+    if (m_up_source != nullptr) {
+        m_up_source->FinishEarly();
+    }
+}
+
 bool AvPlayerState::GetVideoData(AvPlayerFrameInfo& video_info) {
     std::shared_lock lock(m_source_mutex);
     if (m_up_source == nullptr) {

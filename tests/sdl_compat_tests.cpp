@@ -98,8 +98,8 @@ void TestGameProcessOrder() {
     CHECK(Count(loader, "aln_prepare_sdl_gamepad();") == 1);
     CHECK(LineBefore(loader, prepare).find("if") == std::string::npos);
     CHECK(Pos(loader, "aln_launcher_run(&launcher)") < prepare);
-    for (const char* later : {"aln_game_build(paths.image_dir", "aln_render_resolution(", "runtime_set_language(",
-                              "runtime_pad_set_settings(", "alngpu_init("}) {
+    for (const char* later : {"aln_game_build(paths.image_dir", "aln_render_resolution(", "runtime_pad_set_settings(",
+                              "alngpu_init("}) {
         CHECK(prepare < Pos(loader, later));
     }
     CHECK(Pos(loader, "if (game_child) {") < prepare);

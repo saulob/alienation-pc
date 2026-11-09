@@ -26,6 +26,7 @@ $tests = [ordered]@{
     'aln-avplayer-thread-tests'    = 'AvPlayer thread join tests'
     'aln-image-format-tests'       = 'boot image and content profile contract'
     'aln-resolution-patch-tests'   = 'render resolution and frame rate patch tests'
+    'aln-skip-intro-tests'         = 'Skip Intro hook site and startup video tests'
     'aln-crash-guard-tests'        = 'crash reporting (isolated crashing child processes)'
     'aln-runtime-overlay-tests'    = 'guest file overlay tests'
     'aln-tiling-tests'             = 'GPU tiling tests'

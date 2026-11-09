@@ -76,16 +76,6 @@ def main():
         check(all(f'sce_module/{m}' in shared for m in modules), f'{title} {version}: a module is not a shared file')
         check(not set(build['data_files']) & set(shared), f'{title} {version}: a data file is also a shared file')
 
-    languages = re.findall(r'\{"(\w+)", "([^"]+)", (\d+)\}',
-                           re.search(r'kAlienationLanguages\[\] = \{(.*?)\};', source, re.S).group(1))
-    names = [name for _, name, _ in languages]
-    check(names[0] == 'English', 'English is not the first console language')
-    check(names[1:] == sorted(names[1:]), f'console languages after English are not alphabetical: {names}')
-    check(len({key for key, _, _ in languages}) == len(languages), 'a console language key repeats')
-    ids = {key: int(ps4_id) for key, _, ps4_id in languages}
-    check(ids['portuguese'] == 7 and ids['portuguese_brazil'] == 17 and ids['spanish'] == 3 and
-          ids['spanish_latin_america'] == 20 and ids['english'] == 1, 'a console language changed its SCE id')
-
     for text in failures:
         print(f'FAILED: {text}')
     if not failures:

@@ -13,6 +13,13 @@ from ps4_module import read_module  # noqa: E402
 
 failures = []
 HEAP_LITERALS = (0x3bb, 0x47b)  # the startup functions that set the three GPU heap sizes, in both builds
+WAS_PRESSED = bytes.fromhex('554889e541565348 89fb4189f6488b03ff5028 84c074 0f4889df4489f6 e8'.replace(' ', ''))
+WAS_PRESSED_TAIL = bytes.fromhex('3401eb0231c05b415e5dc3')
+UPDATE = bytes.fromhex('554889e54156534889fb8b7b1085ff78') + b'\0' + bytes.fromhex('c5fc104318c5fc104b38c5fc105358c5fc105b70')
+DISPATCH = bytes.fromhex('89f083fe0f7603 31c0c3488d0d'.replace(' ', ''))
+CROSS_NOW = bytes.fromhex('8a47192440c0e806c3')
+CROSS_BEFORE = bytes.fromhex('8a87910000002440c0e806c3')
+CROSS = 13
 
 
 def check(condition, text):
@@ -36,12 +43,58 @@ def frame_rate(source, name):
     return int(match.group(1), 16), to_bytes(match.group(2)), to_bytes(match.group(3))
 
 
-def check_build(label, folder, source, resolution_name, frame_name):
+def skip_intro_site(source, build):
+    match = re.search(r'\{"' + build + r'", (0x[0-9a-f]+), (0x[0-9a-f]+), (0x[0-9a-f]+), (0x[0-9a-f]+)\}', source)
+    return tuple(int(group, 16) for group in match.groups()) if match else None
+
+
+def count_pattern(image, prefix, tail, gap):
+    return [m.start() for m in re.finditer(re.escape(prefix) + b'.' * gap + re.escape(tail), bytes(image), re.S)]
+
+
+def dword(image, at):
+    return int.from_bytes(image[at:at + 4], 'little', signed=True)
+
+
+def cross_entry(image, function):
+    if bytes(image[function:function + len(DISPATCH)]) != DISPATCH:
+        return -1
+    table = function + 17 + dword(image, function + 13)
+    return table + dword(image, table + CROSS * 4)
+
+
+def check_skip_intro(label, image, relocs, skip_source, build, spans):
+    site = skip_intro_site(skip_source, build)
+    check(site is not None, f'{label}: no Skip Intro site')
+    if not site:
+        return
+    is_down, was_pressed, update, slot = site
+    check(bytes(image[was_pressed:was_pressed + len(WAS_PRESSED)]) == WAS_PRESSED, f'{label}: wasPressed differs')
+    check(bytes(image[was_pressed + 34:was_pressed + 34 + len(WAS_PRESSED_TAIL)]) == WAS_PRESSED_TAIL,
+          f'{label}: wasPressed tail differs')
+    helper = was_pressed + 34 + dword(image, was_pressed + 30)
+    entry = cross_entry(image, helper)
+    check(bytes(image[entry:entry + len(CROSS_BEFORE)]) == CROSS_BEFORE, f'{label}: previous-state Cross test differs')
+    entry = cross_entry(image, is_down)
+    check(bytes(image[entry:entry + len(CROSS_NOW)]) == CROSS_NOW, f'{label}: isDown Cross test differs')
+    slots = {target: value for target, kind, value, addend in relocs if kind == 0}
+    check(slots.get(slot) == is_down and slots.get(slot + 0x10) == was_pressed, f'{label}: isDown is not the vtable slot')
+    mask = bytes(image[update:update + len(UPDATE)])
+    check(mask[:16] == UPDATE[:16] and mask[17:] == UPDATE[17:], f'{label}: update differs')
+    whole = bytes(image)
+    check(len(count_pattern(image, WAS_PRESSED, WAS_PRESSED_TAIL, 4)) == 1, f'{label}: wasPressed is not unique')
+    check(len(re.findall(re.escape(UPDATE[:16]) + b'.' + re.escape(UPDATE[17:]), whole, re.S)) == 1,
+          f'{label}: update is not unique')
+    spans.append((is_down, is_down + 5))
+    spans.append((update, update + 10))
+
+
+def check_build(label, folder, source, skip_source, build, resolution_name, frame_name):
     eboot = ROOT / 'game' / 'prepared' / folder / 'eboot.bin'
     if not eboot.exists():
         print(f'skipped {label}: {eboot} not found')
         return
-    image = prepare_image.map_eboot(read_module(eboot))[0]
+    image, _, relocs = prepare_image.map_eboot(read_module(eboot))[:3]
     spans = []
     resolution = sites(source, resolution_name)
     check(len(resolution) == 4, f'{label}: expected two heap sites and the width and height sites')
@@ -57,6 +110,7 @@ def check_build(label, folder, source, resolution_name, frame_name):
     check(bytes(image[offset:offset + 4]) == original, f'{label}: engine_set_fps entry differs at {offset:#x}')
     check(replacement == bytes.fromhex('31c0c390'), f'{label}: replacement is not xor eax,eax; ret')
     spans.append((offset, offset + 4))
+    check_skip_intro(label, image, relocs, skip_source, build, spans)
     spans.sort()
     check(all(a[1] <= b[0] for a, b in zip(spans, spans[1:])), f'{label}: patch sites overlap')
     for at in HEAP_LITERALS:
@@ -66,8 +120,11 @@ def check_build(label, folder, source, resolution_name, frame_name):
 
 def main():
     source = (ROOT / 'launcher' / 'game_profile.cpp').read_text(encoding='utf-8')
-    check_build('CUSA00062 1.00', 'CUSA00062-1.00', source, 'kEurope100ResolutionSites', 'kEurope100FrameRate')
-    check_build('CUSA04430 1.00', 'CUSA04430-1.00', source, 'kAsia100ResolutionSites', 'kAsia100FrameRate')
+    skip_source = (ROOT / 'src' / 'skip_intro.c').read_text(encoding='utf-8')
+    check_build('CUSA00062 1.00', 'CUSA00062-1.00', source, skip_source, 'CUSA00062-1.00', 'kEurope100ResolutionSites',
+                'kEurope100FrameRate')
+    check_build('CUSA04430 1.00', 'CUSA04430-1.00', source, skip_source, 'CUSA04430-1.00', 'kAsia100ResolutionSites',
+                'kAsia100FrameRate')
     for text in failures:
         print(f'FAILED: {text}')
     if not failures:

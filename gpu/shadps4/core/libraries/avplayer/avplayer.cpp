@@ -7,6 +7,7 @@
 #include "core/libraries/avplayer/avplayer_impl.h"
 #include "core/libraries/libs.h"
 #include "boot_diagnostic.h"
+#include "skip_intro.h"
 #include "startup_phase.h"
 
 #include <string_view>
@@ -22,6 +23,9 @@ s32 PS4_SYSV_ABI sceAvPlayerAddSource(AvPlayerHandle handle, const char* filenam
     const s32 result = handle->AddSource(filename);
     aln_boot_diag_event("AvPlayer %p: add source %s -> %#x", static_cast<void*>(handle),
                         filename ? filename : "(null)", unsigned(result));
+    if (result == ORBIS_OK && skip_intro_video_added(handle, filename)) {
+        handle->BlankVideo();
+    }
     return result;
 }
 
@@ -47,6 +51,7 @@ s32 PS4_SYSV_ABI sceAvPlayerClose(AvPlayerHandle handle) {
     }
     aln_boot_diag_count(ALN_DIAG_AVPLAYER_CLOSE_BEGIN);
     aln_boot_diag_event("AvPlayer %p: close", static_cast<void*>(handle));
+    skip_intro_video_closed(handle);
     delete handle;
     aln_boot_diag_count(ALN_DIAG_AVPLAYER_CLOSE_END);
     aln_boot_diag_event("AvPlayer %p: closed", static_cast<void*>(handle));
@@ -99,7 +104,11 @@ bool PS4_SYSV_ABI sceAvPlayerGetVideoData(AvPlayerHandle handle, AvPlayerFrameIn
     if (handle == nullptr || video_info == nullptr) {
         return false;
     }
-    return handle->GetVideoData(*video_info);
+    const bool received = handle->GetVideoData(*video_info);
+    if (received && skip_intro_video_frame(handle)) {
+        handle->FinishEarly();
+    }
+    return received;
 }
 
 bool PS4_SYSV_ABI sceAvPlayerGetVideoDataEx(AvPlayerHandle handle,
@@ -108,7 +117,11 @@ bool PS4_SYSV_ABI sceAvPlayerGetVideoDataEx(AvPlayerHandle handle,
     if (handle == nullptr || video_info == nullptr) {
         return false;
     }
-    return handle->GetVideoData(*video_info);
+    const bool received = handle->GetVideoData(*video_info);
+    if (received && skip_intro_video_frame(handle)) {
+        handle->FinishEarly();
+    }
+    return received;
 }
 
 AvPlayerHandle PS4_SYSV_ABI sceAvPlayerInit(AvPlayerInitData* data) {

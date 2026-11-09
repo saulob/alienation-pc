@@ -39,10 +39,10 @@ constexpr ManagedSetting kBaseSettings[] = {
     {kRendererKey, kDefaultRenderer},
     {kAntiAliasingKey, "0"},
     {kAnisotropyKey, "0"},
-    {kTextLanguageKey, "english"},
     {kShowFpsTitleKey, "0"},
     {kShowResolutionTitleKey, "0"},
     {kShowFrameCounterKey, "0"},
+    {kSkipIntroKey, "0"},
     {kDetailedLoggingKey, "1"},
     {kAllowOverlayProgramsKey, "0"},
     {kOnlineEnabledKey, "0"},
@@ -96,14 +96,6 @@ bool IsValidSetting(std::string_view key, std::string_view value) {
     }
     if (key == kAnisotropyKey) {
         return one_of({"0", "2", "4", "8", "16"});
-    }
-    if (key == kTextLanguageKey) {
-        const std::span<const GameBuild> builds = SupportedBuilds();
-        return std::any_of(builds.begin(), builds.end(), [&](const GameBuild& build) {
-            const std::span<const TextLanguage> languages = TextLanguagesOf(&build);
-            return std::any_of(languages.begin(), languages.end(),
-                               [&](const TextLanguage& language) { return value == language.key; });
-        });
     }
     if (key == kPresentationKey) {
         return std::any_of(std::begin(kPresentationChoices), std::end(kPresentationChoices),
@@ -212,16 +204,6 @@ bool LauncherSettings::WriteFile(const Values& changes) {
     return file.Save();
 }
 
-bool NormalizeTextLanguage(trg::SettingsStore& settings, std::span<const TextLanguage> languages) {
-    const std::string saved = settings.Get(kTextLanguageKey, languages.front().key);
-    const std::string_view effective = ResolveTextLanguage(languages, saved).key;
-    if (saved == effective) {
-        return false;
-    }
-    settings.Set(kTextLanguageKey, std::string(effective));
-    return true;
-}
-
 bool LauncherWanted(bool game_ready, bool show_setting, bool shift_held, bool skip_once) {
     if (!game_ready) {
         return true;
@@ -249,6 +231,15 @@ extern "C" int aln_aspect_ratio(const char* settings_file, const char* image_dir
     return aln_aspect_index(settings.Get(kAspectRatioKey, kDefaultAspectRatio).c_str());
 }
 
+extern "C" int aln_skip_intro(const char* settings_file) {
+    using namespace aln;
+    if (!settings_file || !*settings_file) {
+        return 0;
+    }
+    const LauncherSettings settings(PathFromUtf8(settings_file));
+    return settings.GetBool(kSkipIntroKey, false) ? 1 : 0;
+}
+
 extern "C" int aln_detailed_logging(const char* settings_file) {
     using namespace aln;
     if (!settings_file || !*settings_file) {
@@ -265,8 +256,7 @@ const char* OnOff(bool on) { return on ? "on" : "off"; }
 
 } // namespace
 
-std::string SettingsSummary(const LauncherSettings& settings, const GameBuild* build,
-                            std::span<const TextLanguage> languages, const AlnRunSettings* run) {
+std::string SettingsSummary(const LauncherSettings& settings, const GameBuild* build, const AlnRunSettings* run) {
     std::string out;
     const auto line = [&out](const std::string& text) { out += "Settings: " + text + "\n"; };
     const char* build_label = run ? run->game_build : build ? build->label : nullptr;
@@ -288,9 +278,9 @@ std::string SettingsSummary(const LauncherSettings& settings, const GameBuild* b
              settings.Get(kAspectRatioKey, kDefaultAspectRatio));
     }
 
-    const TextLanguage& language = ResolveTextLanguage(languages, settings.Get(kTextLanguageKey));
-    line(std::string("Console language ") + std::string(language.name) + ", overlay programs " +
+    line(std::string("Overlay programs ") +
          (kSeparateGameProcessAvailable ? OnOff(settings.GetBool(kAllowOverlayProgramsKey, false)) : "unsupported"));
+    line(std::string("Skip Intro ") + OnOff(settings.GetBool(kSkipIntroKey, false)));
     return out;
 }
 
@@ -302,13 +292,5 @@ extern "C" void aln_log_settings_summary(const char* settings_file, const char* 
     const LauncherSettings settings(PathFromUtf8(settings_file ? settings_file : ""));
     (void)app0;
     const GameBuild* build = BuildOfImageDir(image_dir);
-    std::fputs(SettingsSummary(settings, build, TextLanguagesOf(build), run).c_str(), stdout);
-}
-
-extern "C" int aln_text_language(const char* settings_file, const char* image_dir, const char* app0) {
-    using namespace aln;
-    (void)app0;
-    const GameBuild* build = BuildOfImageDir(image_dir);
-    const LauncherSettings settings(PathFromUtf8(settings_file ? settings_file : ""));
-    return ResolveTextLanguage(TextLanguagesOf(build), settings.Get(kTextLanguageKey)).ps4_id;
+    std::fputs(SettingsSummary(settings, build, run).c_str(), stdout);
 }

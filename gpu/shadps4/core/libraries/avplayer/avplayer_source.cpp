@@ -334,8 +334,13 @@ bool AvPlayerSource::Stop() {
 
     m_is_paused = false;
     m_is_eof = false;
+    m_finish_early = false;
 
     return true;
+}
+
+void AvPlayerSource::FinishEarly() {
+    m_finish_early = true;
 }
 
 void AvPlayerSource::Pause() {
@@ -542,7 +547,7 @@ void AvPlayerSource::DemuxerThread(std::stop_token stop) {
     }
     LOG_INFO(Lib_AvPlayer, "Demuxer Thread started");
 
-    while (!stop.stop_requested()) {
+    while (!stop.stop_requested() && !m_finish_early) {
         if (m_video_packets.Size() > 30 &&
             (!m_audio_stream_index.has_value() || m_audio_packets.Size() > 8)) {
             std::this_thread::sleep_for(milliseconds(5));
@@ -656,11 +661,23 @@ static u64 FrameTimestampMillis(const AVFrame& frame, AVRational time_base) {
     return millis > 0 ? u64(millis) : 0;
 }
 
+static void FillBlackNV12(u8* buffer, size_t size, const AVFrame& frame) {
+    const size_t luma = std::min<size_t>(size_t(Common::AlignUp<u32>(frame.width, 64)) *
+                                             Common::AlignUp<u32>(frame.height, 16),
+                                         size);
+    std::memset(buffer, 0x10, luma);
+    std::memset(buffer + luma, 0x80, size - luma);
+}
+
 Frame AvPlayerSource::PrepareVideoFrame(GuestBuffer buffer, const AVFrame& frame) {
     ASSERT(frame.format == AV_PIX_FMT_NV12);
 
     auto p_buffer = buffer.GetBuffer();
-    Videodec::CopyNV12Data(p_buffer, buffer.Size(), frame);
+    if (m_state.IsVideoBlank()) {
+        FillBlackNV12(p_buffer, buffer.Size(), frame);
+    } else {
+        Videodec::CopyNV12Data(p_buffer, buffer.Size(), frame);
+    }
 
     const auto stream_index = m_streams[m_video_stream_index.value()].ffmpeg_index;
     const auto stream = m_avformat_context->streams[stream_index];

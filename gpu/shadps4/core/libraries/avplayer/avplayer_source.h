@@ -34,6 +34,7 @@ public:
     virtual ~AvPlayerStateCallback() = default;
 
     virtual AvPlayerAvSyncMode GetSyncMode() = 0;
+    virtual bool IsVideoBlank() const = 0;
 
     virtual void OnWarning(u32 id) = 0;
     virtual void OnError() = 0;
@@ -160,6 +161,7 @@ public:
     bool Start();
     bool Stop();
     void Pause();
+    void FinishEarly();
     void Resume();
     bool GetAudioData(AvPlayerFrameInfo& audio_info);
     bool GetVideoData(AvPlayerFrameInfo& video_info);
@@ -213,6 +215,7 @@ private:
     std::atomic_bool m_is_looping = false;
     std::atomic_bool m_is_paused = false;
     std::atomic_bool m_is_eof = false;
+    std::atomic_bool m_finish_early = false;
 
     std::unique_ptr<IDataStreamer> m_up_data_streamer;
 

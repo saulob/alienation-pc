@@ -34,10 +34,11 @@ inline constexpr char kGraphicsCardKey[] = "graphics_card";
 inline constexpr char kRendererKey[] = "renderer";
 inline constexpr char kAntiAliasingKey[] = "smaa";
 inline constexpr char kAnisotropyKey[] = "anisotropy";
-inline constexpr char kTextLanguageKey[] = "text_language";
 inline constexpr char kShowFpsTitleKey[] = "show_fps_title";
 inline constexpr char kShowResolutionTitleKey[] = "show_resolution_title";
 inline constexpr char kShowFrameCounterKey[] = "show_fps";
+// Skips the intro video; the title screen follows (src/skip_intro.h). Read when the game starts.
+inline constexpr char kSkipIntroKey[] = "skip_intro";
 // Keeps the run log of normal sessions; crash logs are kept whatever it says.
 inline constexpr char kDetailedLoggingKey[] = "detailed_logging";
 // Windows, on: Play starts the game as a separate process that overlay programs can attach to (game_process.h).
@@ -120,16 +121,11 @@ private:
     Values pending_;
 };
 
-// A saved text_language that is not one of `languages` (not empty) becomes the first of them. True when it changed
-// (pending until Save).
-bool NormalizeTextLanguage(trg::SettingsStore& settings, std::span<const TextLanguage> languages);
-
 // The launcher opens when the game files are not ready, or when the setting is On or Shift is held, unless it was
 // skipped once. A game that is not ready always shows it: it is where the files are installed.
 bool LauncherWanted(bool game_ready, bool show_setting, bool shift_held, bool skip_once);
 
 // The "Settings:" lines of the run log (aln_log_settings_summary).
-std::string SettingsSummary(const LauncherSettings& settings, const GameBuild* build,
-                            std::span<const TextLanguage> languages, const AlnRunSettings* run);
+std::string SettingsSummary(const LauncherSettings& settings, const GameBuild* build, const AlnRunSettings* run);
 
 } // namespace aln

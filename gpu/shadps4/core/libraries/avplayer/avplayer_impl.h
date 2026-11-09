@@ -32,6 +32,8 @@ public:
     bool IsActive();
     u64 CurrentTime();
     s32 Stop();
+    void FinishEarly();
+    void BlankVideo();
     bool SetLooping(bool is_looping);
 
 private:

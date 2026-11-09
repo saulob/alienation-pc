@@ -31,6 +31,9 @@ public:
     bool EnableStream(u32 stream_index);
     bool Start();
     bool Stop();
+    void FinishEarly();
+    void BlankVideo() { m_blank_video = true; }
+    bool IsVideoBlank() const override { return m_blank_video; }
     bool Pause();
     bool Resume();
     void SetAvSyncMode(AvPlayerAvSyncMode sync_mode);
@@ -88,6 +91,7 @@ private:
     std::atomic_uint32_t m_some_event_result{};
 
     std::shared_mutex m_source_mutex{};
+    std::atomic_bool m_blank_video = false;
     std::mutex m_state_machine_mutex{};
     std::mutex m_event_handler_mutex{};
     GuestThread m_controller_thread{};

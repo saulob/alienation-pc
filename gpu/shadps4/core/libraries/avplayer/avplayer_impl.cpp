@@ -217,6 +217,18 @@ s32 AvPlayer::Stop() {
     return ORBIS_OK;
 }
 
+void AvPlayer::BlankVideo() {
+    if (m_state != nullptr) {
+        m_state->BlankVideo();
+    }
+}
+
+void AvPlayer::FinishEarly() {
+    if (m_state != nullptr) {
+        m_state->FinishEarly();
+    }
+}
+
 bool AvPlayer::SetLooping(bool is_looping) {
     if (m_state == nullptr) {
         return false;

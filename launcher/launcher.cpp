@@ -133,12 +133,11 @@ constexpr char kAntiAliasingHelp[] =
     "SMAA smooths jagged edges on the finished picture, at a small cost in performance.";
 constexpr char kAnisotropyHelp[] =
     "Sharper textures on floors and walls seen at an angle. Game uses the game's own filtering.";
-constexpr char kTextLanguageHelp[] =
-    "The console language the game is told at start. The game also has its own language option in its menus.";
 constexpr char kShowFpsTitleHelp[] = "Shows the frame rate in the window title: Alienation | FPS: 60.00";
 constexpr char kShowResolutionTitleHelp[] =
     "Shows the game's render resolution in the window title: Alienation | 1920x1080";
 constexpr char kFrameCounterHelp[] = "Shows the frame rate and frame time in a corner of the game.";
+constexpr char kSkipIntroHelp[] = "Skip startup videos and go directly to the title screen";
 constexpr char kAllowOverlayProgramsHelp[] =
     "For programs that draw over games (recording, chat, store and performance overlays). On, PLAY starts the game as a "
     "separate program from this launcher, so they can attach to it cleanly. Off starts the game the usual way.";
@@ -261,16 +260,10 @@ bool StartGameProcess(const AlnLauncherConfig& config, std::string& error) {
 
 enum class Outcome { kRunning, kPlay, kQuit };
 
-std::vector<TextLanguage> LanguagesOf(const GameBuild* build) {
-    const std::span<const TextLanguage> languages = TextLanguagesOf(build);
-    return {languages.begin(), languages.end()};
-}
-
 class LauncherApp {
 public:
     LauncherApp(const AlnLauncherConfig& config, LauncherSettings& settings, GamePaths paths, GameCheck check)
-        : config_(config), settings_(settings), paths_(std::move(paths)), files_(check.state), build_(check.build),
-          text_languages_(LanguagesOf(build_)) {}
+        : config_(config), settings_(settings), paths_(std::move(paths)), files_(check.state), build_(check.build) {}
 
     bool game_process_started() const { return game_process_started_; }
 
@@ -352,7 +345,6 @@ private:
         PollOnline();
         NormalizeGraphicsCard();
         NormalizeGraphicsSettings();
-        NormalizeTextLanguage(settings_, text_languages_);
         if (play_.starting() && ImGui::GetTime() - play_started_ >= kPlayFeedbackSeconds) {
             if (!SeparateGameProcess(config_, settings_)) {
                 return Outcome::kPlay;
@@ -501,12 +493,10 @@ private:
         const GameCheck check = CheckAndLog(paths_);
         files_ = check.state;
         build_ = check.build;
-        text_languages_ = LanguagesOf(build_);
-        NormalizeTextLanguage(settings_, text_languages_);
     }
 
     // A build whose executable has no verified render resolution sites runs at its native 16:9 size; a saved custom
-    // value is put back to the supported one, as a language the build does not have is.
+    // value is put back to the supported one.
     void NormalizeGraphicsSettings() {
         if (!RestrictedToNativeResolution(build_)) {
             return;
@@ -620,7 +610,7 @@ private:
             return {name, "Resolution, anti-aliasing and texture filtering.", [this](trg::Ui& ui) { PageGraphics(ui); },
                     nullptr, nullptr};
         case PageId::kGameplay:
-            return {name, "Readouts and console language.", [this](trg::Ui& ui) { PageGameplay(ui); },
+            return {name, "Readouts and startup options.", [this](trg::Ui& ui) { PageGameplay(ui); },
                     nullptr, nullptr};
         case PageId::kControls:
             return {name, "Controller and keyboard.", [this](trg::Ui& ui) { PageControls(ui); }, nullptr, nullptr};
@@ -895,11 +885,7 @@ private:
         ui.Toggle("Frame rate in title", kShowFpsTitleHelp, kShowFpsTitleKey, false, "Off", "On");
         ui.Toggle("Render resolution in title", kShowResolutionTitleHelp, kShowResolutionTitleKey, false, "Off", "On");
         ui.Toggle("Frame counter", kFrameCounterHelp, kShowFrameCounterKey, false, "Hidden", "Shown");
-        std::vector<trg::Option> languages;
-        for (const TextLanguage& language : text_languages_) {
-            languages.push_back({std::string(language.key), std::string(language.name)});
-        }
-        ui.Combo("Console language", kTextLanguageHelp, kTextLanguageKey, text_languages_.front().key.data(), languages);
+        ui.Toggle("Skip Intro", kSkipIntroHelp, kSkipIntroKey, false, "Off", "On");
         if (kSeparateGameProcessAvailable) {
             ui.Toggle("Allow overlay programs", kAllowOverlayProgramsHelp, kAllowOverlayProgramsKey, false, "Off", "On");
         }
@@ -1044,7 +1030,6 @@ private:
     GamePaths paths_;
     GameFileState files_;
     const GameBuild* build_ = nullptr;
-    std::vector<TextLanguage> text_languages_;
     LauncherHost host_;
     ImTextureID sponsor_icon_{};
     std::map<std::pair<PageId, int>, ImTextureID> page_icons_;

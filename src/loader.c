@@ -16,6 +16,7 @@
 #include "boot_diagnostic.h"
 #include "aln_frame_rate.h"
 #include "aln_resolution.h"
+#include "skip_intro.h"
 #include "runtime_log.h"
 #include "aln_image_format.h"
 #include "isa_emulate.h"
@@ -611,7 +612,6 @@ int main(int argc, char **argv) {
         runtime_memory_set_direct_extra(
             aln_budget_growth(game_build.resolution_sites,game_build.resolution_site_count,&render_target));
     aln_crash_context_set_display(render_target.width,render_target.height,render_resolution->key,aspect_ratio->key);
-    runtime_set_language(aln_text_language(settings_file,paths.image_dir,app0));
     runtime_pad_set_settings(settings_file);
     printf("Overlay compatibility: %s game process\n",game_child ? "separate" : "original");
     if (content_profile) {
@@ -736,7 +736,10 @@ int main(int argc, char **argv) {
             if (!executable) fail("native function is not executable");
         }
     }
-    image = allocate(round_page(size));
+    const int skip_intro_requested = aln_skip_intro(settings_file);
+    const size_t hook_bytes = known_build && skip_intro_requested ? round_page(skip_intro_stub_bytes()) : 0;
+    /* The hook stubs follow the image, within a jump of it. */
+    image = allocate(round_page(size) + hook_bytes);
     if (fread(image, 1, size, f) != size || fgetc(f) != EOF) fail("incorrect memory image size");
     fclose(f);
     printf("Loader: image %" PRIu64 " bytes, entry 0x%" PRIx64 ", %" PRIu64 " segments, %" PRIu64 " relocations, %" PRIu64
@@ -869,6 +872,10 @@ int main(int argc, char **argv) {
         }
         printf("Frame rate: the game's engine_set_fps script calls are ignored; the engine's startup target stays 59.94\n");
     }
+    if (skip_intro_requested) {
+        if (known_build) skip_intro_install(image,size,build_key,image+round_page(size),hook_bytes);
+        else puts("Skip Intro: requested but unavailable for an unknown game build: not a supported build");
+    }
     printf("Display: render resolution %dx%d (%s), aspect ratio %s\n",render_target.width,render_target.height,
            render_resolution->key,aspect_ratio->name);
     const AlnRunSettings run_settings={known_build ? game_build.label : NULL,render_target.width,render_target.height,
@@ -879,6 +886,7 @@ int main(int argc, char **argv) {
     printf("Guest TCB loads redirected to the TEB TLS slot: %" PRIu64 "\n", patch_tcb_loads(segments, ns));
 #endif
     protect(traps, round_page((import_count + 1) * 32), 5);
+    if (hook_bytes) protect(image + round_page(size), hook_bytes, 5);
     protect(image, round_page(size), 0);
     int executable_entry = 0;
     for (uint64_t i = 0; i < ns; ++i) {

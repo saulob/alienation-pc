@@ -25,13 +25,6 @@ struct PackageLayer {
     bool update;
 };
 
-// A console language the game can be told at start (SCE system language id). The game keeps its own language option.
-struct TextLanguage {
-    std::string_view key;
-    std::string_view name;
-    int ps4_id;
-};
-
 struct GameBuild {
     const char* title_id;
     const char* content_id;
@@ -43,7 +36,6 @@ struct GameBuild {
     const char* region;           // from the content id's publisher prefix
     std::span<const PackageLayer> layers; // base package first; the last layer is the finished game
     std::span<const AlnResolutionSite> resolution_sites; // empty until verified in this build's executable
-    std::span<const TextLanguage> text_languages;        // the first is the default
     const AlnFrameRatePatch* frame_rate;                 // the verified engine_set_fps binding
 };
 
@@ -62,14 +54,6 @@ const GameBuild* BaseBuildOf(const GameBuild& build, std::span<const GameBuild> 
 // True when the build's executable has no verified render resolution sites: it then runs only at its native size.
 // The launcher hides and the loader refuses the custom Render resolution and Aspect Ratio for such a build.
 bool RestrictedToNativeResolution(const GameBuild* build);
-
-// The languages offered for the build; English alone when the build is not known.
-std::span<const TextLanguage> TextLanguagesOf(const GameBuild* build);
-
-// The language of a saved key among `languages` (not empty); the first when the key is not one of them.
-const TextLanguage& ResolveTextLanguage(std::span<const TextLanguage> languages, std::string_view key);
-// The build's language for a saved key; the build's default when the key is not one of its languages.
-const TextLanguage& ResolveTextLanguage(const GameBuild* build, std::string_view key);
 
 std::string SupportedBuildsText();
 

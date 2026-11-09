@@ -73,7 +73,7 @@ constexpr const char* PageNote(Page page) {
     case Page::Graphics:
         return "Renderer, render resolution and texture filtering apply after a restart.";
     case Page::Gameplay:
-        return "Language is launcher-only.";
+        return "";
     case Page::Controls:
         return "Keyboard bindings and port hotkeys are launcher-only.";
     }
@@ -143,6 +143,7 @@ enum class Id {
     FrameRateInTitle,
     ResolutionInTitle,
     FrameCounter,
+    SkipIntro,
 };
 
 struct Setting {
@@ -190,6 +191,8 @@ inline constexpr Setting kSettings[] = {
     {Id::FrameCounter, Page::Gameplay, "show_fps", "Frame counter",
      "Shows the frame rate and frame time in a corner of the game. F2 also switches it for this session.",
      Apply::Live, kHiddenShown},
+    {Id::SkipIntro, Page::Gameplay, "skip_intro", "Skip Intro",
+     "Skip startup videos and go directly to the title screen.", Apply::Restart, kOffOn},
 };
 
 constexpr const Setting& SettingOf(Id id) {
@@ -237,6 +240,7 @@ inline std::string Current(const AlnSettings::Values& v, Id id) {
     case Id::FrameRateInTitle: return flag(v.show_fps_title);
     case Id::ResolutionInTitle: return flag(v.show_resolution_title);
     case Id::FrameCounter: return flag(v.show_fps);
+    case Id::SkipIntro: return flag(v.skip_intro);
     }
     return {};
 }
@@ -263,7 +267,8 @@ inline void ApplyLive(AlnSettings::Values& v, Id id, std::string_view value) {
     case Id::AspectRatio:
     case Id::Renderer:
     case Id::RenderResolution:
-    case Id::TextureFiltering: break;
+    case Id::TextureFiltering:
+    case Id::SkipIntro: break;
     }
 }
 

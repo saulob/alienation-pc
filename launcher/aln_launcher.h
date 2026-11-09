@@ -64,13 +64,11 @@ int aln_render_resolution(const char *settings_file, const char *image_dir);
  * from: 0 (16:9 Original) when the file or the value is missing or the build has no verified render resolution sites. */
 int aln_aspect_ratio(const char *settings_file, const char *image_dir);
 
-/* The system language the game is told for the text_language in the settings file, among the languages the prepared
- * game folder app0 holds of the build image_dir was built from: the first of them (English when the build is unknown)
- * when the file or the value is missing or not one of them. */
-int aln_text_language(const char *settings_file, const char *image_dir, const char *app0);
-
 /* 1 when the settings file keeps the logs of normal sessions (detailed_logging; 1 by default). */
 int aln_detailed_logging(const char *settings_file);
+
+/* 1 when the settings file skips the intro video (skip_intro; 0 by default). */
+int aln_skip_intro(const char *settings_file);
 
 /* What the loader decided for this run: the parts of the "Settings:" log lines the settings file alone does not say. */
 typedef struct AlnRunSettings {

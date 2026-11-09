@@ -18,28 +18,6 @@ constexpr const char* kAsia100DataFiles[] = {
     "video/splash.mp4", "video/splash_SIE.mp4", "video/title.mp4",
 };
 
-// The executable's own localizations, by the SCE system language ids that name them. English first, then by name.
-constexpr TextLanguage kAlienationLanguages[] = {
-    {"english", "English", 1},
-    {"chinese_traditional", "Chinese (Traditional)", 10},
-    {"danish", "Danish", 14},
-    {"dutch", "Dutch", 6},
-    {"finnish", "Finnish", 12},
-    {"french", "French", 2},
-    {"german", "German", 4},
-    {"italian", "Italian", 5},
-    {"japanese", "Japanese", 0},
-    {"korean", "Korean", 9},
-    {"norwegian", "Norwegian", 15},
-    {"polish", "Polish", 16},
-    {"portuguese_brazil", "Portuguese (Brazil)", 17},
-    {"portuguese", "Portuguese (Portugal)", 7},
-    {"russian", "Russian", 8},
-    {"spanish_latin_america", "Spanish (Latin America)", 20},
-    {"spanish", "Spanish (Spain)", 3},
-    {"swedish", "Swedish", 13},
-};
-
 // The display configuration's default size: mov dword [rdi+0x34], 1080 and mov dword [rdi+0x30], 1920. The engine sizes
 // its frontbuffers and every render script's RENDER_RESOLUTION_X/Y from it.
 // The game's startup functions (two identical copies, the same offsets in both builds) set the size of the GPU heap that
@@ -73,7 +51,6 @@ constexpr GameBuild kGameBuilds[] = {
         "Europe",
         kBase100Layers,
         kEurope100ResolutionSites,
-        kAlienationLanguages,
         &kEurope100FrameRate,
     },
     {
@@ -87,7 +64,6 @@ constexpr GameBuild kGameBuilds[] = {
         "Asia",
         kBase100Layers,
         kAsia100ResolutionSites,
-        kAlienationLanguages,
         &kAsia100FrameRate,
     },
 };
@@ -134,25 +110,8 @@ const GameBuild* BaseBuildOf(const GameBuild& build, std::span<const GameBuild> 
     return nullptr;
 }
 
-std::span<const TextLanguage> TextLanguagesOf(const GameBuild* build) {
-    return build ? build->text_languages : std::span<const TextLanguage>(kAlienationLanguages, 1);
-}
-
 bool RestrictedToNativeResolution(const GameBuild* build) {
     return build && build->resolution_sites.empty();
-}
-
-const TextLanguage& ResolveTextLanguage(std::span<const TextLanguage> languages, std::string_view key) {
-    for (const TextLanguage& language : languages) {
-        if (language.key == key) {
-            return language;
-        }
-    }
-    return languages.front();
-}
-
-const TextLanguage& ResolveTextLanguage(const GameBuild* build, std::string_view key) {
-    return ResolveTextLanguage(TextLanguagesOf(build), key);
 }
 
 std::string SupportedBuildsText() {
