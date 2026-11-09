@@ -430,6 +430,10 @@ private:
     std::unordered_set<ImageId> download_images;
     u64 total_used_memory = 0;
     u64 gc_evictions = 0, gc_downloads = 0; ///< aln: pressure report
+    u64 gc_expansions = 0, gc_expanded_bytes = 0;
+    /// Device bytes of deleted images whose destruction is still deferred; the driver's usage
+    /// figure still contains them.
+    std::atomic<u64> pending_release_bytes{0};
     std::chrono::steady_clock::time_point gc_report_time{};
     u64 trigger_gc_memory = 0;
     u64 pressure_gc_memory = 0;

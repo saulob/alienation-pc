@@ -15,8 +15,14 @@ public:
         return v && v[0] == '1';
     }
     s32 GetGpuId() { return -1; }
-    u32 GetInternalScreenWidth() { return 1920; }
-    u32 GetInternalScreenHeight() { return 1080; }
+    u32 GetInternalScreenWidth() { return internal_width; }
+    u32 GetInternalScreenHeight() { return internal_height; }
+    void SetInternalScreenSize(u32 width, u32 height) {
+        if (width != 0 && height != 0) {
+            internal_width = width;
+            internal_height = height;
+        }
+    }
     u32 GetReadbacksMode() { return GpuReadbacksMode::Relaxed; }
     u32 GetVblankFrequency() { return 60; }
     u32 GetFrameLimit() { return 0; }
@@ -40,5 +46,8 @@ public:
     bool IsVkValidationEnabled() { static const bool value = Flag("ALN_VK_VALIDATION"); return value; }
     bool IsVkValidationGpuEnabled() { return false; }
     bool IsVkValidationSyncEnabled() { static const bool value = Flag("ALN_VK_VALIDATION_SYNC"); return value; }
+
+private:
+    u32 internal_width = 1920, internal_height = 1080;
 };
 #define EmulatorSettings (*EmulatorSettingsImpl::GetInstance())

@@ -841,6 +841,8 @@ ImageId TextureCache::ExpandImage(const ImageInfo& info, ImageId image_id) {
 
     RefreshImage(new_image);
     runtime.CopyImage(&src_image, &new_image);
+    ++gc_expansions;
+    gc_expanded_bytes += src_image.HostBytes();
 
     if (src_image.binding.is_bound || src_image.binding.is_target) {
         src_image.binding.needs_rebind = 1u;
@@ -1397,8 +1399,9 @@ void TextureCache::UntrackImageTail(ImageId image_id) {
 
 void TextureCache::GarbageCollectImages() {
     AlnStats::Timer gc_timer{AlnStats::t_gc};
+    u64 driver_usage = 0;
     if (instance.CanReportMemoryUsage()) {
-        total_used_memory = instance.GetDeviceMemoryUsage();
+        total_used_memory = driver_usage = instance.GetDeviceMemoryUsage();
         // aln: on integrated GPUs the usage covers system-memory heaps holding much more than
         // images (buffers backing guest memory): against the startup budget it stayed above the
         // critical mark and recent images were evicted on every submission. The driver's current
@@ -1420,6 +1423,7 @@ void TextureCache::GarbageCollectImages() {
     bool aggresive = false;
     u64 ticks_to_destroy = 0;
     size_t num_deletions = 0;
+    const u64 usage_before = total_used_memory;
 
     const auto configure = [&](bool allow_aggressive) {
         pressured = total_used_memory >= pressure_gc_memory;
@@ -1481,14 +1485,28 @@ void TextureCache::GarbageCollectImages() {
     if (pressured || gc_downloads != 0) {
         const auto now = std::chrono::steady_clock::now();
         if (now - gc_report_time >= std::chrono::seconds(5)) {
+            u64 cache_images = 0, cache_bytes = 0;
+            for (const Image& image : slot_images) {
+                ++cache_images;
+                cache_bytes += image.HostBytes();
+            }
             std::printf("Texture cache: memory pressure, %llu of %llu MiB (critical %llu): "
                         "%llu images evicted, %llu written back since the last report\n",
-                        (unsigned long long)(total_used_memory >> 20),
+                        (unsigned long long)(usage_before >> 20),
                         (unsigned long long)(pressure_gc_memory >> 20),
                         (unsigned long long)(critical_gc_memory >> 20),
                         (unsigned long long)gc_evictions, (unsigned long long)gc_downloads);
+            std::printf("Texture cache: driver usage %llu MiB, device images %llu MiB (cache %llu "
+                        "images, %llu MiB, %llu MiB awaiting release), %llu expansions copied "
+                        "%llu MiB\n",
+                        (unsigned long long)(driver_usage >> 20),
+                        (unsigned long long)(device_image_bytes.load() >> 20),
+                        (unsigned long long)cache_images, (unsigned long long)(cache_bytes >> 20),
+                        (unsigned long long)(pending_release_bytes.load() >> 20),
+                        (unsigned long long)gc_expansions,
+                        (unsigned long long)(gc_expanded_bytes >> 20));
             gc_report_time = now;
-            gc_evictions = gc_downloads = 0;
+            gc_evictions = gc_downloads = gc_expansions = gc_expanded_bytes = 0;
         }
     }
 }
@@ -1597,7 +1615,9 @@ void TextureCache::DeleteImage(ImageId image_id) {
     }
 
     // Reclaim image and any image views it references.
-    scheduler.DeferOperation([this, image_id] {
+    const u64 release_bytes = image.HostBytes();
+    pending_release_bytes.fetch_add(release_bytes, std::memory_order_relaxed);
+    scheduler.DeferOperation([this, image_id, release_bytes] {
         Image& image = slot_images[image_id];
         for (auto& backing : image.backing_images) {
             for (const ImageViewId image_view_id : backing.image_view_ids) {
@@ -1605,6 +1625,7 @@ void TextureCache::DeleteImage(ImageId image_id) {
             }
         }
         slot_images.erase(image_id);
+        pending_release_bytes.fetch_sub(release_bytes, std::memory_order_relaxed);
     });
 }
 

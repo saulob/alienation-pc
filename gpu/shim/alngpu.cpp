@@ -24,6 +24,7 @@
 #include "aln_write_log.h"
 #include "alngpu.h"
 #include "common/elf_info.h"
+#include "core/emulator_settings.h"
 #include "common/logging/log.h"
 #include "common/path_util.h"
 #include "common/rdtsc.h"
@@ -256,6 +257,8 @@ extern "C" int alngpu_init(const AlnGpuConfig* config) {
     Core::Loader::SymbolsResolver resolver;
     // GnmDriver creates the presenter that the VideoOut present thread uses.
     Libraries::GnmDriver::RegisterLib(&resolver);
+    // The engine derives its screen aspect from the display size VideoOut reports.
+    EmulatorSettings.SetInternalScreenSize(u32(config->render_width), u32(config->render_height));
     Libraries::VideoOut::RegisterLib(&resolver);
     Libraries::AvPlayer::RegisterLib(&resolver);
     return 0;

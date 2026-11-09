@@ -763,7 +763,8 @@ int main(int argc, char **argv) {
         if (procparam) memcpy(&sdk,image+procparam+16,8); /* procparam: size, magic, count, sdk_version */
         uint32_t features=0;
         if (known_build && game_build.resolution_site_count) features|=ALN_GPU_FEATURE_RENDER_RESOLUTION;
-        AlnGpuConfig gpu={title,serial,user_dir,settings_file,(uint32_t)sdk,attributes,1920,1080,features};
+        AlnGpuConfig gpu={title,serial,user_dir,settings_file,(uint32_t)sdk,attributes,1920,1080,features,
+                          render_target.width,render_target.height};
         aln_startup_phase("graphics initialization");
         gpu_enabled=1; /* page tracking starts while the rasterizer registers guest memory */
         if (alngpu_init(&gpu)) fail("GPU initialization failed");

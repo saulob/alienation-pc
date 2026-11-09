@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2025 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <atomic>
 #include <boost/container/small_vector.hpp>
 #include "aln_toggles.h"
 #include "common/gpu_trace.h"
@@ -34,9 +35,14 @@ static vk::ImageType ConvertImageType(AmdGpu::ImageType type) noexcept {
     }
 }
 
-static std::pair<u32, u32> SanitizeCopyLayers(const VideoCore::ImageInfo& src_info,
-                                              const VideoCore::ImageInfo& dst_info,
-                                              const u32 depth) {
+enum class CopyKind { Image, Mip, Resolve };
+
+// Layers to copy so that neither image is accessed past its last layer. A destination with more
+// layers than the source is an image growing (the new layers come from guest memory); a source
+// with more layers than the destination drops data and is reported.
+static std::pair<u32, u32> SanitizeCopyLayers(CopyKind kind, const VideoCore::ImageInfo& src_info,
+                                              const VideoCore::ImageInfo& dst_info, const u32 depth,
+                                              const u32 src_base = 0, const u32 dst_base = 0) {
     const auto vk_src_type = ConvertImageType(src_info.type);
     const auto vk_dst_type = ConvertImageType(dst_info.type);
 
@@ -53,16 +59,24 @@ static std::pair<u32, u32> SanitizeCopyLayers(const VideoCore::ImageInfo& src_in
         dst_layers = 1;
     }
 
-    // If the image type is equal, layer count must match. Take the minimum of both.
     if (vk_src_type == vk_dst_type) {
-        if (src_layers != dst_layers) {
-            LOG_WARNING(Render_Vulkan,
-                        "Coercing copy source layers {} and destination layers {} to minimum.",
-                        src_layers, dst_layers);
+        const u32 src_free = src_layers > src_base ? src_layers - src_base : 0;
+        const u32 dst_free = dst_layers > dst_base ? dst_layers - dst_base : 0;
+        if (src_free != dst_free) {
+            static std::atomic<u32> dropped{0};
             Common::GpuTrace::Record(Common::GpuTrace::Event::CopyLayersCoerced, src_layers,
                                      dst_layers);
-            src_layers = dst_layers = std::min(src_layers, dst_layers);
+            const u32 n = src_free > dst_free ? dropped.fetch_add(1, std::memory_order_relaxed) : 0;
+            if (src_free > dst_free && (n < 16 || n % 512 == 0)) {
+                LOG_WARNING(Render_Vulkan,
+                            "Copy kind {} drops source layers: {}+{} of {} layers to {}+{} of {} "
+                            "layers, {}x{}, {} mips to {} mips (event {})",
+                            static_cast<u32>(kind), src_base, src_free, src_layers, dst_base,
+                            dst_free, dst_layers, src_info.size.width, src_info.size.height,
+                            src_info.resources.levels, dst_info.resources.levels, n);
+            }
         }
+        src_layers = dst_layers = std::min(src_free, dst_free);
     } else {
         // For 2D <-> 3D copies, 2D layer count must equal 3D depth.
         if (vk_src_type == vk::ImageType::e2D && vk_dst_type == vk::ImageType::e3D &&
@@ -329,8 +343,8 @@ void Runtime::CopyImage(VideoCore::Image* src, VideoCore::Image* dst) {
                   vk::to_string(src->info.pixel_format), vk::to_string(dst->info.pixel_format));
     }
 
-    const u32 base_width = src->info.size.width;
-    const u32 base_height = src->info.size.height;
+    const u32 base_width = std::min(src->info.size.width, dst->info.size.width);
+    const u32 base_height = std::min(src->info.size.height, dst->info.size.height);
     const u32 base_depth =
         dst->info.type == AmdGpu::ImageType::Color3D ? dst->info.size.depth : src->info.size.depth;
 
@@ -358,7 +372,11 @@ void Runtime::CopyImage(VideoCore::Image* src, VideoCore::Image* dst) {
         const u32 mip_h = std::max(base_height >> mip, 1u);
         const u32 mip_d = std::max(base_depth >> mip, 1u);
 
-        const auto [src_layers, dst_layers] = SanitizeCopyLayers(src->info, dst->info, mip_d);
+        const auto [src_layers, dst_layers] =
+            SanitizeCopyLayers(CopyKind::Image, src->info, dst->info, mip_d);
+        if (src_layers == 0 || dst_layers == 0) {
+            continue;
+        }
 
         vk::ImageCopy region{};
         region.srcSubresource.aspectMask = src_aspect;
@@ -395,6 +413,10 @@ void Runtime::CopyImage(VideoCore::Image* src, VideoCore::Image* dst) {
         }
 
         regions.push_back(region);
+    }
+
+    if (regions.empty()) {
+        return;
     }
 
     scheduler.EndRendering();
@@ -492,7 +514,10 @@ void Runtime::CopyMip(VideoCore::Image* src, VideoCore::Image* dst, u32 mip, u32
     ASSERT(mip_block_p == (src->info.pitch >> src_dim));
 
     const auto [src_layers, dst_layers] =
-        SanitizeCopyLayers(src->info, dst->info, src->info.size.depth);
+        SanitizeCopyLayers(CopyKind::Mip, src->info, dst->info, src->info.size.depth, 0, slice);
+    if (src_layers == 0 || dst_layers == 0) {
+        return;
+    }
 
     const vk::ImageCopy image_copy{
         .srcSubresource{
@@ -583,20 +608,29 @@ void Runtime::CopyDepthStencil(VideoCore::Image* src, VideoCore::Image* dst,
     }
 
     const auto aspect_mask = src->aspect_mask & dst->aspect_mask;
+    const u32 base_layer = sub_range.base.layer;
+    const u32 layers = std::min({sub_range.extent.layers,
+                                 src->info.resources.layers > base_layer
+                                     ? src->info.resources.layers - base_layer : 0u,
+                                 dst->info.resources.layers > base_layer
+                                     ? dst->info.resources.layers - base_layer : 0u});
+    if (layers == 0) {
+        return;
+    }
 
     const vk::ImageCopy region = {
         .srcSubresource{
             .aspectMask = aspect_mask,
             .mipLevel = 0,
-            .baseArrayLayer = sub_range.base.layer,
-            .layerCount = sub_range.extent.layers,
+            .baseArrayLayer = base_layer,
+            .layerCount = layers,
         },
         .srcOffset = {0, 0, 0},
         .dstSubresource{
             .aspectMask = aspect_mask,
             .mipLevel = 0,
-            .baseArrayLayer = sub_range.base.layer,
-            .layerCount = sub_range.extent.layers,
+            .baseArrayLayer = base_layer,
+            .layerCount = layers,
         },
         .dstOffset = {0, 0, 0},
         .extent = {dst->info.size.width, dst->info.size.height, 1},
@@ -630,7 +664,14 @@ void Runtime::ResolveImage(VideoCore::Image* src, VideoCore::Image* dst,
         FlushBarriers();
     }
 
-    const auto [src_layers, dst_layers] = SanitizeCopyLayers(src->info, dst->info, 1);
+    auto [src_layers, dst_layers] =
+        SanitizeCopyLayers(CopyKind::Resolve, src->info, dst->info, 1, src_range.base.layer,
+                           dst_range.base.layer);
+    src_layers = dst_layers = std::min({src_layers, dst_layers, src_range.extent.layers,
+                                        dst_range.extent.layers});
+    if (src_layers == 0) {
+        return;
+    }
     if (!needs_resolve) {
         const vk::ImageCopy region = {
             .srcSubresource{
@@ -730,6 +771,7 @@ void Runtime::SetBackingSamples(VideoCore::Image* image, u32 num_samples, bool c
         new_backing->num_samples = num_samples;
         new_backing->image = VideoCore::UniqueImage{instance.GetDevice(), instance.GetAllocator()};
         new_backing->image.Create(new_image_ci);
+        image->host_bytes += new_backing->image.size_bytes;
 
         Vulkan::SetObjectName(instance.GetDevice(), new_backing->image.image,
                               "Image {}x{}x{} {} {} {:#x}:{:#x} L:{} M:{} S:{} (backing)",

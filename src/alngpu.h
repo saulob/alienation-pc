@@ -14,6 +14,7 @@ typedef struct {
     uint32_t psf_attributes;    /* param.sfo ATTRIBUTE */
     int32_t width, height;      /* initial window size */
     uint32_t features;          /* ALN_GPU_FEATURE_*: what the game build supports (the Options menu shows only those) */
+    int32_t render_width, render_height; /* the game's render size: the display sceVideoOutGetResolutionStatus reports */
 } AlnGpuConfig;
 #define ALN_GPU_FEATURE_RENDER_RESOLUTION (1u << 0)
 /* 1 when a video core is linked in, 0 for the stub. */
