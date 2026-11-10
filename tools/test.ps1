@@ -3,7 +3,8 @@
 Builds and runs the focused headless tests. No game, launcher or window starts.
 
 .DESCRIPTION
-The tests are not part of the default build; tools\build.ps1 must have configured build\cmake\clang64 first. Every test
+The tests are not part of the default build; tools\build.ps1 must have configured build\cmake\clang64 first. The script tests in
+tests\*.ps1 and tests\*.py are static and need no build; the build log checks use stand-in commands only. Every test
 runs even after one fails; the exit code is non-zero when any of them failed.
 #>
 [CmdletBinding()]
@@ -67,6 +68,13 @@ else {
     if ($LASTEXITCODE -ne 0) { $failed.Add("game_profile_tests.py (exit code $LASTEXITCODE)") }
     & $python.Exe @($python.Args) '-I' (Join-Path $script:RepoRoot 'tests\patch_site_tests.py')
     if ($LASTEXITCODE -ne 0) { $failed.Add("patch_site_tests.py (exit code $LASTEXITCODE)") }
+}
+
+Write-Step 'script tests (build script and log contract, ANGLE dependency; no build, no network)'
+$hostExe = (Get-Process -Id $PID).Path
+foreach ($scriptTest in 'build_script_tests.ps1', 'build_log_tests.ps1', 'angle_dependency_tests.ps1') {
+    & $hostExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $script:RepoRoot "tests\$scriptTest")
+    if ($LASTEXITCODE -ne 0) { $failed.Add("$scriptTest (exit code $LASTEXITCODE)") }
 }
 
 if ($failed.Count) {

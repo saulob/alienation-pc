@@ -7,6 +7,8 @@
   installed build (build\image\<TITLE_ID>-<version>). Every DLL the game loads ends up beside it. The one build configuration,
   RelWithDebInfo (-O2 -g -DNDEBUG), is what is tested and what a package must contain; nothing else is built.
   The game is installed from the launcher (Play page, Install game...), as in a release.
+  Every run writes one new log, build\logs\build\alienation_NNN.log (never overwritten, kept when the build fails); the
+  game's own run logs stay in build\logs.
 .PARAMETER Run
   Launches the loader that was just built and stays attached until the game is closed. The launcher opens first
   when its rules say so (docs\LAUNCHER.md). Logs to build\logs\alienation_NNN.log.
@@ -81,6 +83,9 @@ function Test-ImageCurrent([string]$View, [string]$Image) {
         (Get-Item -LiteralPath $content).Length -eq 28
 }
 
+$buildMode = if ($Clean) { 'complete (-Clean)' } else { 'incremental' }
+$null = Start-BuildLog $buildMode $config
+try {
 $tc = Resolve-Toolchain 'auto'
 $env:PATH = "$($tc.Bin);$env:PATH"
 Write-Step "Toolchain clang64 ($($tc.Bin)), $config"
@@ -97,11 +102,12 @@ $configured = (Test-Path -LiteralPath (Join-Path $buildDir 'build.ninja')) -and 
     (Select-String -Path $cache -SimpleMatch "CMAKE_BUILD_TYPE:STRING=$config" -Quiet)
 if (-not $configured) {
     Write-Step 'Configuring'
-    & cmake -S $root -B $buildDir -G Ninja "-DCMAKE_BUILD_TYPE=$config" '-DCMAKE_C_COMPILER=clang'
+    Invoke-Native cmake @('-S', $root, '-B', $buildDir, '-G', 'Ninja', "-DCMAKE_BUILD_TYPE=$config", '-DCMAKE_C_COMPILER=clang')
     if ($LASTEXITCODE -ne 0) { Stop-Tool 'CMake configuration failed' }
 }
+else { Write-Ok 'CMake configuration reused' }
 Write-Step 'Building'
-& ninja -C $buildDir alienation trg-updater
+Invoke-Native ninja @('-C', $buildDir, 'alienation', 'trg-updater')
 if ($LASTEXITCODE -ne 0) { Stop-Tool 'Build failed' }
 if (-not (Test-Path -LiteralPath $loader)) { Stop-Tool "Missing $loader" }
 Install-GameRuntime $loader $angleRuntime $tc.Bin
@@ -116,11 +122,20 @@ foreach ($folder in $installed) {
     if (Test-ImageCurrent $view $image) { continue }
     Write-Step "Updating the boot image of $folder"
     # The call operator waits for a Windows-subsystem program only when its output is piped.
-    & $loader --prepare-image $view $image | Out-Host
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    & $loader --prepare-image $view $image 2>&1 | Out-BuildLog
+    $ErrorActionPreference = $previousPreference
     if ($LASTEXITCODE -ne 0) { Stop-Tool "Boot image build failed for $folder" }
 }
 Write-Host ''
 Write-Host "Built $loader" -ForegroundColor Green
+Write-BuildLogLine "Built $loader"
+}
+catch {
+    Stop-Tool $_.Exception.Message
+}
+Close-BuildLog 0
 if (-not $Run) { return }
 
 $running = @(Get-Process alienation -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $loader })

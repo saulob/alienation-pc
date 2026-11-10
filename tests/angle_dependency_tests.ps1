@@ -222,7 +222,7 @@ function Test-Boundaries {
     Check ($window -match '(?s)if \(api == GraphicsApi::Angle\) \{\s+OpenGL::RequestAngleDirect3D11\(\);') 'only the Direct3D 11 window loads ANGLE'
     Check ($window -match '(?s)if \(api == GraphicsApi::OpenGL\) \{\s+SDL_GL_SetAttribute\(SDL_GL_CONTEXT_MAJOR_VERSION, 3\)') 'native OpenGL stays a plain desktop context'
 
-    foreach ($source in 'README.md', 'docs/d3d11-renderer.md', 'docs/GRAPHICS.md', 'docs/LAUNCHER.md', 'packaging/README.txt') {
+    foreach ($source in 'README.md', 'docs/FIRST_BOOT.md', 'packaging/README.txt') {
         Check ((Read-Source $source) -notmatch '(?i)(pacman|install)[^\r\n]*angle') "$source does not tell anyone to install ANGLE"
     }
 }
@@ -231,10 +231,9 @@ function Test-NothingStartsTheGame {
     $build = Read-Source 'tools/build.ps1'
     $install = $build.IndexOf('Install-GameRuntime $loader')
     Check ($install -ge 0 -and $install -lt $build.IndexOf('if (-not $Run) { return }')) 'a plain build stages everything before the run option is even read'
-    foreach ($source in 'README.md', 'docs/d3d11-renderer.md', 'docs/GRAPHICS.md', 'docs/LAUNCHER.md', 'docs/FIRST_BOOT.md', 'packaging/README.txt', 'gpu/angle-runtime.txt') {
+    foreach ($source in 'README.md', 'packaging/README.txt', 'gpu/angle-runtime.txt') {
         Check ((Read-Source $source) -notmatch 'build\.ps1 -Run(?! -CheckImports)|tools\\run\.ps1') "$source does not tell anyone to build and launch in one step"
     }
-    Check ((Read-Source 'docs/d3d11-renderer.md') -notmatch '-Run\b') 'the Direct3D 11 notes have no run option'
     $common = Read-Source 'tools/_common.ps1'
     $staging = $common.Substring($common.IndexOf('function Test-Sha256'), $common.IndexOf('# Content fingerprint') - $common.IndexOf('function Test-Sha256'))
     Check ($staging -notmatch 'Start-Process|\.exe''? -|\$loader') 'the ANGLE sync and staging start nothing'

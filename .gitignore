@@ -45,3 +45,10 @@ eboot.bin
 /gpu/third_party/magic_enum/
 /gpu/third_party/miniz/
 /gpu/third_party/xbyak/
+
+# Local AI tooling (Claude Code, OpenCode), never tracked
+/CLAUDE.md
+/CLAUDE.local.md
+/.claude/
+/AGENTS.md
+/.opencode/

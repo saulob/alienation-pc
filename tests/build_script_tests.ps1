@@ -56,6 +56,44 @@ if ($sync.Count -ne 1 -or $ninja.Count -eq 0 -or $sync[0].Extent.StartOffset -gt
     $failures++
 }
 
+$buildCommands = @($ast.FindAll({ param($node) $node -is [Management.Automation.Language.CommandAst] }, $true))
+$names = @($buildCommands | ForEach-Object { $_.GetCommandName() })
+$startLog = @($buildCommands | Where-Object { $_.GetCommandName() -eq 'Start-BuildLog' })
+$syncBuild = @($buildCommands | Where-Object { $_.GetCommandName() -eq 'Sync-GpuDependencies' })
+if ($startLog.Count -ne 1 -or $syncBuild.Count -ne 1 -or $startLog[0].Extent.StartOffset -gt $syncBuild[0].Extent.StartOffset) {
+    Write-Host 'FAIL: build.ps1 must start its build log once, before anything else is fetched or built'
+    $failures++
+}
+if ($names -contains 'cmake' -or $names -contains 'ninja') {
+    Write-Host 'FAIL: build.ps1 runs cmake or ninja directly; their output and exit code must go through Invoke-Native'
+    $failures++
+}
+$native = @($buildCommands | Where-Object { $_.GetCommandName() -eq 'Invoke-Native' })
+if (@($native | Where-Object { $_.Extent.Text -match '^Invoke-Native cmake ' }).Count -ne 1 -or
+    @($native | Where-Object { $_.Extent.Text -match '^Invoke-Native ninja ' }).Count -ne 1) {
+    Write-Host 'FAIL: build.ps1 must run cmake and ninja once each through Invoke-Native'
+    $failures++
+}
+$buildText = Get-Content -LiteralPath $script -Raw
+if ($buildText -notmatch 'Close-BuildLog 0' -or $buildText -match '(?i)Remove-Item[^\r\n]*logs') {
+    Write-Host 'FAIL: build.ps1 must close its log with the result and must never delete logs'
+    $failures++
+}
+if ($buildText -notmatch '\$Clean -and') {
+    Write-Host 'FAIL: build.ps1 may clean only when asked with -Clean'
+    $failures++
+}
+$common = Get-Content -LiteralPath (Join-Path (Resolve-Path (Join-Path $PSScriptRoot '..')).Path 'tools\_common.ps1') -Raw
+if ($common -match '(?m)^\s*&\s+git\b') {
+    Write-Host 'FAIL: _common.ps1 runs git outside Invoke-Native, so its output would miss the build log'
+    $failures++
+}
+$cleanText = Get-Content -LiteralPath (Join-Path (Resolve-Path (Join-Path $PSScriptRoot '..')).Path 'tools\clean.ps1') -Raw
+if ($cleanText -notmatch "(?i)'logs'") {
+    Write-Host 'FAIL: clean.ps1 must keep build\logs, or numbered logs would be reused'
+    $failures++
+}
+
 if ($failures -gt 0) {
     exit 1
 }

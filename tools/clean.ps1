@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Removes generated build output. Never touches the .pkg in game\, game\extracted or saves.
+  Removes generated build output except build\logs. Never touches the .pkg in game\, game\extracted or saves.
 .PARAMETER Prepared
   Also removes the layered game views in game\prepared (hard-link names only; the extracted data stays).
 .PARAMETER Logs
@@ -25,7 +25,11 @@ function Remove-Generated([string]$Path) {
 }
 
 Write-Step 'Cleaning build output'
-Remove-Generated (Join-Path $script:RepoRoot 'build')
+# build\logs keeps every build and run log: a number is never reused.
+$buildDir = Join-Path $script:RepoRoot 'build'
+if (Test-Path -LiteralPath $buildDir) {
+    foreach ($item in @(Get-ChildItem -LiteralPath $buildDir -Force | Where-Object { $_.Name -ne 'logs' })) { Remove-Generated $item.FullName }
+}
 Remove-Generated (Join-Path $script:RepoRoot 'dist')
 
 if ($Prepared) {

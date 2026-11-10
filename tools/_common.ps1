@@ -4,14 +4,102 @@ $ErrorActionPreference = 'Stop'
 
 $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 
-function Write-Step([string]$Text) { Write-Host "==> $Text" -ForegroundColor Cyan }
-function Write-Ok([string]$Text)   { Write-Host "  [ok]   $Text" -ForegroundColor Green }
-function Write-Warn([string]$Text) { Write-Host "  [warn] $Text" -ForegroundColor Yellow }
-function Write-Bad([string]$Text)  { Write-Host "  [miss] $Text" -ForegroundColor Red }
+$script:BuildLog = $null
+
+function Write-Step([string]$Text) { Write-Host "==> $Text" -ForegroundColor Cyan; Write-BuildLogLine "==> $Text" }
+function Write-Ok([string]$Text)   { Write-Host "  [ok]   $Text" -ForegroundColor Green; Write-BuildLogLine "  [ok]   $Text" }
+function Write-Warn([string]$Text) { Write-Host "  [warn] $Text" -ForegroundColor Yellow; Write-BuildLogLine "  [warn] $Text" }
+function Write-Bad([string]$Text)  { Write-Host "  [miss] $Text" -ForegroundColor Red; Write-BuildLogLine "  [miss] $Text" }
 
 function Stop-Tool([string]$Text) {
     Write-Host "error: $Text" -ForegroundColor Red
+    Write-BuildLogLine "error: $Text"
+    Close-BuildLog 1
     exit 1
+}
+
+# Lower-case project name from .recomp.json ("game"), else the repository folder; names the build logs.
+function Get-ProjectName {
+    $name = $null
+    $manifest = Join-Path $script:RepoRoot '.recomp.json'
+    if (Test-Path -LiteralPath $manifest) {
+        try { $name = [string](Get-Content -LiteralPath $manifest -Raw | ConvertFrom-Json).game } catch { $name = $null }
+    }
+    if (-not $name) { $name = Split-Path $script:RepoRoot -Leaf }
+    $slug = ($name.ToLowerInvariant() -replace '[^a-z0-9]+', '_').Trim('_')
+    if ($slug) { return $slug }
+    return 'project'
+}
+
+# Reserves <project>_NNN.log (one more than the highest in the folder) with an exclusive create, so concurrent builds
+# never share a number and an existing log is never opened for writing. Runtime game logs live in build\logs itself.
+function Start-BuildLog([string]$Mode, [string]$Configuration, [string]$Directory = (Join-Path $script:RepoRoot 'build\logs\build'),
+                        [string]$Name = (Get-ProjectName)) {
+    New-Item -ItemType Directory -Force -Path $Directory | Out-Null
+    $pattern = '^' + [regex]::Escape($Name) + '_(\d+)\.log$'
+    $stream = $null
+    for ($attempt = 0; $attempt -lt 1000 -and -not $stream; $attempt++) {
+        $last = 0
+        foreach ($file in [IO.Directory]::GetFiles($Directory)) {
+            if ([IO.Path]::GetFileName($file) -match $pattern) {
+                $number = [int64]$Matches[1]
+                if ($number -gt $last) { $last = $number }
+            }
+        }
+        $path = Join-Path $Directory ('{0}_{1:D3}.log' -f $Name, ($last + 1))
+        try { $stream = New-Object IO.FileStream($path, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read) }
+        catch [IO.IOException] { $stream = $null }
+    }
+    if (-not $stream) { throw "Could not reserve a build log in $Directory" }
+    $writer = New-Object IO.StreamWriter($stream, (New-Object Text.UTF8Encoding($false)))
+    $writer.AutoFlush = $true
+    $script:BuildLog = @{ Path = $path; Writer = $writer; Started = Get-Date; Warnings = 0; Errors = 0 }
+    $writer.WriteLine("Project: $Name")
+    $writer.WriteLine("Started: $($script:BuildLog.Started.ToString('yyyy-MM-dd HH:mm:ss zzz'))")
+    $writer.WriteLine("Configuration: $Configuration")
+    $writer.WriteLine("Mode: $Mode")
+    $writer.WriteLine('')
+    Write-Host "Build log: $path"
+    return $path
+}
+
+function Write-BuildLogLine([string]$Line) {
+    if (-not $script:BuildLog) { return }
+    if ($Line -match '(?i)\bwarning\b:') { $script:BuildLog.Warnings++ }
+    if ($Line -match '(?i)(\berror\b:|^FAILED:)') { $script:BuildLog.Errors++ }
+    $script:BuildLog.Writer.WriteLine($Line)
+}
+
+# Idempotent; the exit code is recorded as given and never changed.
+function Close-BuildLog([int]$ExitCode) {
+    $log = $script:BuildLog
+    if (-not $log) { return }
+    $script:BuildLog = $null
+    $finished = Get-Date
+    $log.Writer.WriteLine('')
+    $log.Writer.WriteLine("Warnings: $($log.Warnings)")
+    $log.Writer.WriteLine("Errors: $($log.Errors)")
+    $log.Writer.WriteLine("Result: $(if ($ExitCode -eq 0) { 'SUCCESS' } else { 'FAILED' })")
+    $log.Writer.WriteLine("Exit code: $ExitCode")
+    $log.Writer.WriteLine("Finished: $($finished.ToString('yyyy-MM-dd HH:mm:ss zzz')) ($([int]($finished - $log.Started).TotalSeconds) s)")
+    $log.Writer.Dispose()
+}
+
+# Console and build log, line by line.
+filter Out-BuildLog {
+    $line = "$_"
+    Write-Host $line
+    Write-BuildLogLine $line
+}
+
+# Runs a native tool with stdout and stderr merged into the console and the build log. The tool's exit code stays in
+# $LASTEXITCODE for the caller; nothing here changes it.
+function Invoke-Native([string]$File, [string[]]$Arguments = @()) {
+    Write-BuildLogLine ("$ $File " + ($Arguments -join ' '))
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { & $File @Arguments 2>&1 | Out-BuildLog }
+    finally { $ErrorActionPreference = $previous }
 }
 
 function Get-VenvPython {
@@ -300,16 +388,16 @@ function Sync-GpuDependencies {
         Write-Step "Fetching $path ($($commit.Substring(0, 7)))"
         if (Test-Path -LiteralPath $dir) { Remove-Item -LiteralPath $dir -Recurse -Force }
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
-        & git -C $dir init --quiet
-        & git -C $dir fetch --quiet --depth 1 $url $commit
+        Invoke-Native git @('-C', $dir, 'init', '--quiet')
+        Invoke-Native git @('-C', $dir, 'fetch', '--quiet', '--depth', '1', $url, $commit)
         if ($LASTEXITCODE -ne 0) { Stop-Tool "git fetch failed for $url" }
-        & git -C $dir -c advice.detachedHead=false checkout --quiet FETCH_HEAD
+        Invoke-Native git @('-C', $dir, '-c', 'advice.detachedHead=false', 'checkout', '--quiet', 'FETCH_HEAD')
         if (Test-Path -LiteralPath (Join-Path $dir '.gitmodules')) {
-            & git -C $dir submodule update --quiet --init --recursive --depth 1
+            Invoke-Native git @('-C', $dir, 'submodule', 'update', '--quiet', '--init', '--recursive', '--depth', '1')
             if ($LASTEXITCODE -ne 0) { Stop-Tool "submodules of $path failed" }
         }
         foreach ($patch in $patches) {
-            & git -C $dir apply $patch.FullName
+            Invoke-Native git @('-C', $dir, 'apply', $patch.FullName)
             if ($LASTEXITCODE -ne 0) { Stop-Tool "patch $($patch.Name) does not apply to $path" }
         }
         [System.IO.File]::WriteAllText($stamp, $expected, [System.Text.Encoding]::ASCII)

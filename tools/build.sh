@@ -8,6 +8,7 @@
 #   tools/build.sh --run [args...]   start the loader that was just built (arguments after --run go to it)
 #
 # Missing tools or libraries are listed; packaging/linux/ci-deps.sh installs them on Ubuntu 20.04 (the release baseline).
+# Every run writes one new log, build/logs/build/alienation_NNN.log (never overwritten, kept when the build fails).
 set -euo pipefail
 root=$(cd -- "$(dirname -- "$0")/.." && pwd)
 build_dir=$root/build/cmake/linux
@@ -29,6 +30,57 @@ step() { printf '\n==> %s\n' "$*"; }
 die() { echo "ERROR: $*" >&2; exit 1; }
 
 [[ $(uname -s) == Linux && $(uname -m) == x86_64 ]] || die 'This script builds for Linux x86_64 only (Windows: tools\build.ps1).'
+
+# BEGIN build log
+log_dir=$root/build/logs/build
+project_name() {
+    local name
+    name=$(sed -n 's/.*"game"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$root/.recomp.json" 2>/dev/null | head -n 1)
+    [[ -n $name ]] || name=$(basename -- "$root")
+    name=$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9][^a-z0-9]*/_/g; s/^_//; s/_$//')
+    printf '%s' "${name:-project}"
+}
+# Reserves <project>_NNN.log with an exclusive create (noclobber), so concurrent builds never share a number.
+reserve_build_log() {
+    local name=$1 last file n attempt
+    mkdir -p -- "$log_dir"
+    for attempt in $(seq 1 1000); do
+        last=0
+        for file in "$log_dir/${name}_"*.log; do
+            [[ -e $file ]] || continue
+            n=${file##*_}
+            n=${n%.log}
+            if [[ $n =~ ^[0-9]+$ ]] && ((10#$n > last)); then last=$((10#$n)); fi
+        done
+        build_log=$(printf '%s/%s_%03d.log' "$log_dir" "$name" $((last + 1)))
+        if (set -o noclobber; : > "$build_log") 2>/dev/null; then return 0; fi
+    done
+    return 1
+}
+build_log_open=0
+close_build_log() { # exit code; idempotent, never changes the exit code
+    local code=$1
+    ((build_log_open)) || return 0
+    build_log_open=0
+    exec 1>&3 2>&4
+    [[ -n ${tee_pid:-} ]] && wait "$tee_pid" 2>/dev/null || true
+    {
+        printf '\nWarnings: %s\n' "$(grep -ciE '(^|[^[:alpha:]])warning:' "$build_log" || true)"
+        printf 'Errors: %s\n' "$(grep -ciE '(^|[^[:alpha:]])error:|^FAILED:' "$build_log" || true)"
+        printf 'Result: %s\nExit code: %d\nFinished: %s\n' "$( ((code == 0)) && echo SUCCESS || echo FAILED)" "$code" "$(date '+%Y-%m-%d %H:%M:%S %z')"
+    } >> "$build_log"
+    echo "Build log: $build_log"
+}
+project=$(project_name)
+reserve_build_log "$project" || die "Could not reserve a build log in $log_dir"
+exec 3>&1 4>&2
+exec > >(tee -a "$build_log") 2>&1
+tee_pid=$!
+build_log_open=1
+trap 'close_build_log $?' EXIT
+printf 'Project: %s\nStarted: %s\nConfiguration: %s\nMode: %s\n\n' "$project" "$(date '+%Y-%m-%d %H:%M:%S %z')" "$config" \
+    "$( ((clean)) && echo 'complete (--clean)' || echo incremental)"
+# END build log
 
 cc=${CC:-clang} cxx=${CXX:-clang++}
 missing=()
@@ -131,5 +183,6 @@ done
     echo 'The game is not installed yet: start the loader and use Install game... on the launcher'\''s Play page.'
 printf '\nBuilt %s\n' "$loader"
 ((run)) || exit 0
+close_build_log 0
 cd -- "$(dirname -- "$loader")"
 exec "$loader" "${loader_args[@]}"

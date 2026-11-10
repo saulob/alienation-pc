@@ -44,9 +44,11 @@ tools\build.ps1
 ```
 
 The executable is `build\cmake\clang64\bin\alienation.exe`. Start it yourself; the launcher opens and installs the game
-from your package. Logs go to `logs\alienation_NNN.log`, settings to `user\alienation.ini`.
+from your package. Game logs go to `build\logs\alienation_NNN.log`, settings to `user\alienation.ini`. The build is
+incremental; `-Clean` rebuilds from scratch. Every build run writes one new, never overwritten log,
+`build\logs\build\alienation_NNN.log`, with the tool output, warnings, errors and the exit code.
 
-`tools\test.ps1` builds and runs the focused headless tests.
+`tools\test.ps1` builds and runs the focused headless tests and the static script tests (`tests\*.ps1`).
 
 ## Layout
 
