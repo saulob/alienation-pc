@@ -58,6 +58,8 @@ enum : std::uint64_t {
     SampleSceneProxies = 1ull << 48,
     OrderedGuestWrites = 1ull << 49,
     SceneHalfRes = 1ull << 50, ///< scene scaling also reduces the 960x540 post targets
+    PartialPageRecheck = 1ull << 51, ///< hash image bytes a neighbour's write fault unprotected
+    CpuRewrittenRecheck = 1ull << 52, ///< hash small CPU-rewritten images once per GC tick
     UpdateImageFastPath = 1u << 30,
 };
 inline bool Disabled(std::uint64_t bit) {

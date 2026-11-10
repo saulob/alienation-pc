@@ -2505,6 +2505,25 @@ RenderState Rasterizer::BeginRendering(const GraphicsPipeline* pipeline) {
                 usable = !image.binding.is_bound && !image.binding.needs_rebind;
             }
         }
+        // A memoized non-clear state must not swallow a pending fast clear.
+        if (usable) {
+            const u32 num_color = std::bit_width(signature.mrt_mask);
+            for (u32 cb = 0; cb < num_color && cb < AmdGpu::NUM_COLOR_BUFFERS; ++cb) {
+                if (!cb_descs[cb].first) continue;
+                const auto& col_buf = regs.color_buffers[cb];
+                const u32 slice = cb_descs[cb].second.view_info.range.base.layer;
+                if (texture_cache.IsMetaCleared(col_buf.CmaskAddress(), slice)) {
+                    usable = false;
+                    break;
+                }
+            }
+        }
+        if (usable && db_desc.first) {
+            const u32 slice = db_desc.second.view_info.range.base.layer;
+            if (texture_cache.IsMetaCleared(regs.depth_htile_data_base.GetAddress(), slice)) {
+                usable = false;
+            }
+        }
         if (usable) {
             ++begin_memo_hits;
             attachment_feedback_loop = false;

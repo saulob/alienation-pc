@@ -180,12 +180,16 @@ public:
             constexpr u32 Aliased = static_cast<u32>(ImageFlagBits::Aliased);
             if ((flags & (Dirty | Registered | Aliased)) == Registered &&
                 image.track_addr == image.guest_begin && image.track_addr_end == image.guest_end &&
-                image.lru_touched_tick == gc_tick) {
+                image.lru_touched_tick == gc_tick &&
+                (!image.cpu_rewritten || image.rewrite_tick == gc_tick)) {
                 return;
             }
         }
         std::scoped_lock lock{mutex};
         Image& image = slot_images[image_id];
+        if (image.cpu_rewritten) {
+            VerifyCpuRewritten(image_id, image);
+        }
         TrackImage(image_id);
         TouchImage(image);
         RefreshImage(image);
@@ -396,6 +400,13 @@ private:
     void UntrackImageTail(ImageId image_id);
 
     void MarkAsMaybeDirty(ImageId image_id, Image& image);
+
+    /// aln: remembers what an image's head or tail page held before a neighbour's write fault
+    /// unprotects it; RefreshImage uploads the image if those bytes changed since.
+    void SnapshotUnprotected(Image& image, bool head);
+    void VerifyCpuRewritten(ImageId image_id, Image& image);
+    static constexpr u32 RewrittenMaxBytes = 16 * 1024;
+    bool UnprotectedPartsUnchanged(const Image& image) const;
 
     /// Removes the image and any views/surface metas that reference it.
     void DeleteImage(ImageId image_id);

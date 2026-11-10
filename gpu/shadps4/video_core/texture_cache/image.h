@@ -219,6 +219,13 @@ public:
     boost::container::static_vector<u64, 16> mip_hashes{};
     u64 lru_id{};
     u64 hash{};
+    /// Hashes of the head/tail bytes left unprotected by a write next to the image (bits 1/2).
+    u64 head_hash{}, tail_hash{};
+    u8 unprotected_parts{};
+    /// Small images the guest CPU rewrote repeatedly (parameter tables): verified by content.
+    u8 cpu_invalidations{};
+    bool cpu_rewritten{}, rewrite_hash_valid{};
+    u64 rewrite_hash{}, rewrite_tick{};
 
 private:
     static Common::IncrementalIdProvider<u64> global_image_uid;

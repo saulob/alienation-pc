@@ -145,6 +145,7 @@ typedef struct { int kind; uintptr_t address; uint64_t size; } PendingHook;
 static PendingHook *pending; static size_t pending_count, pending_capacity;
 static size_t allocations, maps, flexible_maps, protects, queries;
 static uint64_t live_bytes, flexible_bytes;
+static void queue_hook(int kind, uintptr_t address, uint64_t size);
 
 typedef struct { const char *what; uintptr_t address; uint64_t size; uint32_t tick, thread; } MemoryEvent;
 static MemoryEvent memory_events[32];
@@ -308,6 +309,12 @@ static size_t carve_host(uintptr_t a, uintptr_t b) {
         DWORD old;
         if (runs[i].protect!=PAGE_READWRITE && !VirtualProtect((void *)runs[i].start,runs[i].end-runs[i].start,runs[i].protect,&old))
             win_fail("restoring page protection",runs[i].start,runs[i].end-runs[i].start);
+    }
+    /* The neighbours were mapped writable until the loop above: guest writes to GPU-tracked pages in
+     * that window raised no fault, so the GPU caches must treat those pages as written. */
+    for (size_t i=0;i<nruns;++i) {
+        if (runs[i].protect!=PAGE_READONLY && runs[i].protect!=PAGE_NOACCESS) continue;
+        queue_hook(HOOK_INVALIDATE,runs[i].start,runs[i].end-runs[i].start);
     }
     (void)left_runs;
     free(runs);

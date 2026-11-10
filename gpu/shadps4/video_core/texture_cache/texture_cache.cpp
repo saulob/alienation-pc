@@ -463,6 +463,61 @@ void TextureCache::InvalidateAlias(Image& image) {
     }
 }
 
+void TextureCache::VerifyCpuRewritten(ImageId image_id, Image& image) {
+    if (image.rewrite_tick == gc_tick) {
+        return;
+    }
+    image.rewrite_tick = gc_tick;
+    if (True(image.flags & ImageFlagBits::GpuModified) || image.info.num_samples > 1) {
+        image.cpu_rewritten = false;
+        return;
+    }
+    const u64 hash = XXH3_64bits(std::bit_cast<const u8*>(image.info.guest_address), image.info.guest_size);
+    const bool lost = image.rewrite_hash_valid && hash != image.rewrite_hash && False(image.flags & ImageFlagBits::Dirty);
+    image.rewrite_hash = hash;
+    image.rewrite_hash_valid = true;
+    if (lost) {
+        image.flags |= ImageFlagBits::CpuDirty;
+        UntrackImage(image_id);
+    }
+}
+
+void TextureCache::SnapshotUnprotected(Image& image, bool head) {
+    if (AlnToggle::Disabled(AlnToggle::PartialPageRecheck) ||
+        True(image.flags & ImageFlagBits::GpuModified)) {
+        return;
+    }
+    const VAddr image_begin = image.info.guest_address;
+    const VAddr image_end = image_begin + image.info.guest_size;
+    const VAddr begin = head ? image_begin : std::max(image_begin, tracker.GetPageAddr(image_end));
+    const VAddr end = head ? std::min(image_end, tracker.GetNextPageAddr(image_begin)) : image_end;
+    if (end <= begin) {
+        return;
+    }
+    const u64 hash = XXH3_64bits(std::bit_cast<const u8*>(begin), end - begin);
+    (head ? image.head_hash : image.tail_hash) = hash;
+    image.unprotected_parts |= head ? 1 : 2;
+    image.flags |= ImageFlagBits::MaybeCpuDirty;
+}
+
+bool TextureCache::UnprotectedPartsUnchanged(const Image& image) const {
+    const VAddr image_begin = image.info.guest_address;
+    const VAddr image_end = image_begin + image.info.guest_size;
+    if (image.unprotected_parts & 1) {
+        const VAddr end = std::min(image_end, tracker.GetNextPageAddr(image_begin));
+        if (XXH3_64bits(std::bit_cast<const u8*>(image_begin), end - image_begin) != image.head_hash) {
+            return false;
+        }
+    }
+    if (image.unprotected_parts & 2) {
+        const VAddr begin = std::max(image_begin, tracker.GetPageAddr(image_end));
+        if (XXH3_64bits(std::bit_cast<const u8*>(begin), image_end - begin) != image.tail_hash) {
+            return false;
+        }
+    }
+    return true;
+}
+
 void TextureCache::MarkAsMaybeDirty(ImageId image_id, Image& image) {
     if (image.hash == 0) {
         // Initialize hash
@@ -484,6 +539,14 @@ void TextureCache::InvalidateMemory(VAddr addr, size_t size) {
             // Modified region overlaps image, so the image was definitely accessed by this fault.
             // Untrack the image, so that the range is unprotected and the guest can write freely.
             InvalidateAlias(image);
+            if (image.cpu_invalidations < 2) {
+                ++image.cpu_invalidations;
+            }
+            if (image.cpu_invalidations >= 2 && !image.cpu_rewritten && image.info.guest_size <= RewrittenMaxBytes &&
+                False(image.flags & ImageFlagBits::GpuModified) &&
+                !AlnToggle::Disabled(AlnToggle::CpuRewrittenRecheck)) {
+                image.cpu_rewritten = true;
+            }
             image.flags |= ImageFlagBits::CpuDirty;
             UntrackImage(image_id);
         } else if (pages_end < image_end) {
@@ -500,6 +563,9 @@ void TextureCache::InvalidateMemory(VAddr addr, size_t size) {
         } else {
             // Image begins and ends on this page so it can not receive any more invalidations.
             // We will check it's hash later to see if it really was modified.
+            if (image.IsTracked()) {
+                SnapshotUnprotected(image, true);
+            }
             MarkAsMaybeDirty(image_id, image);
         }
     });
@@ -509,7 +575,7 @@ void TextureCache::InvalidateMemoryFromGPU(VAddr address, size_t max_size) {
     // Partial buffer writes still need the image's untouched bytes in guest memory.
     ResolveReadbacks(address, max_size, true, ReadbackSource::GpuPartialWrite);
     std::scoped_lock lock{mutex};
-    ForEachImageInRegion(address, max_size, [&](ImageId image_id, Image& image) {
+    ForEachImageInRegion(address, max_size, [&](ImageId, Image& image) {
         // Only consider images that match base address.
         // TODO: Maybe also consider subresources
         if (image.info.guest_address != address) {
@@ -1133,7 +1199,15 @@ void TextureCache::RefreshImage(Image& image) {
     TRACE_HINT(fmt::format("{:x}:{:x}", image.info.guest_address, image.info.guest_size));
 
     if (True(image.flags & ImageFlagBits::MaybeCpuDirty) &&
-        False(image.flags & ImageFlagBits::CpuDirty)) {
+        False(image.flags & ImageFlagBits::CpuDirty) && image.unprotected_parts != 0) {
+        const bool unchanged = UnprotectedPartsUnchanged(image);
+        image.unprotected_parts = 0;
+        if (unchanged && False(image.flags & ImageFlagBits::GpuDirty)) {
+            image.flags &= ~ImageFlagBits::MaybeCpuDirty;
+            return;
+        }
+    } else if (True(image.flags & ImageFlagBits::MaybeCpuDirty) &&
+               False(image.flags & ImageFlagBits::CpuDirty)) {
         // The image size should be less than page size to be considered MaybeCpuDirty
         // So this calculation should be very uncommon and reasonably fast
         // For now we'll just check up to 64 first pixels
@@ -1151,6 +1225,7 @@ void TextureCache::RefreshImage(Image& image) {
         }
         image.hash = hash;
     }
+    image.unprotected_parts = 0;
 
     const u32 num_layers = image.info.resources.layers;
     const u32 num_mips = image.info.resources.levels;
@@ -1366,6 +1441,7 @@ void TextureCache::UntrackImageHead(ImageId image_id) {
     if (!image.IsTracked() || image_begin < image.track_addr) {
         return;
     }
+    SnapshotUnprotected(image, true);
     const auto addr = tracker.GetNextPageAddr(image_begin);
     const auto size = addr - image_begin;
     image.track_addr = addr;
@@ -1384,6 +1460,7 @@ void TextureCache::UntrackImageTail(ImageId image_id) {
     if (!image.IsTracked() || image.track_addr_end < image_end) {
         return;
     }
+    SnapshotUnprotected(image, false);
     ASSERT(image.track_addr_end != 0);
     const auto addr = tracker.GetPageAddr(image_end);
     const auto size = image_end - addr;
