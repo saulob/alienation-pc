@@ -1,4 +1,4 @@
-"""Checks the engine code that turns the VideoOut display size into its screen aspect, in both prepared executables.
+"""Checks the engine code that turns the VideoOut display size into its screen aspect, in every prepared executable.
 
 The engine's Display_Control::GetScreen calls sceVideoOutGetResolutionStatus and divides pane_width by pane_height; the
 port reports the render size there (AlnGpuConfig.render_width/height). A build whose prepared folder is missing is
@@ -47,8 +47,9 @@ def check_build(label, folder):
     check(len(screen) == 1, f'{label}: expected one pane width / pane height division after the call')
 
 
-check_build('Europe', 'CUSA00062-1.00')
-check_build('Asia', 'CUSA04430-1.00')
+check_build('CUSA00062 1.00 EUR', 'CUSA00062-1.00')
+check_build('CUSA00062 1.06 EUR', 'CUSA00062-1.06')
+check_build('CUSA04430 1.00 ASIA/KR', 'CUSA04430-1.00')
 
 if failures:
     print('\n'.join(failures))

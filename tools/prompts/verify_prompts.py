@@ -146,15 +146,17 @@ def verify_glyphs() -> list[str]:
         masks[match.group(1)] = rows
 
     failures = []
-    tables = {
-        "font0": generator.CUSA00062_TEXT0,
-        "font1": generator.CUSA00062_TEXT1,
-        "font2": generator.CUSA00062_TEXT2,
-        "icon": generator.ICON,
-    }
+    tables = {}
+    for build, atlases in generator.BUILDS.items():
+        for atlas_name, _, glyphs in atlases:
+            if (build, atlas_name) in generator.SHARED_ATLASES:
+                continue
+            if isinstance(glyphs, generator.FontCells):
+                glyphs = [(kind, 0, 0, 0, 0, label) for _, kind, label in generator.BUTTON_GLYPHS]
+            tables[generator.masks_name(build, atlas_name)] = glyphs
     for name, table in tables.items():
-        rows = masks.get(f"k_CUSA00062_1_00_{name}_masks")
-        if rows is None:
+        rows = masks.get(name)
+        if rows is None or len(rows) != len(table):
             failures.append(f"the {name} atlas has no glyph table")
             continue
         for index, (kind, _, _, _, _, label) in enumerate(table):

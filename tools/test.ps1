@@ -27,8 +27,11 @@ $tests = [ordered]@{
     'aln-avplayer-thread-tests'    = 'AvPlayer thread join tests'
     'aln-image-format-tests'       = 'boot image and content profile contract'
     'aln-resolution-patch-tests'   = 'render resolution and frame rate patch tests'
+    'aln-menu-buttons-tests'       = 'Asian Menu Buttons: menu Confirm and Cancel per build'
     'aln-skip-intro-tests'         = 'Skip Intro hook site and startup video tests'
     'aln-exit-game-tests'          = 'Exit Game bytecode patch, hook sites and row text'
+    'aln-exit-game-menu-tests'     = 'Exit Game rows in the real menus of each prepared build'
+    'aln-text-fix-tests'           = 'ASIA/KR Portuguese Voice-Over Language text fix'
     'aln-crash-guard-tests'        = 'crash reporting (isolated crashing child processes)'
     'aln-controller-prompts-tests' = 'controller prompt style, patch identity and glyph table'
     'aln-runtime-overlay-tests'    = 'guest file overlay tests'
@@ -73,6 +76,12 @@ else {
     if ($LASTEXITCODE -ne 0) { $failed.Add("game_profile_tests.py (exit code $LASTEXITCODE)") }
     & $python.Exe @($python.Args) '-I' (Join-Path $script:RepoRoot 'tests\patch_site_tests.py')
     if ($LASTEXITCODE -ne 0) { $failed.Add("patch_site_tests.py (exit code $LASTEXITCODE)") }
+    & $python.Exe @($python.Args) '-I' (Join-Path $script:RepoRoot 'tests\feature_parity_tests.py')
+    if ($LASTEXITCODE -ne 0) { $failed.Add("feature_parity_tests.py (exit code $LASTEXITCODE)") }
+    & $python.Exe @($python.Args) '-I' (Join-Path $script:RepoRoot 'tests\display_aspect_tests.py')
+    if ($LASTEXITCODE -ne 0) { $failed.Add("display_aspect_tests.py (exit code $LASTEXITCODE)") }
+    & $python.Exe @($python.Args) '-I' (Join-Path $script:RepoRoot 'tests\prompt_language_tests.py')
+    if ($LASTEXITCODE -ne 0) { $failed.Add("prompt_language_tests.py (exit code $LASTEXITCODE)") }
     & $python.Exe @($python.Args) '-I' (Join-Path $script:RepoRoot 'tests\controller_prompts_static_tests.py')
     if ($LASTEXITCODE -ne 0) { $failed.Add("controller_prompts_static_tests.py (exit code $LASTEXITCODE)") }
     & $python.Exe @($python.Args) '-I' (Join-Path $script:RepoRoot 'tools\prompts\verify_prompts.py')

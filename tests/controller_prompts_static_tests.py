@@ -58,9 +58,9 @@ check("AlnPromptGlyphAtlas" in prompts_h and "AlnPromptGlyphMask" in prompts_h,
       "the prompt glyph atlas types are missing")
 check("AlnPromptGlyphAtlases" in prompts_glyphs and "kPromptGlyphAtlases" in prompts_glyphs,
       "the prompt glyph atlas table is missing")
-for atlas in ('"font0"', '"font1"', '"font2"', '"icon"'):
+for atlas in ('"font0"', '"font1"', '"font2"', '"icon"', '"font_kr"', '"font_jp"', '"font_cn"', '"font_cn2"'):
     check(atlas in prompts_glyphs, f"the prompt glyph atlas table is missing {atlas}")
-for build in ('"CUSA00062-1.00"', '"CUSA04430-1.00"'):
+for build in ('"CUSA00062-1.00"', '"CUSA00062-1.06"', '"CUSA04430-1.00"'):
     check(build in prompts_glyphs, f"the prompt glyph atlas table is missing {build}")
 check("BuildGlyphPatches" in prompts_cpp and "UntileAtlas" in prompts_cpp and "TileAtlas" in prompts_cpp,
       "the prompt glyph atlases are not installed")
@@ -68,7 +68,7 @@ check("AlnControllerScenePatch" in prompts_h and "AlnControllerScenePatches" in 
       "the controller callout scene type is missing")
 check("AlnControllerScenePatches" in data and "controller_template" in data,
       "the controller callout scene table is missing")
-check(data.count('"controller_template"') == 2, "the controller callout scene table is not per build")
+check(data.count('"controller_template"') == 3, "the controller callout scene table is not per build")
 check("0x94u" in data, "the controller callout scene payload offset is missing")
 check("SCENE_ANCHORS" in generator and "patch_controller_scene" in generator,
       "the generator does not patch the controller callout scene")
@@ -78,7 +78,7 @@ check("paint_callouts(color)" in generator,
       "the generator does not paint the caption lines into the Xbox controller texture")
 check("same_lua_syntax" in generator and "menu layout patch changed the payload length" in generator,
       "the caption layout patch is not validated")
-check(data.count('"menu_layout"') == 2, "the controller caption layout table is not per build")
+check(data.count('"menu_layout"') == 3, "the controller caption layout table is not per build")
 for anchor in ("left_stick", "right_stick", "dpad_left_button", "dpad_right_button",
                "dpad_up_button", "dpad_down_button", "options_button", "triangle_button"):
     check(anchor in generator, f"the controller callout scene is missing the {anchor} anchor")
@@ -92,7 +92,7 @@ check("ASSETS = [" in generator, "the generator has no asset table")
 for name in ("controller_color", "controller_white", "accept_a",
              "help_saboteur", "help_bio", "help_tank"):
     check(name in generator, f"the generator does not create {name}")
-for value in ("CUSA00062-1.00", "CUSA04430-1.00"):
+for value in ("CUSA00062-1.00", "CUSA00062-1.06", "CUSA04430-1.00"):
     check(value in data, f"the patch data has no row for {value}")
 for glyph in ('"A"', '"B"', '"X"', '"Y"', '"LB"', '"RB"', '"LT"', '"RT"', '"View"', '"Menu"'):
     check(glyph in data, f"the Xbox glyph table is missing {glyph}")
@@ -107,9 +107,9 @@ check("tutorial_lineart" in generator and "LINEART_CONTROLLER" in generator,
       "the tutorial line art is not part of the generation")
 check("LINEART_CONTROLLER" in generator and "xbox-series-lineart" in generator,
       "the generator does not use the Xbox Series line art")
-check('"controller_white", 0x1AD80380' in generator and "True" in generator,
+check('("controller_white", (0x1AD80380' in generator and "True" in generator,
       "the controller white texture is not generating mips")
-check('"help_saboteur", 0x1ADDA900' in generator and '"help_bio", 0x1ADFED40' in generator,
+check('("help_saboteur", (0x1ADDA900' in generator and '("help_bio", (0x1ADFED40' in generator,
       "the tutorial help textures are not generating mips")
 check("draw.rectangle" not in glyph_generator.split("def shoulder", 1)[1].split("def circle", 1)[0],
       "the shoulder glyph still draws an opaque rectangle")

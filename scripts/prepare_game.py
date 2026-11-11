@@ -65,6 +65,12 @@ def find_build_packages(game_root, title, version):
             found = [by_identity.get(game_profiles.layer_identity(found_title, layer), []) for layer in build['layers']]
             if all(len(candidates) == 1 for candidates in found):
                 builds.append((found_title, found_version, profile, [candidates[0] for candidates in found]))
+                continue
+            for alias in build.get('package_aliases', ()):
+                candidates = by_identity.get(game_profiles.alias_identity(found_title, alias), [])
+                if len(candidates) == 1:
+                    builds.append((found_title, found_version, profile, candidates))
+                    break
     if not builds:
         wanted = ' '.join(x for x in (title, version) if x)
         fail(f'no complete supported build{" for " + wanted if wanted else ""} in {game_root}')
@@ -133,9 +139,11 @@ def main():
 
     layers = []
     for index, (package, info) in enumerate(packages):
-        owner = game_profiles.finishing_version(title, game_profiles.package_identity(info))
-        layers.append(root / 'extracted' / profile['versions'][owner]['folder'])
-        extract(package, layers[-1], only, f'layer {index}')
+        identity = game_profiles.package_identity(info)
+        repack = game_profiles.alias_of(title, identity)
+        owner = game_profiles.finishing_version(title, identity)
+        layers.append(root / 'extracted' / (repack[1]['extract_folder'] if repack else profile['versions'][owner]['folder']))
+        extract(package, layers[-1], only, f'layer {index}' + (f' ({repack[1]["name"]})' if repack else ''))
 
     view = root / 'prepared' / build['folder']
     stats = game_view.build_view(layers, view, f'{title} {version}')

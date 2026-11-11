@@ -30,19 +30,24 @@ typedef struct {
     uint32_t campaign_guard; /* the Load guard comparing a menu_select message's item id */
     uint16_t load;           /* string indexes of "load" (the item id) and "LOAD" (its layout box) */
     uint16_t load_box;
+    uint8_t item_pop;        /* the pop after the Credits list_add */
+    uint8_t credits_index;   /* Credits' index in an Options list made whole by `list`; EXIT_GAME_APPEND otherwise */
+    uint16_t list_reverse;   /* import index, used when the Options list grows one list_add at a time */
 } ExitGameScriptSite;
 
 #define EXIT_GAME_BLOCK_HEADER 0x28u
 #define EXIT_GAME_MARKER "exit_game_application"
+/* The Options rows are added one by one, some only under conditions, so their count is not known statically. */
+#define EXIT_GAME_APPEND 0xffu
 
 const ExitGameScriptSite *exit_game_script_site(const char *build);
 
-/* Bytes the patch appends to the bytecode. */
-size_t exit_game_script_extra(void);
+/* Bytes the patch appends to the site's bytecode. */
+size_t exit_game_script_extra(const ExitGameScriptSite *site);
 
 /* Patches `sdat` (the decompressed block, `site->dsize` bytes) in place and appends the new code; `capacity` must hold
- * dsize + exit_game_script_extra(). Returns the new size, or 0 with *why set and nothing written when a checked byte,
- * string or import differs. */
+ * dsize + exit_game_script_extra(site). Returns the new size, or 0 with *why set and nothing written when a checked
+ * byte, string or import differs. */
 size_t exit_game_script_patch(uint8_t *sdat, size_t capacity, const ExitGameScriptSite *site, const char **why);
 
 #ifdef __cplusplus

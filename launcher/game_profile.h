@@ -25,6 +25,15 @@ struct PackageLayer {
     bool update;
 };
 
+// A complete single package of a build's finished game that is not one of its official packages (a repack). Its
+// param.sfo alone never identifies the build: the package is accepted only with the build's own eboot.bin.
+struct PackageAlias {
+    const char* name;
+    const char* category;
+    const char* app_ver;
+    const char* sfo_version;
+};
+
 struct GameBuild {
     const char* title_id;
     const char* content_id;
@@ -33,11 +42,15 @@ struct GameBuild {
     const char* eboot_sha256;     // lower-case hex of the finished game's eboot.bin
     std::span<const char* const> data_files; // game data the build needs besides kSharedGameFiles
     const char* label;            // the name the log, the launcher and the loader show
-    const char* region;           // from the content id's publisher prefix
+    const char* region;           // the content id's region, as the launcher shows it
     std::span<const PackageLayer> layers; // base package first; the last layer is the finished game
     std::span<const AlnResolutionSite> resolution_sites; // empty until verified in this build's executable
     const AlnFrameRatePatch* frame_rate;                 // the verified engine_set_fps binding
+    std::span<const PackageAlias> package_aliases = {};
 };
+
+// "CUSA00062 1.06 · EUR": the build and its region, as the launcher shows them.
+std::string BuildDisplayName(const GameBuild& build);
 
 // The supported builds: each title's base first, then its updates.
 std::span<const GameBuild> SupportedBuilds();
@@ -45,8 +58,8 @@ std::span<const GameBuild> SupportedBuilds();
 // The finished game's layer: its param.sfo is the one of the installed game.
 const PackageLayer& FinishedLayer(const GameBuild& build);
 
-// The finished package's APP_VER and VERSION, formatted for display (01.00 becomes 1.00).
-std::string BuildMetadataText(const GameBuild& build);
+// The finished package's APP_VER and VERSION, formatted for display (01.00 becomes 1.00); a repack's own when given.
+std::string BuildMetadataText(const GameBuild& build, const PackageAlias* alias = nullptr);
 
 // True for a build finished by an update package.
 inline bool IsUpdateBuild(const GameBuild& build) {

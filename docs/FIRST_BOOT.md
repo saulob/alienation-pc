@@ -98,7 +98,7 @@ The engine starts at 59.94 FPS (`SetFps(59.94f)` at EUR `0x1402f4f`). The displa
 every second one. The game's scripts (`stream.dat`) call `engine_set_fps` five times with a float constant (two with
 29.97, three with 59.94), so the 30 FPS the port showed comes from those script calls, not from the port's vblank.
 
-The port makes the binding return at once (EUR `0x2507b0`, Asia `0x2513c0`: `mov rax,[rdi+0x28]` becomes
+The port makes the binding return at once (EUR `0x2507b0`, EUR 1.06 `0x253f10`, Asia `0x2513c0`: `mov rax,[rdi+0x28]` becomes
 `xor eax,eax; ret`; `launcher/frame_rate.c`), so the startup 59.94 stays and the delta time stays `1 / fps`. Nothing
 else is touched. Static evidence only: whether Havok stepping, animation, scripted timers and cutscenes stay correct at
 59.94 in the campaign levels, which were tuned at 29.97, needs a gameplay test.
@@ -110,10 +110,11 @@ The community shadPS4 patch (halves the delta at EUR `0x14035FC` / `0x1403632` a
 The engine's display configuration defaults to 1920 x 1080 (`mov dword [rdi+0x34], 1080` / `mov dword [rdi+0x30], 1920`
 in the constructor at EUR `0x1fa8a0`). The display builds its frontbuffers and the
 `RENDER_RESOLUTION_X/Y` every render script sizes its targets from out of that pair. The launcher writes the chosen size
-into both immediates (EUR image offsets `0x1fa8da` / `0x1fa8e1`, Asia `0x1fb4ea` / `0x1fb4f1`) after checking the
+into both immediates (EUR image offsets `0x1fa8da` / `0x1fa8e1`, EUR 1.06 `0x1fd98a` / `0x1fd991`, Asia `0x1fb4ea` /
+`0x1fb4f1`; every build's sites are in [GAME_BUILDS.md](GAME_BUILDS.md)) after checking the
 original instruction. The AvPlayer surfaces (EUR `0xcbf8d`, `0xcc011`) stay 1080p on purpose.
 
-The constructor's heap sizes are not used: the game's startup function (EUR `0x380` and `0x440`, Asia the same
+The constructor's heap sizes are not used: the game's startup function (EUR `0x380` and `0x440`, 1.06 and Asia the same
 offsets) overwrites them with 1 GiB, `0x46000000` and `0x14000000` (`mov qword [rbp-0x78], imm32` at `0x3bb` and
 `0x47b`), the three direct allocations in the log. The first is the heap whose allocator (vtable `0x1f5dfb0`, allocate
 at `0x12a22b0`) serves the render targets and textures (the manager's `+0x10` getter has 25 callers). A full heap

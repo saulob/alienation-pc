@@ -35,10 +35,11 @@ int main(void) {
     size_t count = 0;
     const AlnControllerPromptPatch *patches = AlnControllerPromptPatches(&count);
     CHECK(patches != NULL);
-    CHECK(count == 14);
+    CHECK(count == 21);
 
-    static const char *const builds[] = {"CUSA00062-1.00", "CUSA04430-1.00"};
-    for (size_t b = 0; b < 2; ++b) {
+    static const char *const builds[] = {"CUSA00062-1.00", "CUSA00062-1.06", "CUSA04430-1.00"};
+    enum { BUILDS = sizeof(builds) / sizeof(builds[0]) };
+    for (size_t b = 0; b < BUILDS; ++b) {
         size_t found = 0;
         uint64_t starts[8], ends[8];
         for (size_t i = 0; i < count; ++i) {
@@ -72,17 +73,19 @@ int main(void) {
 
     for (size_t i = 0; i < count; ++i) {
         const AlnControllerPromptPatch *patch = &patches[i];
-        CHECK(SameText(patch->build, builds[0]) || SameText(patch->build, builds[1]));
+        CHECK(SameText(patch->build, builds[0]) || SameText(patch->build, builds[1]) ||
+              SameText(patch->build, builds[2]));
         CHECK(patch->name != NULL && patch->name[0] != 0);
     }
 
     size_t scene_count = 0;
     const AlnControllerScenePatch *scenes = AlnControllerScenePatches(&scene_count);
     CHECK(scenes != NULL);
-    CHECK(scene_count == 4);
+    CHECK(scene_count == 6);
     for (size_t i = 0; i < scene_count; ++i) {
         const AlnControllerScenePatch *scene = &scenes[i];
-        CHECK(SameText(scene->build, builds[0]) || SameText(scene->build, builds[1]));
+        CHECK(SameText(scene->build, builds[0]) || SameText(scene->build, builds[1]) ||
+              SameText(scene->build, builds[2]));
         CHECK(SameText(scene->name, "controller_template") || SameText(scene->name, "menu_layout"));
         CHECK(scene->offset != 0);
         CHECK(scene->original_zsize > 0);
@@ -97,7 +100,7 @@ int main(void) {
         CHECK(!AlnScenePatchFits(scene, 0));
         CHECK((uint64_t)scene->payload_offset + scene->zsize <= (uint64_t)scene->block_units * 64);
     }
-    for (size_t b = 0; b < 2; ++b) {
+    for (size_t b = 0; b < BUILDS; ++b) {
         int template_rows = 0;
         int layout_rows = 0;
         for (size_t i = 0; i < scene_count; ++i) {

@@ -8,7 +8,7 @@
 static int failures;
 #define CHECK(condition) do { if (!(condition)) { printf("FAILED: %s (line %d)\n", #condition, __LINE__); ++failures; } } while (0)
 
-static const char *const kBuilds[] = {"CUSA00062-1.00", "CUSA04430-1.00"};
+static const char *const kBuilds[] = {"CUSA00062-1.00", "CUSA00062-1.06", "CUSA04430-1.00"};
 
 enum { FIELD_TYPE = 0x14958494u, FIELD_ID = 0x39f744e4u, FIELD_TEXT = 0xfc6fa961u, FIELD_BOX = 0xe5e534ebu,
        FIELD_MESSAGE_ITEM = 0x94ba2d0au, VAR_CHOSEN = 0x4157579eu, VAR_SAVE_SLOTS = 0x71f4ed37u };
@@ -31,7 +31,18 @@ static uint16_t get16(const uint8_t *at) {
 }
 
 /* A bytecode block with the site's strings, imports and the instructions the patch checks; everything else zero. */
-enum { STRINGS = 0x1c4, IMPORTS = 0x80000, NAMES = 0x90000 };
+enum { STRINGS = 0x1c4, ROW_CALLS = 0x70000, IMPORTS = 0x80000, NAMES = 0x90000 };
+
+/* `string id; pick 1; set id; ...; push return` of a row whose localized text returns to the block of `list_op`. */
+static void add_row_call(uint8_t *sdat, uint32_t at, const ExitGameScriptSite *site, uint16_t id, uint32_t list_op) {
+    uint8_t *call = sdat + at;
+    call[0] = 0x08;
+    put16(call + 1, id);
+    memcpy(call + 3, "\x0b\x01\x14", 3);
+    put32(call + 6, FIELD_ID);
+    call[20] = 0x09;
+    put32(call + 21, list_op - 13 - site->code);
+}
 static uint8_t *make_bytecode(const ExitGameScriptSite *site, size_t capacity) {
     uint8_t *sdat = calloc(1, capacity);
     put32(sdat, 0x214e0403u);
@@ -42,7 +53,7 @@ static uint8_t *make_bytecode(const ExitGameScriptSite *site, size_t capacity) {
     put32(sdat + 0x24, 0x5000);
     const struct { uint16_t index; const char *text; } strings[] = {
         {site->credits, "credits"}, {site->marker, EXIT_GAME_MARKER}, {1, "list_add"}, {2, "list_insert"},
-        {site->load, "load"}, {site->load_box, "LOAD"}};
+        {site->load, "load"}, {site->load_box, "LOAD"}, {3, "list_reverse"}};
     uint32_t name = NAMES;
     for (size_t i = 0; i < sizeof(strings) / sizeof(*strings); ++i) {
         put32(sdat + STRINGS + 4 + strings[i].index * 8u, name);
@@ -51,6 +62,7 @@ static uint8_t *make_bytecode(const ExitGameScriptSite *site, size_t capacity) {
     }
     sdat[IMPORTS + site->list_add * 4u] = 1;
     sdat[IMPORTS + site->list_insert * 4u] = 2;
+    if (site->credits_index == EXIT_GAME_APPEND) sdat[IMPORTS + site->list_reverse * 4u] = 3;
     put16(sdat + IMPORTS + site->exit_app * 4u, site->marker);
 
     uint8_t *item = sdat + site->item - 9;
@@ -59,7 +71,7 @@ static uint8_t *make_bytecode(const ExitGameScriptSite *site, size_t capacity) {
     memcpy(item + 5, "\x0b\x01\x0b\x01\x1f", 5);
     put16(item + 10, site->list_add);
     item[12] = 0x0f;
-    item[13] = 5;
+    item[13] = site->item_pop;
     uint8_t *guard = sdat + site->guard - 9;
     guard[0] = 0x17;
     put32(guard + 1, VAR_CHOSEN);
@@ -88,6 +100,8 @@ static uint8_t *make_bytecode(const ExitGameScriptSite *site, size_t capacity) {
     select[10] = 0x2c;
     select[11] = 0x1d;
     put32(select + 12, 0x1234);
+    add_row_call(sdat, ROW_CALLS, site, site->credits, site->item);
+    add_row_call(sdat, ROW_CALLS + 0x40, site, site->load, site->campaign_list);
     return sdat;
 }
 
@@ -153,6 +167,14 @@ static uint32_t run(Machine *m, const uint8_t *sdat, uint32_t start, const ExitG
         case 0x1f:
             if (get16(op + 1) == site->exit_app) {
                 ++m->exit_calls;
+            } else if (site->credits_index == EXIT_GAME_APPEND && get16(op + 1) == site->list_reverse &&
+                       m->stack[m->depth - 1] == LIST) {
+                for (int i = 0, j = m->count - 1; i < j; ++i, --j) {
+                    const int swap = m->list[i];
+                    m->list[i] = m->list[j];
+                    m->list[j] = swap;
+                }
+                m->depth -= 1;
             } else if (get16(op + 1) == site->list_insert && m->stack[m->depth - 3] == LIST) {
                 const int index = m->stack[m->depth - 2], value = m->stack[m->depth - 1];
                 if (index < 0 || index > m->count) return 0;
@@ -186,7 +208,7 @@ static int no_list_add(const uint8_t *code, size_t size, uint16_t list_add) {
 
 /* Options: at the Credits list_add the stack holds the items list (four items), 3 and Language from the list_insert,
  * then the list and Credits twice. */
-static void test_options(const uint8_t *sdat, const ExitGameScriptSite *site, uint32_t item_code, uint32_t guard_code) {
+static void test_options(const uint8_t *sdat, const ExitGameScriptSite *site, uint32_t item_code) {
     Machine m = {{LIST, 3, TABLE + 3, LIST, TABLE + 4, LIST, TABLE + 4}, 7, {TABLE, TABLE + 1, TABLE + 2, TABLE + 3}, 4,
                  {{1, 10, 20, 0, 0}, {1, 11, 21, 0, 0}, {1, 12, 22, 0, 0}, {1, 13, 23, 0, 0},
                   {1, STRING + site->credits, 24, 0, 0}},
@@ -197,7 +219,32 @@ static void test_options(const uint8_t *sdat, const ExitGameScriptSite *site, ui
     const Item *exit_item = m.count == 6 ? &m.tables[m.list[5] - TABLE] : NULL;
     CHECK(exit_item && exit_item->type == 1 && exit_item->id == STRING + site->marker && exit_item->text == STRING + site->marker);
     CHECK(m.tables[4].id == STRING + site->credits && m.tables[4].text == 24);
+}
 
+/* Options built one list_add at a time (1.06): whatever the rows before it, Credits then Exit Game end the list, and the
+ * stack holds what the original `pop` would have left. */
+static void test_options_append(const uint8_t *sdat, const ExitGameScriptSite *site, uint32_t item_code) {
+    static const int counts[] = {0, 1, 3, 5};
+    for (size_t c = 0; c < sizeof(counts) / sizeof(*counts); ++c) {
+        const int n = counts[c], below = 777;
+        Machine m = {{below, LIST, TABLE + n, LIST, TABLE + n}, 5, {0}, n, {{0}}, n + 1, 0};
+        for (int i = 0; i < n; ++i) {
+            m.list[i] = TABLE + i;
+            m.tables[i] = (Item){1, 10 + i, 20 + i, 0, 0};
+        }
+        m.tables[n] = (Item){1, STRING + site->credits, 24, 0, 0};
+        CHECK(run(&m, sdat, item_code, site) == site->item + 5);
+        CHECK(m.depth == 1 && m.stack[0] == below);
+        CHECK(m.count == n + 2);
+        for (int i = 0; i < n && i < m.count; ++i) CHECK(m.list[i] == TABLE + i);
+        CHECK(m.list[n] == TABLE + n);
+        const Item *exit_item = m.count == n + 2 ? &m.tables[m.list[n + 1] - TABLE] : NULL;
+        CHECK(exit_item && exit_item->type == 1 && exit_item->id == STRING + site->marker &&
+              exit_item->text == STRING + site->marker);
+    }
+}
+
+static void test_options_guard(const uint8_t *sdat, const ExitGameScriptSite *site, uint32_t guard_code) {
     /* The guard runs after Credits' own compare failed: Exit Game's id exits once; another id leaves untouched. */
     const struct { int chosen, exits; } cases[] = {{STRING + site->marker, 1}, {STRING + site->load, 0}, {0, 0}};
     for (size_t i = 0; i < sizeof(cases) / sizeof(*cases); ++i) {
@@ -238,13 +285,15 @@ static void test_script(const char *build) {
     const ExitGameScriptSite *site = exit_game_script_site(build);
     CHECK(site != NULL);
     if (!site) return;
-    const size_t capacity = site->dsize + exit_game_script_extra();
+    const int append = site->credits_index == EXIT_GAME_APPEND;
+    const size_t capacity = site->dsize + exit_game_script_extra(site);
+    CHECK(exit_game_script_extra(site) == (append ? 185u : 175u));
     uint8_t *sdat = make_bytecode(site, capacity);
     const char *why = NULL;
     CHECK(exit_game_script_patch(sdat, capacity - 1, site, &why) == 0 && why && !strcmp(why, "no room for the patch"));
     const size_t size = exit_game_script_patch(sdat, capacity, site, &why);
     CHECK(size == capacity);
-    const uint32_t item_code = site->dsize, guard_code = item_code + 62, campaign_item = guard_code + 24,
+    const uint32_t item_code = site->dsize, guard_code = item_code + (append ? 72 : 62), campaign_item = guard_code + 24,
                    campaign_guard = campaign_item + 56;
     CHECK(sdat[site->item] == 0x1b && site->code + get32(sdat + site->item + 1) == item_code);
     CHECK(sdat[site->guard] == 0x1d && site->code + get32(sdat + site->guard + 1) == guard_code);
@@ -253,9 +302,32 @@ static void test_script(const char *build) {
     CHECK(sdat[site->guard - 9] == 0x17 && get16(sdat + site->guard - 3) == site->credits);
     /* Outside the block's code range a list_add would not become the game's intrinsic. */
     CHECK(no_list_add(sdat + site->dsize, size - site->dsize, site->list_add));
-    test_options(sdat, site, item_code, guard_code);
+    if (append)
+        test_options_append(sdat, site, item_code);
+    else
+        test_options(sdat, site, item_code);
+    test_options_guard(sdat, site, guard_code);
     test_campaign(sdat, site, campaign_item, campaign_guard);
     free(sdat);
+
+    /* An identical list operation that no localize call returns to (1.06 has one) is never patched. */
+    sdat = make_bytecode(site, capacity);
+    put32(sdat + ROW_CALLS + 21, site->item - 13 - site->code + 0x40);
+    CHECK(exit_game_script_patch(sdat, capacity, site, &why) == 0 && !strcmp(why, "the Credits row does not reach the item"));
+    CHECK(sdat[site->item] == 0x1f);
+    free(sdat);
+    sdat = make_bytecode(site, capacity);
+    put32(sdat + ROW_CALLS + 0x40 + 21, site->campaign_list - 13 - site->code + 0x40);
+    CHECK(exit_game_script_patch(sdat, capacity, site, &why) == 0 && !strcmp(why, "the Load row does not reach the list"));
+    free(sdat);
+
+    if (append) {
+        sdat = make_bytecode(site, capacity);
+        sdat[NAMES + 6 * 32] = 'x';
+        CHECK(exit_game_script_patch(sdat, capacity, site, &why) == 0 && !strcmp(why, "native imports differ"));
+        CHECK(sdat[site->item] == 0x1f);
+        free(sdat);
+    }
 
     sdat = make_bytecode(site, capacity);
     sdat[site->guard - 1] = 0x2d;
@@ -439,7 +511,8 @@ int main(void) {
     CHECK(!strcmp(exit_game_text("ru"), "ВЫЙТИ ИЗ ИГРЫ"));
     CHECK(!strcmp(exit_game_text("xx"), "EXIT GAME"));
     CHECK(!strcmp(exit_game_text(NULL), "EXIT GAME"));
-    CHECK(exit_game_script_site("CUSA00062-1.06") == NULL && exit_game_site(NULL) == NULL);
+    CHECK(exit_game_script_site("CUSA04181-1.00") == NULL && exit_game_site("CUSA04181-1.00") == NULL);
+    CHECK(exit_game_site(NULL) == NULL);
     for (size_t i = 0; i < sizeof(kBuilds) / sizeof(*kBuilds); ++i) {
         test_script(kBuilds[i]);
         test_hooks(i, i == 0);

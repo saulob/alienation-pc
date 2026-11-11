@@ -40,8 +40,9 @@ Two real game instances entering one native session has not been verified yet; s
    request.
 6. Press **Play**, then use the game's Online menu.
 
-Only the same game build plays together: CUSA00062 1.00 (Europe), CUSA00062 1.06 (Europe, updated) and CUSA04430 1.00
-(Asia/Korea) never meet each other, because the game's lockstep simulation needs the same executable on every PC.
+Only the same game build plays together: CUSA00062 1.00 (EUR), CUSA00062 1.06 (EUR, updated) and CUSA04430 1.00
+(ASIA/KR) never meet each other, because the game's lockstep simulation needs the same executable on every PC. The DUPLEX
+repack runs as CUSA00062 1.06 (same executable and game data) and meets official 1.06 players.
 
 ## Bug reports
 

@@ -186,6 +186,27 @@ add_executable(aln-resolution-patch-tests EXCLUDE_FROM_ALL tests/resolution_patc
 target_include_directories(aln-resolution-patch-tests PRIVATE launcher)
 target_compile_options(aln-resolution-patch-tests PRIVATE -Wall -Wextra -Werror)
 
+# The real Options and Select Campaign code of each prepared build, run before and after the Exit Game patch
+# (tools/test.ps1); not part of the default build.
+find_package(ZLIB REQUIRED)
+add_executable(aln-exit-game-menu-tests EXCLUDE_FROM_ALL tests/exit_game_menu_tests.c launcher/exit_game_script.c)
+target_include_directories(aln-exit-game-menu-tests PRIVATE launcher)
+target_compile_definitions(aln-exit-game-menu-tests PRIVATE ALN_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+target_compile_options(aln-exit-game-menu-tests PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(aln-exit-game-menu-tests PRIVATE ZLIB::ZLIB)
+
+add_executable(aln-text-fix-tests EXCLUDE_FROM_ALL tests/text_fix_tests.c launcher/text_fix.c)
+target_include_directories(aln-text-fix-tests PRIVATE launcher)
+target_compile_definitions(aln-text-fix-tests PRIVATE ALN_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+target_compile_options(aln-text-fix-tests PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(aln-text-fix-tests PRIVATE ZLIB::ZLIB)
+
+# Focused tests of Asian Menu Buttons, the menus' Confirm and Cancel per build (tools/test.ps1); not part of the default build.
+add_executable(aln-menu-buttons-tests EXCLUDE_FROM_ALL tests/menu_buttons_tests.c launcher/menu_buttons.c)
+target_include_directories(aln-menu-buttons-tests PRIVATE launcher)
+target_compile_definitions(aln-menu-buttons-tests PRIVATE ALN_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+target_compile_options(aln-menu-buttons-tests PRIVATE -Wall -Wextra -Werror)
+
 # Focused tests of the Skip Intro hook site checks and the startup video tracking (tools/test.ps1); not part of the default build.
 add_executable(aln-skip-intro-tests EXCLUDE_FROM_ALL tests/skip_intro_tests.c src/skip_intro.c src/guest_hook.c)
 target_include_directories(aln-skip-intro-tests PRIVATE src)

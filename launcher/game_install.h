@@ -37,6 +37,7 @@ enum class InstallStatus {
     kExpectedUpdatePackage,
     kUpdateForOtherTitle,
     kOlderUpdate,
+    kAlreadyContainsUpdate,
 };
 
 // What the player asked to install. An update and a base package are refused for each other's action.
@@ -49,6 +50,8 @@ struct InstallResult {
     std::string recognition; // a recognized package: its file, build, kind and layer, for the log
     std::string update_title_id, installed_title_id; // kUpdateForOtherTitle
     std::string installed_label; // kOlderUpdate: the newer installed build
+    std::string contained_version; // kAlreadyContainsUpdate: the version the installed complete package already is
+    bool repack = false;         // the package is one of the build's PackageAlias repacks
     uint64_t bytes = 0;
     size_t files = 0, linked = 0;
     const GameBuild* build = nullptr; // the build that was installed
@@ -67,9 +70,11 @@ struct InstallHooks {
 
 // The build is the one the source identifies as; it is installed into BuildPaths(roots, build). An update is laid over the
 // installed base build of its title (kUpdateNeedsBase when that is not installed). Install update (expected kUpdate)
-// refuses, before anything is written, an update of another title than the active build's (kUpdateForOtherTitle) and one
-// older than the active update of its title (kOlderUpdate). On any failure or cancellation that build's current
-// installation is left as it was. The source is a .pkg file or a game folder.
+// refuses, before anything is written, an update of another title than the active build's (kUpdateForOtherTitle), one
+// older than the active update of its title (kOlderUpdate) and one a complete repack installed for its build or active
+// for its title already contains (kAlreadyContainsUpdate); the active update itself is up to date, never re-applied. On
+// any failure or cancellation that build's current installation is left as it was. The source is a .pkg file or a game
+// folder.
 InstallResult InstallGame(const std::filesystem::path& source, const GameRoots& roots, const InstallHooks& hooks = {},
                           std::span<const GameBuild> builds = SupportedBuilds());
 InstallResult InstallFromPackage(const std::filesystem::path& package, const GameRoots& roots,

@@ -221,9 +221,12 @@ static void press_sequence(void) {
 int main(void) {
     off_by_default();
     verification(skip_intro_site("CUSA00062-1.00"));
+    verification(skip_intro_site("CUSA00062-1.06"));
     verification(skip_intro_site("CUSA04430-1.00"));
-    CHECK(skip_intro_site("CUSA00062-1.06") == NULL && skip_intro_site(NULL) == NULL);
+    CHECK(skip_intro_site("CUSA04181-1.00") == NULL && skip_intro_site(NULL) == NULL);
+    CHECK(skip_intro_site("CUSA00062-1.06")->is_down != skip_intro_site("CUSA00062-1.00")->is_down);
     installation("CUSA00062-1.00");
+    installation("CUSA00062-1.06");
     installation("CUSA04430-1.00");
     press_sequence();
     if (!failures) puts("skip intro tests passed");

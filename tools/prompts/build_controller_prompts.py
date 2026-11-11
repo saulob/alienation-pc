@@ -335,17 +335,18 @@ LABELS = {
 }
 
 
+# Each build's game folder (--game, --game-kr, --game-106) and, below, its offset of every patched block.
+BUILDS = ["CUSA00062-1.00", "CUSA04430-1.00", "CUSA00062-1.06"]
 ASSETS = [
-    # name, CUSA00062 offset, CUSA04430 offset, image, format, block bytes, mips
-    ("controller_color", 0x0D9119C0, 0x0E56AD80, "controller_color", 41, 16, False),
-    ("controller_white", 0x1AD80380, 0x1BAD5480, "controller_white", 10, 4, True),
-    ("help_saboteur", 0x1ADDA900, 0x1BB2FAC0, "help_saboteur", 35, 8, True),
-    ("help_bio", 0x1ADFED40, 0x1BB53900, "help_bio", 35, 8, True),
-    ("help_tank", 0x1AE0C380, 0x1BB60F40, "help_tank", 35, 8, True),
-    ("accept_a", 0x0D90B000, 0x0E5643C0, "accept_a", 37, 16, False),
-    ("accept_a_alt", 0x31913740, 0x32C2BC40, "accept_a", 37, 16, False),
+    # name, offsets by build (CUSA00062 1.00, CUSA04430 1.00, CUSA00062 1.06), image, format, block bytes, mips
+    ("controller_color", (0x0D9119C0, 0x0E56AD80, 0x0E586E40), "controller_color", 41, 16, False),
+    ("controller_white", (0x1AD80380, 0x1BAD5480, 0x1C0415C0), "controller_white", 10, 4, True),
+    ("help_saboteur", (0x1ADDA900, 0x1BB2FAC0, 0x1C09BB40), "help_saboteur", 35, 8, True),
+    ("help_bio", (0x1ADFED40, 0x1BB53900, 0x1C0BFF80), "help_bio", 35, 8, True),
+    ("help_tank", (0x1AE0C380, 0x1BB60F40, 0x1C0CD5C0), "help_tank", 35, 8, True),
+    ("accept_a", (0x0D90B000, 0x0E5643C0, 0x0E580480), "accept_a", 37, 16, False),
+    ("accept_a_alt", (0x31913740, 0x32C2BC40, 0x3364D540), "accept_a", 37, 16, False),
 ]
-BUILDS = [("CUSA00062-1.00", 1), ("CUSA04430-1.00", 2)]
 
 SCENE_PAYLOAD_OFFSET = 0x94
 SCENE_MAGIC = 0x53434E45  # ENCS
@@ -355,7 +356,7 @@ SCENE_NAME_TO_MAGIC = 0x4C
 SCENE_POSITION_BEFORE_MAGIC = 0x20
 SCRIPT_PAYLOAD_OFFSET = 0x30
 LAYOUT_BLOCKS = [
-    ("menu_layout", 0x475A5580, 0x488F3C80),
+    ("menu_layout", (0x475A5580, 0x488F3C80, 0x4931F480)),
 ]
 
 # Each caption line is drawn from its layout box in a shape fixed per caption:
@@ -399,7 +400,7 @@ SCRIPT_SOURCE_OFFSET = 0x18
 # (LB=L1, LT=L2, RB=R1, RT=R2, X=square, Y=triangle, B=circle, A=cross,
 # View=touchpad, Menu=options). Points are controller_white line-art pixels.
 SCENES = [
-    ("controller_template", 0x1AD7F6C0, 0x1BAD47C0),
+    ("controller_template", (0x1AD7F6C0, 0x1BAD47C0, 0x1C040900)),
 ]
 SCENE_ANCHORS = {
     "left_stick": (312, 155),
@@ -928,6 +929,7 @@ def main():
     parser.add_argument("--preview", action="store_true", help="write PNG previews only")
     parser.add_argument("--game", default=str(ROOT / "game" / "prepared" / "CUSA00062-1.00"))
     parser.add_argument("--game-kr", default=str(ROOT / "game" / "prepared" / "CUSA04430-1.00"))
+    parser.add_argument("--game-106", default=str(ROOT / "game" / "prepared" / "CUSA00062-1.06"))
     args = parser.parse_args()
     OUT_ASSETS.mkdir(parents=True, exist_ok=True)
     controller_color, controller_white = svg_controller_images()
@@ -945,41 +947,39 @@ def main():
     if args.preview:
         return
 
-    sources = {1: Path(args.game) / "stream.dat", 2: Path(args.game_kr) / "stream.dat"}
+    folders = {BUILDS[0]: args.game, BUILDS[1]: args.game_kr, BUILDS[2]: args.game_106}
     opened = {}
-    for build, path in sources.items():
+    for build in BUILDS:
+        path = Path(folders[build]) / "stream.dat"
         if path.exists():
             f = path.open("rb")
             opened[build] = (f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ))
         else:
             print("missing", path, "- its build rows will not be generated")
+
+    def placed(offsets):
+        """(build, offset) of every build whose game is present, in BUILDS order."""
+        return [(build, offset) for build, offset in zip(BUILDS, offsets) if build in opened]
+
     entries = []
-    for name, eu, kr, image_name, fmt, elem, mips in ASSETS:
+    for name, offsets, image_name, fmt, elem, mips in ASSETS:
         image = images[image_name]
-        source = None
-        for build, offset in ((1, eu), (2, kr)):
-            if build not in opened:
-                continue
-            mm = opened[build][1]
-            block = read_block(mm, offset)
-            if source is None:
-                source = block
-            else:
-                source.setdefault("other", []).append(block)
-        if source is None:
+        blocks = [(build, offset, read_block(opened[build][1], offset)) for build, offset in placed(offsets)]
+        if not blocks:
             raise SystemExit(f"{name}: no source build found")
+        # Every build's block must be the same texture: the replacement keeps the first one's header.
+        source = blocks[0][2]
+        for build, _, block in blocks[1:]:
+            if block["payload"][:16 + 0x100] != source["payload"][:16 + 0x100]:
+                raise SystemExit(f"{name}: {build} has another texture header")
         packed, dsize, _ = build_payload(source["payload"], image, fmt, elem, mips)
         rows = []
-        for build, offset in ((1, eu), (2, kr)):
-            if build not in opened:
-                continue
-            mm = opened[build][1]
-            block = read_block(mm, offset)
+        for build, offset, block in blocks:
             if 40 + len(packed) > block["units"] * 64:
                 raise SystemExit(
                     f"{name}: {len(packed)} compressed bytes do not fit the {block['units'] * 64 - 40}-byte block")
             rows.append({
-                "build": BUILDS[build - 1][0], "name": name, "offset": offset,
+                "build": build, "name": name, "offset": offset,
                 "oz": block["zsize"], "od": block["dsize"], "crc": block["crc"],
                 "units": block["units"], "nz": len(packed), "nd": dsize,
             })
@@ -988,31 +988,23 @@ def main():
         entries.append((name, packed, rows))
 
     scenes = []
-    for name, eu, kr in SCENES:
-        source = None
-        for build, offset in ((1, eu), (2, kr)):
-            if build not in opened:
-                continue
-            block = read_scene_block(opened[build][1], offset)
-            if source is None:
-                source = block
-            elif block["payload"] != source["payload"]:
-                raise SystemExit(f"{name}: the builds use different controller scenes")
-        if source is None:
+    for name, offsets in SCENES:
+        blocks = [(build, offset, read_scene_block(opened[build][1], offset)) for build, offset in placed(offsets)]
+        if not blocks:
             raise SystemExit(f"{name}: no source build found")
+        source = blocks[0][2]
+        if any(block["payload"] != source["payload"] for _, _, block in blocks):
+            raise SystemExit(f"{name}: the builds use different controller scenes")
         patched = patch_controller_scene(source["payload"])
         packed = zlib.compress(patched, 9)
         rows = []
-        for build, offset in ((1, eu), (2, kr)):
-            if build not in opened:
-                continue
-            block = read_scene_block(opened[build][1], offset)
+        for build, offset, block in blocks:
             if SCENE_PAYLOAD_OFFSET + len(packed) > block["units"] * 64:
                 raise SystemExit(
                     f"{name}: {len(packed)} compressed bytes do not fit the "
                     f"{block['units'] * 64 - SCENE_PAYLOAD_OFFSET}-byte scene block")
             rows.append({
-                "build": BUILDS[build - 1][0], "name": name, "offset": offset,
+                "build": build, "name": name, "offset": offset,
                 "oz": block["zsize"], "od": block["dsize"], "crc": block["crc"],
                 "units": block["units"], "nz": len(packed),
                 "payload_offset": SCENE_PAYLOAD_OFFSET,
@@ -1021,10 +1013,8 @@ def main():
               f"fits {rows[0]['units'] * 64 - SCENE_PAYLOAD_OFFSET} bytes")
         scenes.append((name, packed, rows))
 
-    for name, eu, kr in LAYOUT_BLOCKS:
-        for build, offset in ((1, eu), (2, kr)):
-            if build not in opened:
-                continue
+    for name, offsets in LAYOUT_BLOCKS:
+        for build, offset in placed(offsets):
             block = read_script_block(opened[build][1], offset, SCRIPT_MAGIC)
             patched = patch_menu_layout(block["payload"])
             if len(patched) != block["dsize"]:
@@ -1035,7 +1025,7 @@ def main():
                     f"{name}: {len(packed)} compressed bytes do not fit the "
                     f"{block['units'] * 64 - SCRIPT_PAYLOAD_OFFSET}-byte layout block")
             row = {
-                "build": BUILDS[build - 1][0], "name": name, "offset": offset,
+                "build": build, "name": name, "offset": offset,
                 "oz": block["zsize"], "od": block["dsize"], "crc": block["crc"],
                 "units": block["units"], "nz": len(packed),
                 "payload_offset": SCRIPT_PAYLOAD_OFFSET,

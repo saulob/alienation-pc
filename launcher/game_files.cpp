@@ -119,15 +119,38 @@ bool SameIdentity(const std::string& sfo, const PackageLayer& layer) {
            (SfoString(sfo, "CATEGORY") == "gp") == layer.update;
 }
 
-const GameBuild* BuildOfSfo(const std::string& sfo, std::span<const GameBuild> builds) {
+bool SameTitle(const std::string& sfo, const GameBuild& build) {
+    return SfoString(sfo, "TITLE_ID") == build.title_id && SfoString(sfo, "CONTENT_ID") == build.content_id;
+}
+
+// The build a finished game's param.sfo names: its last official package, or one of its repacks.
+const GameBuild* BuildOfSfo(const std::string& sfo, std::span<const GameBuild> builds, const PackageAlias** alias) {
+    *alias = nullptr;
     for (const GameBuild& build : builds) {
         const PackageLayer& finished = FinishedLayer(build);
-        if (SfoString(sfo, "TITLE_ID") == build.title_id && SfoString(sfo, "CONTENT_ID") == build.content_id &&
-            SfoString(sfo, "APP_VER") == finished.app_ver && SfoString(sfo, "VERSION") == finished.sfo_version) {
+        if (SameTitle(sfo, build) && SfoString(sfo, "APP_VER") == finished.app_ver &&
+            SfoString(sfo, "VERSION") == finished.sfo_version) {
+            return &build;
+        }
+    }
+    for (const GameBuild& build : builds) {
+        if (SameTitle(sfo, build) && (*alias = PackageAliasOf(build, sfo))) {
             return &build;
         }
     }
     return nullptr;
+}
+
+bool ReportedAppVer(const GameBuild& build, const std::string& app_ver) {
+    if (app_ver == FinishedLayer(build).app_ver) {
+        return true;
+    }
+    for (const PackageAlias& alias : build.package_aliases) {
+        if (app_ver == alias.app_ver) {
+            return true;
+        }
+    }
+    return false;
 }
 
 const GameBuild* BuildOfImageReport(const std::string& report, std::span<const GameBuild> builds) {
@@ -140,7 +163,7 @@ const GameBuild* BuildOfImageReport(const std::string& report, std::span<const G
             continue;
         }
         if (!app_ver.empty()) {
-            if (app_ver == FinishedLayer(build).app_ver) {
+            if (ReportedAppVer(build, app_ver)) {
                 return &build;
             }
             continue;
@@ -271,7 +294,7 @@ const char* StateName(GameFileState state) {
 
 std::string InstalledGameName(GameFileState state, const GameBuild* build) {
     if (build && state == GameFileState::kValid) {
-        return std::string("PS4 ") + build->label;
+        return std::string("PS4 ") + BuildDisplayName(*build);
     }
     return "Not installed";
 }
@@ -347,9 +370,44 @@ PinnedBuild PinnedBuildFromEnvironment(const GameRoots& roots) {
     return PinnedBuildOf(roots, key ? key : "");
 }
 
+const PackageAlias* PackageAliasOf(const GameBuild& build, const std::string& sfo) {
+    for (const PackageAlias& alias : build.package_aliases) {
+        if (SfoString(sfo, "CATEGORY") == alias.category && SfoString(sfo, "APP_VER") == alias.app_ver &&
+            SfoString(sfo, "VERSION") == alias.sfo_version) {
+            return &alias;
+        }
+    }
+    return nullptr;
+}
+
+const PackageAlias* InstalledPackageAlias(const std::filesystem::path& app0, const GameBuild& build) {
+    std::string sfo;
+    if (build.package_aliases.empty() || !ReadSmallFile(app0 / "sce_sys" / "param.sfo", sfo) || !SameTitle(sfo, build)) {
+        return nullptr;
+    }
+    return PackageAliasOf(build, sfo);
+}
+
+InstallProvenance InstalledProvenance(const std::filesystem::path& app0, const GameBuild& build) {
+    std::string sfo;
+    if (!ReadSmallFile(app0 / "sce_sys" / "param.sfo", sfo) || !SameTitle(sfo, build)) {
+        return InstallProvenance::kNone;
+    }
+    if (PackageAliasOf(build, sfo)) {
+        return InstallProvenance::kRepack;
+    }
+    if (!SameIdentity(sfo, FinishedLayer(build))) {
+        return InstallProvenance::kNone;
+    }
+    return IsUpdateBuild(build) ? InstallProvenance::kUpdateLayers : InstallProvenance::kBasePackage;
+}
+
 GameCheck CheckSfoIdentity(const std::string& sfo, std::span<const GameBuild> builds) {
-    if (const GameBuild* build = BuildOfSfo(sfo, builds)) {
-        return Result(GameFileState::kValid, {}, {}, build);
+    const PackageAlias* alias = nullptr;
+    if (const GameBuild* build = BuildOfSfo(sfo, builds, &alias)) {
+        GameCheck check = Result(GameFileState::kValid, {}, {}, build);
+        check.alias = alias;
+        return check;
     }
     const std::string title = SfoString(sfo, "TITLE_ID");
     const auto same_title = std::find_if(builds.begin(), builds.end(),
@@ -393,6 +451,15 @@ GameCheck CheckPackageIdentity(const std::string& sfo, std::span<const GameBuild
             return check;
         }
     }
+    for (const GameBuild& build : builds) {
+        if (title == build.title_id) {
+            if (const PackageAlias* alias = PackageAliasOf(build, sfo)) {
+                GameCheck check = Result(GameFileState::kValid, {}, {}, &build);
+                check.alias = alias;
+                return check;
+            }
+        }
+    }
     return Result(GameFileState::kDifferentVersion,
                   "param.sfo APP_VER " + Shown(SfoString(sfo, "APP_VER")) + " / VERSION " +
                       Shown(SfoString(sfo, "VERSION")) + " is not part of a supported build",
@@ -432,9 +499,14 @@ GameCheck CheckGameTree(const std::filesystem::path& app0, std::span<const GameB
         return Result(GameFileState::kReadError, "cannot read eboot.bin", {}, &build);
     }
     if (sha != build.eboot_sha256) {
-        return Result(GameFileState::kDifferentVersion, "eboot.bin is not the supported build", sha, &build);
+        return Result(GameFileState::kDifferentVersion,
+                      identity.alias ? "eboot.bin of the repack is not the supported build's"
+                                     : "eboot.bin is not the supported build",
+                      sha, &build);
     }
-    return Result(GameFileState::kValid, {}, sha, &build);
+    GameCheck valid = Result(GameFileState::kValid, {}, sha, &build);
+    valid.alias = identity.alias;
+    return valid;
 }
 
 GameCheck CheckGameFiles(const GamePaths& paths, std::span<const GameBuild> builds) {
@@ -484,7 +556,7 @@ GameCheck CheckGameFiles(const GamePaths& paths, std::span<const GameBuild> buil
     if (BuildOfImageReport(report, builds) != &build) {
         return Result(GameFileState::kDifferentVersion, "the boot image was built from another eboot.bin", sha, &build);
     }
-    return Result(GameFileState::kValid, {}, sha, &build);
+    return tree;
 }
 
 const GameBuild* BuildOfImageDir(const char* image_dir) {

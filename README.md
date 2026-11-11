@@ -4,27 +4,32 @@ A native PC port of Housemarque's **Alienation** (PS4). The game's original x86-
 replacement PS4 system libraries and a Vulkan renderer derived from shadPS4. The port's foundation is the
 [Dragon's Crown Pro PC](https://github.com/saulob/dragons-crown-pro-pc) runtime, launcher and renderer.
 
-**Status: early development.** The launcher, package installation and boot image are in place for two builds; the
-game itself has not been verified to boot yet. See [docs/FIRST_BOOT.md](docs/FIRST_BOOT.md).
+**Status: early development.** The launcher, package installation and boot image are in place for every supported
+build; in-game behaviour is tested by hand. See [docs/FIRST_BOOT.md](docs/FIRST_BOOT.md).
 
 No game files are included. You need your own decrypted Alienation PS4 package.
 
 ## Supported builds
 
-| Build | Title ID | APP_VER | Content ID | eboot.bin SHA-256 |
-|---|---|---|---|---|
-| CUSA00062 1.00 EU | `CUSA00062` | `01.00` | `EP9000-CUSA00062_00-ALIENATIONGAMEEU` | `f5f41f870db752add56920c5538441bc3750b1442f69c1de3895ee282887d855` |
-| CUSA00062 1.06 EU | `CUSA00062` | `01.06` (update) | `EP9000-CUSA00062_00-ALIENATIONGAMEEU` | `c65c18865691d7288055cae70af983aa86898d59936976ef12f5eb033eda7243` |
-| CUSA04430 1.00 KR | `CUSA04430` | `01.00` | `HP9000-CUSA04430_00-ALIENATIONGAMEKR` | `11928457792fdba30aee3ceb9f5fb300bac720d0f3c1774825a8380a2dc9b72e` |
+| Build | Title ID | Version | Packages | Content ID | eboot.bin SHA-256 |
+|---|---|---|---|---|---|
+| CUSA00062 1.00 · EUR | `CUSA00062` | 1.00 | base | `EP9000-CUSA00062_00-ALIENATIONGAMEEU` | `f5f41f870db752add56920c5538441bc3750b1442f69c1de3895ee282887d855` |
+| CUSA00062 1.06 · EUR | `CUSA00062` | 1.06 | base + update, or the DUPLEX single-package repack | `EP9000-CUSA00062_00-ALIENATIONGAMEEU` | `c65c18865691d7288055cae70af983aa86898d59936976ef12f5eb033eda7243` |
+| CUSA04430 1.00 · ASIA/KR | `CUSA04430` | 1.00 | base | `HP9000-CUSA04430_00-ALIENATIONGAMEKR` | `11928457792fdba30aee3ceb9f5fb300bac720d0f3c1774825a8380a2dc9b72e` |
 
 The `HP` publisher prefix and `KR` suffix of CUSA04430's content ID identify an Asian (Korean) release, whatever name
 the package file has. Each build is installed in its own folder (`game\prepared\<TITLE_ID>-<version>`); choosing the
-package of an installed build again makes it the active one.
+package of an installed build again makes it the active one. The USA release (CUSA04181) is not supported: no game data
+of it was available to verify.
 
-**CUSA00062 1.06 is installed and recognized, not yet ported:** it runs without the 1.00 guest patches (native 16:9
-render size, the game's own frame rate, no Skip Intro, Exit Game or Xbox prompts) and has not been tested in game.
-Online, 1.06 players only meet 1.06 players. See [docs/GAME_BUILDS.md](docs/GAME_BUILDS.md) for the per-build feature
-table, the update's identity and what is left to port.
+Every build has the same port features: render resolution, aspect ratio and ultrawide, GPU heap scaling, the 59.94 FPS
+engine target, Skip Intro, Exit Game and the Xbox prompts, each on its own verified code. The Xbox prompts stay Xbox in
+every text language, Korean, Japanese and Chinese included. Menus confirm with Cross (A) and cancel with Circle (B) by
+default; **Asian Menu Buttons** (Controls page) switches CUSA00062 1.06 and CUSA04430 to Circle confirms and Cross
+cancels, the PS4 Asian convention, without changing gameplay buttons or prompt style. The DUPLEX package is the official
+1.06 game in one package: same executable and game data, installed with **Install game** and run as CUSA00062 1.06.
+[docs/GAME_BUILDS.md](docs/GAME_BUILDS.md) has the parity table, how each entry is verified and what is still untested
+in game.
 
 ### Installing an update
 
@@ -32,7 +37,9 @@ Install the base game first (**Install game...**), then press **Install update..
 package. The launcher checks the package's metadata (title, update category, version), refuses a base package, another
 title's update or an older update before writing anything, lays the update over the installed base in a staging folder,
 checks it and builds its boot image, and only then switches to it. A failed or cancelled update leaves the installed game
-as it was. Saves and settings are never touched. **Remove update** returns to the base game.
+as it was. Saves and settings are never touched. **Remove update** returns to the base game. The DUPLEX package already
+holds the update: install it with **Install game**. Install update then refuses the official 1.06 update before changing
+anything ("This game already contains version 1.06"), and Remove update is not offered: there is no update layer.
 
 ## Features
 
@@ -42,7 +49,7 @@ Working in the launcher:
 - Install update and Remove update, staged and checked before the installed game changes
 - Graphics card and renderer selection, window mode, monitor, VSync, presentation, SMAA, anisotropic filtering,
   FSR 1 and RCAS, frame counter, render resolution (native to 4K) and aspect ratio (16:9, 16:10, 21:9, 32:9, 4:3, 5:4),
-  and a 59.94 FPS engine target; the last three are untested in game
+  and a 59.94 FPS engine target, in every supported build
 - Keyboard mapping, Xbox and PlayStation controllers, up to four local players' controllers
 - Trophies page, bug report page, update check against this repository, GitHub Sponsors link
 

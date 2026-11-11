@@ -4,6 +4,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <string>
 #include <vector>
 
@@ -28,10 +29,7 @@ struct GlyphPatchStorage {
     uint32_t zsize = 0;
 };
 
-constexpr size_t kAtlasSize = 2048;
-constexpr size_t kAtlasPixels = kAtlasSize * kAtlasSize;
 constexpr size_t kAtlasPrefix = 16 + 0x100;
-constexpr size_t kAtlasTilesPerRow = kAtlasSize / 8;
 constexpr uint32_t kSceneType = 0x53434E45u;  // "ENCS"
 constexpr uint32_t kScriptType = 0x53435249u;  // "IRCS"
 
@@ -74,22 +72,72 @@ size_t MicroIndex(size_t x, size_t y) {
 }
 
 // The game's font atlases are 8x8-tiled R8 surfaces.
-void UntileAtlas(const unsigned char *source, unsigned char *target) {
-    for (size_t y = 0; y < kAtlasSize; ++y) {
-        for (size_t x = 0; x < kAtlasSize; ++x) {
-            const size_t tile = (y / 8) * kAtlasTilesPerRow + x / 8;
-            target[y * kAtlasSize + x] = source[tile * 64 + MicroIndex(x & 7, y & 7)];
+void UntileAtlas(const unsigned char *source, unsigned char *target, size_t width, size_t height) {
+    for (size_t y = 0; y < height; ++y) {
+        for (size_t x = 0; x < width; ++x) {
+            const size_t tile = (y / 8) * (width / 8) + x / 8;
+            target[y * width + x] = source[tile * 64 + MicroIndex(x & 7, y & 7)];
         }
     }
 }
 
-void TileAtlas(const unsigned char *source, unsigned char *target) {
-    for (size_t y = 0; y < kAtlasSize; ++y) {
-        for (size_t x = 0; x < kAtlasSize; ++x) {
-            const size_t tile = (y / 8) * kAtlasTilesPerRow + x / 8;
-            target[tile * 64 + MicroIndex(x & 7, y & 7)] = source[y * kAtlasSize + x];
+void TileAtlas(const unsigned char *source, unsigned char *target, size_t width, size_t height) {
+    for (size_t y = 0; y < height; ++y) {
+        for (size_t x = 0; x < width; ++x) {
+            const size_t tile = (y / 8) * (width / 8) + x / 8;
+            target[tile * 64 + MicroIndex(x & 7, y & 7)] = source[y * width + x];
         }
     }
+}
+
+// Paints the Xbox glyphs into one decompressed atlas and recompresses it; empty on failure, with `error` set.
+std::vector<unsigned char> RedrawAtlas(const AlnPromptGlyphAtlas &atlas, std::vector<unsigned char> payload,
+                                       std::string &error) {
+    // GNF descriptor: format in word1[25:20], dimensions in word2[13:0] and word2[27:14].
+    const unsigned char *gnf = payload.data() + 16;
+    const uint32_t format = (ReadLe32(gnf + 0x14) >> 20) & 0x3F;
+    const uint32_t dimensions = ReadLe32(gnf + 0x18);
+    const size_t width = (dimensions & 0x3FFF) + 1;
+    const size_t height = ((dimensions >> 14) & 0x3FFF) + 1;
+    if (std::memcmp(gnf, "GNF ", 4) != 0 || format != 1 || width % 8 || height % 8 ||
+        payload.size() != kAtlasPrefix + width * height) {
+        error = std::string("unexpected glyph atlas format: ") + atlas.name;
+        return {};
+    }
+
+    std::vector<unsigned char> pixels(width * height);
+    UntileAtlas(payload.data() + kAtlasPrefix, pixels.data(), width, height);
+    for (size_t mask_index = 0; mask_index < atlas.mask_count; ++mask_index) {
+        const AlnPromptGlyphMask &mask = atlas.masks[mask_index];
+        if (mask.x + mask.width > width || mask.y + mask.height > height ||
+            mask.dsize != static_cast<uint32_t>(mask.width) * mask.height) {
+            error = std::string("invalid glyph mask: ") + atlas.name;
+            return {};
+        }
+        std::vector<unsigned char> glyph(mask.dsize);
+        uLongf glyph_size = static_cast<uLongf>(glyph.size());
+        if (uncompress(glyph.data(), &glyph_size, mask.data, mask.zsize) != Z_OK || glyph_size != glyph.size()) {
+            error = std::string("glyph mask decompression failed: ") + atlas.name;
+            return {};
+        }
+        for (size_t row = 0; row < mask.height; ++row) {
+            std::memcpy(pixels.data() + (mask.y + row) * width + mask.x, glyph.data() + row * mask.width, mask.width);
+        }
+    }
+
+    TileAtlas(pixels.data(), payload.data() + kAtlasPrefix, width, height);
+    std::vector<unsigned char> packed(compressBound(static_cast<uLong>(payload.size())));
+    uLongf packed_size = static_cast<uLongf>(packed.size());
+    if (compress2(packed.data(), &packed_size, payload.data(), static_cast<uLong>(payload.size()), 9) != Z_OK) {
+        error = std::string("glyph atlas compression failed: ") + atlas.name;
+        return {};
+    }
+    packed.resize(packed_size);
+    if (static_cast<uint64_t>(40) + packed.size() > static_cast<uint64_t>(atlas.block_units) * 64) {
+        error = std::string("glyph atlas does not fit: ") + atlas.name;
+        return {};
+    }
+    return packed;
 }
 
 bool BuildGlyphPatches(std::ifstream &file, const char *build_key, uint64_t stream_size,
@@ -97,115 +145,79 @@ bool BuildGlyphPatches(std::ifstream &file, const char *build_key, uint64_t stre
     size_t count = 0;
     const AlnPromptGlyphAtlas *atlases = AlnPromptGlyphAtlases(&count);
     g_glyph_storage.clear();
-    g_glyph_storage.reserve(count);
-    std::vector<RuntimeFilePatch> glyph_patches;
-    glyph_patches.reserve(count * 2);
-    size_t applied = 0;
+    std::vector<const AlnPromptGlyphAtlas *> chosen;
+    std::vector<std::future<std::vector<unsigned char>>> jobs;
+    std::vector<std::string> errors(count);
 
     for (size_t index = 0; index < count; ++index) {
         const AlnPromptGlyphAtlas &atlas = atlases[index];
         if (std::strcmp(atlas.build, build_key) != 0) {
             continue;
         }
-        if (atlas.offset > stream_size || atlas.offset + 40 + atlas.original_zsize > stream_size) {
-            detail = std::string("glyph atlas outside the archive: ") + atlas.name;
-            g_glyph_storage.clear();
-            return false;
-        }
+        const char *problem = nullptr;
         BlockHeader header{};
-        if (!ReadAt(file, atlas.offset, &header, sizeof(header))) {
-            detail = std::string("cannot read the glyph atlas: ") + atlas.name;
-            g_glyph_storage.clear();
-            return false;
-        }
-        if (header.id0 != header.id1 || header.type != 0x54455820u ||
-            header.zsize != atlas.original_zsize || header.dsize != atlas.original_dsize ||
-            header.units != atlas.block_units) {
-            detail = std::string("unexpected glyph atlas: ") + atlas.name;
-            g_glyph_storage.clear();
-            return false;
-        }
-        std::vector<unsigned char> compressed(atlas.original_zsize);
-        if (!ReadAt(file, atlas.offset + 40, compressed.data(), compressed.size())) {
-            detail = std::string("cannot read the glyph payload: ") + atlas.name;
-            g_glyph_storage.clear();
-            return false;
-        }
-        if (Crc32(compressed.data(), compressed.size()) != atlas.original_crc32) {
-            detail = std::string("glyph atlas identity mismatch: ") + atlas.name;
-            g_glyph_storage.clear();
-            return false;
-        }
-        std::vector<unsigned char> payload(atlas.original_dsize);
-        uLongf payload_size = static_cast<uLongf>(payload.size());
-        if (uncompress(payload.data(), &payload_size, compressed.data(), static_cast<uLong>(compressed.size())) != Z_OK ||
-            payload_size != payload.size() || payload.size() != kAtlasPrefix + kAtlasPixels) {
-            detail = std::string("glyph atlas decompression failed: ") + atlas.name;
-            g_glyph_storage.clear();
-            return false;
-        }
-        // GNF descriptor: format in word1[25:20], dimensions in word2[13:0] and word2[27:14].
-        const unsigned char *gnf = payload.data() + 16;
-        const uint32_t format = (ReadLe32(gnf + 0x14) >> 20) & 0x3F;
-        const uint32_t dimensions = ReadLe32(gnf + 0x18);
-        const uint32_t width = (dimensions & 0x3FFF) + 1;
-        const uint32_t height = ((dimensions >> 14) & 0x3FFF) + 1;
-        if (std::memcmp(payload.data() + 16, "GNF ", 4) != 0 || format != 1 || width != kAtlasSize ||
-            height != kAtlasSize) {
-            detail = std::string("unexpected glyph atlas format: ") + atlas.name;
-            g_glyph_storage.clear();
-            return false;
-        }
-
-        std::vector<unsigned char> pixels(kAtlasPixels);
-        UntileAtlas(payload.data() + kAtlasPrefix, pixels.data());
-        for (size_t mask_index = 0; mask_index < atlas.mask_count; ++mask_index) {
-            const AlnPromptGlyphMask &mask = atlas.masks[mask_index];
-            if (mask.x + mask.width > kAtlasSize || mask.y + mask.height > kAtlasSize ||
-                mask.dsize != static_cast<uint32_t>(mask.width) * mask.height) {
-                detail = std::string("invalid glyph mask: ") + atlas.name;
-                g_glyph_storage.clear();
-                return false;
-            }
-            std::vector<unsigned char> glyph(mask.dsize);
-            uLongf glyph_size = static_cast<uLongf>(glyph.size());
-            if (uncompress(glyph.data(), &glyph_size, mask.data, mask.zsize) != Z_OK ||
-                glyph_size != glyph.size()) {
-                detail = std::string("glyph mask decompression failed: ") + atlas.name;
-                g_glyph_storage.clear();
-                return false;
-            }
-            for (size_t row = 0; row < mask.height; ++row) {
-                std::memcpy(pixels.data() + (mask.y + row) * kAtlasSize + mask.x,
-                            glyph.data() + row * mask.width, mask.width);
+        std::vector<unsigned char> compressed;
+        std::vector<unsigned char> payload;
+        if (atlas.offset > stream_size || atlas.offset + 40 + atlas.original_zsize > stream_size) {
+            problem = "glyph atlas outside the archive: ";
+        } else if (!ReadAt(file, atlas.offset, &header, sizeof(header))) {
+            problem = "cannot read the glyph atlas: ";
+        } else if (header.id0 != header.id1 || header.type != 0x54455820u ||
+                   header.zsize != atlas.original_zsize || header.dsize != atlas.original_dsize ||
+                   header.units != atlas.block_units) {
+            problem = "unexpected glyph atlas: ";
+        } else {
+            compressed.resize(atlas.original_zsize);
+            if (!ReadAt(file, atlas.offset + 40, compressed.data(), compressed.size())) {
+                problem = "cannot read the glyph payload: ";
+            } else if (Crc32(compressed.data(), compressed.size()) != atlas.original_crc32) {
+                problem = "glyph atlas identity mismatch: ";
+            } else {
+                payload.resize(atlas.original_dsize);
+                uLongf payload_size = static_cast<uLongf>(payload.size());
+                if (payload.size() < kAtlasPrefix ||
+                    uncompress(payload.data(), &payload_size, compressed.data(),
+                               static_cast<uLong>(compressed.size())) != Z_OK ||
+                    payload_size != payload.size()) {
+                    problem = "glyph atlas decompression failed: ";
+                }
             }
         }
-
-        GlyphPatchStorage storage;
-        std::vector<unsigned char> plain(kAtlasPrefix + kAtlasPixels);
-        std::memcpy(plain.data(), payload.data(), kAtlasPrefix);
-        TileAtlas(pixels.data(), plain.data() + kAtlasPrefix);
-        std::vector<unsigned char> packed(compressBound(static_cast<uLong>(plain.size())));
-        uLongf packed_size = static_cast<uLongf>(packed.size());
-        if (compress2(packed.data(), &packed_size, plain.data(), static_cast<uLong>(plain.size()), 9) != Z_OK) {
-            detail = std::string("glyph atlas compression failed: ") + atlas.name;
-            g_glyph_storage.clear();
+        if (problem) {
+            for (auto &job : jobs) {
+                job.wait();
+            }
+            detail = std::string(problem) + atlas.name;
             return false;
         }
-        packed.resize(packed_size);
-        storage.payload = std::move(packed);
-        if (static_cast<uint64_t>(40) + storage.payload.size() > static_cast<uint64_t>(atlas.block_units) * 64) {
-            detail = std::string("glyph atlas does not fit: ") + atlas.name;
-            g_glyph_storage.clear();
-            return false;
-        }
-        storage.zsize = static_cast<uint32_t>(storage.payload.size());
-        g_glyph_storage.push_back(std::move(storage));
-        GlyphPatchStorage &stored = g_glyph_storage.back();
-        glyph_patches.push_back({atlas.offset + 4, 4, &stored.zsize});
-        glyph_patches.push_back({atlas.offset + 40, stored.payload.size(), stored.payload.data()});
-        ++applied;
+        // The CJK atlases are 4096 square: redrawing and recompressing them one after another takes several seconds.
+        const size_t slot = chosen.size();
+        chosen.push_back(&atlas);
+        jobs.push_back(std::async(std::launch::async, RedrawAtlas, std::cref(atlas), std::move(payload),
+                                  std::ref(errors[slot])));
     }
+
+    g_glyph_storage.resize(chosen.size());
+    std::string failure;
+    for (size_t slot = 0; slot < chosen.size(); ++slot) {
+        g_glyph_storage[slot].payload = jobs[slot].get();
+        if (g_glyph_storage[slot].payload.empty() && failure.empty()) {
+            failure = errors[slot];
+        }
+    }
+    if (!failure.empty()) {
+        g_glyph_storage.clear();
+        detail = failure;
+        return false;
+    }
+    std::vector<RuntimeFilePatch> glyph_patches;
+    for (size_t slot = 0; slot < chosen.size(); ++slot) {
+        GlyphPatchStorage &stored = g_glyph_storage[slot];
+        stored.zsize = static_cast<uint32_t>(stored.payload.size());
+        glyph_patches.push_back({chosen[slot]->offset + 4, 4, &stored.zsize});
+        glyph_patches.push_back({chosen[slot]->offset + 40, stored.payload.size(), stored.payload.data()});
+    }
+    const size_t applied = chosen.size();
 
     if (!applied) {
         detail = "no glyph atlases for the build";

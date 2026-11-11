@@ -21,7 +21,7 @@ constexpr const char* kAsia100DataFiles[] = {
 
 // The display configuration's default size: mov dword [rdi+0x34], 1080 and mov dword [rdi+0x30], 1920. The engine sizes
 // its frontbuffers and every render script's RENDER_RESOLUTION_X/Y from it.
-// The game's startup functions (two identical copies, the same offsets in both builds) set the size of the GPU heap that
+// The game's startup functions (two identical copies, the same offsets in every build) set the size of the GPU heap that
 // holds the render targets and textures: mov qword [rbp-0x78], 1 GiB. The heap's allocator returns a null block when it
 // is full and the game never checks it, so a larger target needs a larger heap.
 constexpr AlnResolutionSite kEurope100ResolutionSites[] = {
@@ -37,8 +37,19 @@ constexpr AlnResolutionSite kAsia100ResolutionSites[] = {
     {0x1fb4f1, 3, {0xc7, 0x47, 0x30}, 1920, 0, 0},
 };
 
+constexpr AlnResolutionSite kEurope106ResolutionSites[] = {
+    {0x3bb, 4, {0x48, 0xc7, 0x45, 0x88}, 0x40000000, 0, 1},
+    {0x47b, 4, {0x48, 0xc7, 0x45, 0x88}, 0x40000000, 0, 1},
+    {0x1fd98a, 3, {0xc7, 0x47, 0x34}, 1080, 1, 0},
+    {0x1fd991, 3, {0xc7, 0x47, 0x30}, 1920, 0, 0},
+};
+
 constexpr AlnFrameRatePatch kEurope100FrameRate = {0x2507b0, {0x48, 0x8b, 0x47, 0x28}, {0x31, 0xc0, 0xc3, 0x90}};
+constexpr AlnFrameRatePatch kEurope106FrameRate = {0x253f10, {0x48, 0x8b, 0x47, 0x28}, {0x31, 0xc0, 0xc3, 0x90}};
 constexpr AlnFrameRatePatch kAsia100FrameRate = {0x2513c0, {0x48, 0x8b, 0x47, 0x28}, {0x31, 0xc0, 0xc3, 0x90}};
+
+// The DUPLEX repack: base and 1.06 update in one gd package whose eboot.bin and game data are the official 1.06 ones.
+constexpr PackageAlias kEurope106Aliases[] = {{"single-package repack", "gd", "01.00", "01.06"}};
 
 constexpr GameBuild kGameBuilds[] = {
     {
@@ -49,12 +60,11 @@ constexpr GameBuild kGameBuilds[] = {
         "f5f41f870db752add56920c5538441bc3750b1442f69c1de3895ee282887d855",
         kEuropeDataFiles,
         "CUSA00062 1.00",
-        "Europe",
+        "EUR",
         kBase100Layers,
         kEurope100ResolutionSites,
         &kEurope100FrameRate,
     },
-    // No patch site is verified in this executable yet: it runs without the 1.00 guest patches.
     {
         "CUSA00062",
         "EP9000-CUSA00062_00-ALIENATIONGAMEEU",
@@ -63,10 +73,11 @@ constexpr GameBuild kGameBuilds[] = {
         "c65c18865691d7288055cae70af983aa86898d59936976ef12f5eb033eda7243",
         kEuropeDataFiles,
         "CUSA00062 1.06",
-        "Europe",
+        "EUR",
         kUpdate106Layers,
-        {},
-        nullptr,
+        kEurope106ResolutionSites,
+        &kEurope106FrameRate,
+        kEurope106Aliases,
     },
     {
         "CUSA04430",
@@ -76,7 +87,7 @@ constexpr GameBuild kGameBuilds[] = {
         "11928457792fdba30aee3ceb9f5fb300bac720d0f3c1774825a8380a2dc9b72e",
         kAsia100DataFiles,
         "CUSA04430 1.00",
-        "Asia",
+        "ASIA/KR",
         kBase100Layers,
         kAsia100ResolutionSites,
         &kAsia100FrameRate,
@@ -107,9 +118,15 @@ const PackageLayer& FinishedLayer(const GameBuild& build) {
     return build.layers.back();
 }
 
-std::string BuildMetadataText(const GameBuild& build) {
+std::string BuildMetadataText(const GameBuild& build, const PackageAlias* alias) {
     const PackageLayer& finished = FinishedLayer(build);
-    return "APP_VER " + DisplayVersion(finished.app_ver) + " \xC2\xB7 VERSION " + DisplayVersion(finished.sfo_version);
+    const char* app_ver = alias ? alias->app_ver : finished.app_ver;
+    const char* sfo_version = alias ? alias->sfo_version : finished.sfo_version;
+    return "APP_VER " + DisplayVersion(app_ver) + " \xC2\xB7 VERSION " + DisplayVersion(sfo_version);
+}
+
+std::string BuildDisplayName(const GameBuild& build) {
+    return std::string(build.label) + " \xC2\xB7 " + build.region;
 }
 
 const GameBuild* BaseBuildOf(const GameBuild& build, std::span<const GameBuild> builds) {
@@ -136,7 +153,7 @@ std::string SupportedBuildsText() {
         if (i > 0) {
             text += i + 1 == builds.size() ? Tr(" and ") : ", ";
         }
-        text += builds[i].label;
+        text += BuildDisplayName(builds[i]);
     }
     return text;
 }

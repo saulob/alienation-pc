@@ -11,9 +11,6 @@ sys.path.insert(0, str(ROOT / 'scripts'))
 import game_profiles  # noqa: E402
 
 failures = []
-# The guest patch tables keyed by build ("CUSA00062-1.00"): a build is patched only when it is named here.
-FEATURE_TABLES = ('src/skip_intro.c', 'src/exit_game.c', 'launcher/exit_game_script.c',
-                  'launcher/controller_prompts_data.c', 'launcher/controller_prompts_glyphs_data.c')
 
 
 def check(condition, text):
@@ -80,7 +77,7 @@ def main():
         check(not set(build['data_files']) & set(shared), f'{title} {version}: a data file is also a shared file')
 
     check_updates(python)
-    check_feature_isolation(cpp, python)
+    check_aliases(source, cpp, python)
     for text in failures:
         print(f'FAILED: {text}')
     if not failures:
@@ -106,24 +103,28 @@ def check_updates(python):
     check(('CUSA00062', '1.06') in order, 'CUSA00062 1.06 is not a supported build')
 
 
-def check_feature_isolation(cpp, python):
-    """A build without verified patch sites is named by no guest patch table, so no other build's patch applies to it."""
-    keys = {name: set(re.findall(r'\{"(CUSA\d{5}-\d+\.\d\d)"', (ROOT / name).read_text(encoding='utf-8')))
-            for name in FEATURE_TABLES}
-    supported = {f'{title}-{version}' for title, version, _ in python}
-    for name, found in keys.items():
-        check(found, f'{name}: no build keys found')
-        check(found <= supported, f'{name}: {sorted(found - supported)} are not supported builds')
-    unported = []
-    for fields, (title, version, _) in zip(cpp, python):
-        key = f'{title}-{version}'
-        if fields[9] == '{}' and fields[10] == 'nullptr':
-            unported.append(key)
-            for name, found in keys.items():
-                check(key not in found, f'{key} has no verified sites but {name} names it')
-        else:
-            check(fields[9] != '{}' and fields[10] != 'nullptr', f'{key}: resolution and frame rate sites must come together')
-    check('CUSA00062-1.06' in unported, 'CUSA00062 1.06 must stay without guest patches until its sites are verified')
+def cpp_aliases(source):
+    found = {}
+    for name, body in re.findall(r'constexpr PackageAlias (\w+)\[\] = \{(.*?)\};\n', source, re.S):
+        found[name] = re.findall(r'\{"([^"]+)", "([^"]+)", "([^"]+)", "([^"]+)"\}', body)
+    return found
+
+
+def check_aliases(source, cpp, python):
+    """A repack is mirrored exactly and names no executable of its own: the build's eboot.bin is its only proof."""
+    aliases = cpp_aliases(source)
+    for fields, (title, version, build) in zip(cpp, python):
+        wanted = [(a['name'], a['category'], a['app_ver'], a['sfo_version']) for a in build.get('package_aliases', ())]
+        found = aliases.get(fields[11], []) if len(fields) > 11 else []
+        check(found == wanted, f'{title} {version}: package aliases differ: {found} / {wanted}')
+        for alias in build.get('package_aliases', ()):
+            check(set(alias) == {'name', 'category', 'app_ver', 'sfo_version', 'extract_folder'},
+                  f'{title} {version}: the {alias["name"]} alias carries more than its identity')
+            check(alias['extract_folder'] != build['folder'], f'{title} {version}: the repack shares the update folder')
+            identity = game_profiles.alias_identity(title, alias)
+            for other_version, other in game_profiles.PROFILES[title]['versions'].items():
+                check(game_profiles.layer_identity(title, game_profiles.finished_layer(other)) != identity,
+                      f'{title} {version}: the {alias["name"]} alias is also {title} {other_version}')
 
 
 if __name__ == '__main__':

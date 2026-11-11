@@ -69,6 +69,8 @@ int aln_detailed_logging(const char *settings_file);
 
 /* 1 when the settings file skips the intro video (skip_intro; 0 by default). */
 int aln_skip_intro(const char *settings_file);
+/* Asian Menu Buttons: 1 when Circle confirms in the menus. */
+int aln_asian_menu_buttons(const char *settings_file);
 
 /* What the loader decided for this run: the parts of the "Settings:" log lines the settings file alone does not say. */
 typedef struct AlnRunSettings {

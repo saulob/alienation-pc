@@ -183,12 +183,23 @@ void TestProfile() {
     CHECK(std::string(eu106.eboot_sha256) != eu100.eboot_sha256);
     CHECK(BuildMetadataText(eu106) == "APP_VER 1.06 \xC2\xB7 VERSION 1.00");
     CHECK(BuildMetadataText(eu100) == "APP_VER 1.00 \xC2\xB7 VERSION 1.00");
-    // No 1.00 patch applies to 1.06: it has no sites of its own yet.
-    CHECK(eu106.resolution_sites.empty() && eu106.frame_rate == nullptr);
-    CHECK(RestrictedToNativeResolution(&eu106));
+    // 1.06 has its own verified sites, never 1.00's offsets.
+    CHECK(eu106.resolution_sites.size() == 4 && eu106.frame_rate != nullptr);
+    CHECK(eu106.frame_rate->offset != eu100.frame_rate->offset);
+    CHECK(eu106.resolution_sites[2].offset != eu100.resolution_sites[2].offset);
+    CHECK(!RestrictedToNativeResolution(&eu106));
     CHECK(!RestrictedToNativeResolution(&eu100) && eu100.frame_rate != nullptr);
     CHECK(!RestrictedToNativeResolution(&kr100) && kr100.frame_rate != nullptr);
-    CHECK(SupportedBuildsText().find("CUSA00062 1.06") != std::string::npos);
+    CHECK(SupportedBuildsText() == "CUSA00062 1.00 \xC2\xB7 EUR, CUSA00062 1.06 \xC2\xB7 EUR and CUSA04430 1.00 \xC2\xB7 ASIA/KR");
+    CHECK(BuildDisplayName(kr100) == "CUSA04430 1.00 \xC2\xB7 ASIA/KR");
+    for (const GameBuild& build : builds) {
+        CHECK(std::string_view(build.region).find("USA") == std::string_view::npos);
+    }
+    CHECK(SupportedBuildsText().find(" USA") == std::string::npos);
+    CHECK(SupportedBuildsText().find("CUSA04181") == std::string::npos);
+    // Only 1.06 has a repack, and it carries no executable of its own: the build's eboot.bin is the proof.
+    CHECK(eu100.package_aliases.empty() && kr100.package_aliases.empty() && eu106.package_aliases.size() == 1);
+    CHECK(BuildMetadataText(eu106, &eu106.package_aliases[0]) == "APP_VER 1.00 \xC2\xB7 VERSION 1.06");
 }
 
 void TestIdentity() {
@@ -214,9 +225,31 @@ void TestIdentity() {
     CHECK(CheckSfoIdentity(FinishedSfo(eu100)).build == &eu100);
     CHECK(CheckSfoIdentity(FinishedSfo(Build("CUSA04430-1.00"))).build == &Build("CUSA04430-1.00"));
     CHECK(CheckSfoIdentity(PackageSfo(kEurope, kEuropeContent, "gp", "01.05", "01.00")).state != GameFileState::kValid);
+    CHECK(CheckSfoIdentity(FinishedSfo(eu106)).alias == nullptr);
 }
 
-// The loader's view of a boot image: 1.06 is a known build that gets none of the 1.00 patch sites.
+// The DUPLEX repack (gd, APP_VER 01.00, VERSION 01.06) is a complete package of 1.06, recognized by its metadata only as
+// a candidate: the installer and the readiness check then require 1.06's eboot.bin.
+void TestRepackIdentity() {
+    const GameBuild& eu106 = Build("CUSA00062-1.06");
+    const std::string duplex = PackageSfo(kEurope, kEuropeContent, "gd", "01.00", "01.06");
+    const GameCheck package = CheckPackageIdentity(duplex);
+    CHECK(package.state == GameFileState::kValid && package.build == &eu106 && package.layer == 0);
+    CHECK(package.alias == &eu106.package_aliases[0]);
+    const GameCheck installed = CheckSfoIdentity(duplex);
+    CHECK(installed.build == &eu106 && installed.alias == &eu106.package_aliases[0]);
+    // Only that exact identity: other categories, versions or titles stay unknown.
+    CHECK(CheckPackageIdentity(PackageSfo(kEurope, kEuropeContent, "gp", "01.00", "01.06")).state != GameFileState::kValid);
+    CHECK(CheckPackageIdentity(PackageSfo(kEurope, kEuropeContent, "gd", "01.00", "01.07")).state != GameFileState::kValid);
+    CHECK(CheckPackageIdentity(PackageSfo(kEurope, kEuropeContent, "gd", "01.06", "01.06")).state != GameFileState::kValid);
+    CHECK(CheckPackageIdentity(PackageSfo("CUSA04430", "HP9000-CUSA04430_00-ALIENATIONGAMEKR", "gd", "01.00", "01.06"))
+              .state != GameFileState::kValid);
+    CHECK(CheckPackageIdentity(PackageSfo(kEurope, "EP9000-CUSA00062_00-SOMEOTHERCONTENT", "gd", "01.00", "01.06")).state !=
+          GameFileState::kValid);
+    CHECK(BuildKey(*package.build) == "CUSA00062-1.06");
+}
+
+// The loader's view of a boot image: each build gets its own patch sites; a repack's image is the build's.
 void TestLoaderBuild(const fs::path& scratch) {
     const auto image = [&](const char* name, const char* title, const char* app_ver, const char* sha) {
         const fs::path dir = scratch / "images" / name;
@@ -229,13 +262,18 @@ void TestLoaderBuild(const fs::path& scratch) {
     AlnGameBuild found{};
     CHECK(aln_game_build(image("106", kEurope, "01.06", eu106.eboot_sha256).c_str(), &found) == 1);
     CHECK(std::string(found.label) == "CUSA00062 1.06" && std::string(found.version) == "1.06");
-    CHECK(found.resolution_site_count == 0 && found.frame_rate == nullptr);
+    CHECK(found.resolution_site_count == 4 && found.frame_rate == eu106.frame_rate);
+    CHECK(found.resolution_sites == eu106.resolution_sites.data());
+    found = {};
+    CHECK(aln_game_build(image("duplex", kEurope, "01.00", eu106.eboot_sha256).c_str(), &found) == 1);
+    CHECK(std::string(found.version) == "1.06" && found.frame_rate == eu106.frame_rate);
     found = {};
     CHECK(aln_game_build(image("100", kEurope, "01.00", eu100.eboot_sha256).c_str(), &found) == 1);
     CHECK(std::string(found.version) == "1.00" && found.resolution_site_count == 4 && found.frame_rate != nullptr);
-    // A 1.00 executable named as 1.06 (or the reverse) is no supported build, so nothing is patched.
+    CHECK(found.frame_rate == eu100.frame_rate);
+    // A 1.00 executable named as 1.06 is no supported build, so nothing is patched; the executable decides.
     CHECK(aln_game_build(image("mixed", kEurope, "01.06", eu100.eboot_sha256).c_str(), &found) == 0);
-    CHECK(aln_game_build(image("mixed2", kEurope, "01.00", eu106.eboot_sha256).c_str(), &found) == 0);
+    CHECK(aln_game_build(image("other", kEurope, "01.07", eu106.eboot_sha256).c_str(), &found) == 0);
 }
 
 void TestStageUpdateKeepsBase(const fs::path& scratch) {
@@ -317,6 +355,20 @@ void TestPackageGates(const fs::path& scratch) {
     CHECK(attempt(update, PackageKind::kAny).status == InstallStatus::kUpdateNeedsBase);
     unchanged(&eu100);
 
+    // The DUPLEX repack is a complete game: Install update refuses it as such, and Install game reaches its executable
+    // check (this stand-in carries no files, so it stops there with nothing written).
+    const fs::path repack = packages / "Alienation.PS4-DUPLEX.pkg";
+    WriteSfoOnlyPackage(repack, PackageSfo(kEurope, kEuropeContent, "gd", "01.00", "01.06"));
+    result = attempt(repack, PackageKind::kUpdate);
+    CHECK(result.status == InstallStatus::kExpectedUpdatePackage && result.repack);
+    CHECK(DescribeInstall(result).title == "This is a complete game package");
+    CHECK(result.recognition.find("is CUSA00062 1.06 \xC2\xB7 EUR (single-package repack, APP_VER 1.00 \xC2\xB7 VERSION 1.06") !=
+          std::string::npos);
+    CHECK(result.recognition.find(eu106.eboot_sha256) != std::string::npos);
+    result = attempt(repack, PackageKind::kBase);
+    CHECK(!result.ok() && result.repack && result.build == nullptr);
+    unchanged(&eu100);
+
     // An update of another title than the active game's is refused, even when its base is installed too.
     MakeActive(roots, kr100, 3);
     snapshot();
@@ -363,6 +415,7 @@ constexpr char kTestContent[] = "EP9000-CUSA99999_00-ALIENATIONTEST00";
 constexpr PackageLayer kTestBase[] = {{"01.00", "01.00", false}};
 constexpr PackageLayer kTest106[] = {{"01.00", "01.00", false}, {"01.06", "01.00", true}};
 constexpr PackageLayer kTest108[] = {{"01.00", "01.00", false}, {"01.08", "01.00", true}};
+constexpr PackageAlias kTestRepack[] = {{"single-package repack", "gd", "01.00", "01.06"}};
 
 // A build table of synthetic executables, so complete folders and boot images can be laid out without game files.
 struct TestBuilds {
@@ -375,7 +428,7 @@ struct TestBuilds {
         builds[0] = {kTestTitle, kTestContent, "1.00", "CUSA99999-1.00", sha[0].c_str(), {}, "CUSA99999 1.00", "Test",
                      kTestBase, {}, nullptr};
         builds[1] = {kTestTitle, kTestContent, "1.06", "CUSA99999-1.06", sha[1].c_str(), {}, "CUSA99999 1.06", "Test",
-                     kTest106, {}, nullptr};
+                     kTest106, {}, nullptr, kTestRepack};
         builds[2] = {kTestTitle, kTestContent, "1.08", "CUSA99999-1.08", sha[2].c_str(), {}, "CUSA99999 1.08", "Test",
                      kTest108, {}, nullptr};
     }
@@ -531,7 +584,7 @@ void TestVersionRefreshAndRemoval(const fs::path& scratch) {
     const GameCheck check = CheckGameFiles(active, builds);
     CHECK(check.state == GameFileState::kValid && check.build == &update);
     CHECK(BuildMetadataText(*check.build) == "APP_VER 1.06 \xC2\xB7 VERSION 1.00");
-    CHECK(InstalledGameName(check.state, check.build) == "PS4 CUSA99999 1.06");
+    CHECK(InstalledGameName(check.state, check.build) == "PS4 CUSA99999 1.06 \xC2\xB7 Test");
 
     hooks.replace_active = false;
     CHECK(InstallFromFolder(update_source, roots, hooks, builds).status == InstallStatus::kUpToDate);
@@ -571,6 +624,138 @@ void TestVersionRefreshAndRemoval(const fs::path& scratch) {
     Write(update_paths.app0 / "sce_sys" / "param.sfo", FinishedSfo(builds[2]));
     CHECK(RemoveInstalledUpdate(roots, update, builds).status == RemoveStatus::kForeignFolder);
     CHECK(fs::exists(update_paths.app0 / "eboot.bin"));
+    fs::remove_all(root, ec);
+}
+
+// A repack folder installs with Install game as the build it repacks, only with that build's executable; installed, it is
+// the build itself, not an update laid over a base, so Remove update leaves it alone.
+void TestRepackInstall(const fs::path& scratch) {
+    const TestBuilds test;
+    const auto builds = test.span();
+    const fs::path root = scratch / "repack";
+    const GameRoots roots{root / "prepared", root / "image"};
+    const GameBuild& update = builds[1];
+    const std::string repack_sfo = PackageSfo(kTestTitle, kTestContent, "gd", "01.00", "01.06");
+    const fs::path source = root / "source";
+    WriteGameFolder(source, update);
+    Write(source / "sce_sys" / "param.sfo", repack_sfo);
+    const GameCheck tree = CheckGameTree(source, builds);
+    CHECK(tree.state == GameFileState::kValid && tree.build == &update && tree.alias == &update.package_aliases[0]);
+
+    InstallHooks hooks;
+    hooks.expected = PackageKind::kUpdate;
+    InstallResult result = InstallFromFolder(source, roots, hooks, builds);
+    CHECK(result.status == InstallStatus::kExpectedUpdatePackage && result.repack);
+    // Install game takes it; the synthetic executable cannot become a boot image, the last step before the swap.
+    hooks.expected = PackageKind::kBase;
+    result = InstallFromFolder(source, roots, hooks, builds);
+    CHECK(result.status == InstallStatus::kPrepareFailed);
+    CHECK(!fs::exists(BuildPaths(roots, update).app0) && !AnyStaging(roots.prepared));
+
+    // The same metadata with another executable is an unknown repack, refused with its identity.
+    Write(source / "eboot.bin", TestBuilds::Eboot("1.00"));
+    CHECK(CheckGameTree(source, builds).state == GameFileState::kDifferentVersion);
+    result = InstallFromFolder(source, roots, hooks, builds);
+    CHECK(result.status == InstallStatus::kUnsupportedBuild);
+    CHECK(!result.diagnostics.empty() && result.diagnostics[0].find("APP_VER 01.00, VERSION 01.06, CATEGORY gd") !=
+                                             std::string::npos);
+    CHECK(!fs::exists(BuildPaths(roots, update).app0));
+
+    // Installed from the repack: valid as the build, with the repack's own metadata in its boot image report.
+    const GamePaths paths = BuildPaths(roots, update);
+    WritePrepared(roots, update);
+    Write(paths.app0 / "sce_sys" / "param.sfo", repack_sfo);
+    Write(paths.image_dir / "image.json", std::string("{\"title_id\": \"") + kTestTitle +
+                                              "\", \"app_ver\": \"01.00\", \"eboot_sha256\": \"" + update.eboot_sha256 + "\"}");
+    const GameCheck installed = CheckGameFiles(paths, builds);
+    CHECK(installed.state == GameFileState::kValid && installed.build == &update && installed.alias != nullptr);
+    CHECK(InstalledPackageAlias(paths.app0, update) == &update.package_aliases[0]);
+    CHECK(InstalledUpdatesOf(roots, kTestTitle, builds).empty());
+    CHECK(RemoveInstalledUpdate(roots, update, builds).status == RemoveStatus::kNotUpdate);
+    const RemoveAllResult removed = RemoveInstalledUpdatesOf(roots, kTestTitle, builds);
+    CHECK(removed.ok() && removed.removed == 0);
+    CHECK(fs::exists(paths.app0 / "eboot.bin") && fs::exists(paths.image_dir / "boot.bin"));
+    // Installed over the official packages instead, it is an update again.
+    Write(paths.app0 / "sce_sys" / "param.sfo", FinishedSfo(update));
+    CHECK(InstalledPackageAlias(paths.app0, update) == nullptr);
+    CHECK(InstalledUpdatesOf(roots, kTestTitle, builds).size() == 1);
+    std::error_code ec;
+    fs::remove_all(root, ec);
+}
+
+// The installation's provenance decides the update actions, whatever the runtime build: an update laid over its base is
+// up to date when applied again and can be removed; a complete repack of the same build already contains it, refuses it
+// before anything is written and has no update to remove. The launcher asks every installation to replace a ready game.
+void TestInstallLineage(const fs::path& scratch) {
+    const TestBuilds test;
+    const auto builds = test.span();
+    const fs::path root = scratch / "lineage";
+    const GameRoots roots{root / "prepared", root / "image"};
+    const GameBuild& base = builds[0];
+    const GameBuild& update = builds[1];
+    const std::string repack_sfo = PackageSfo(kTestTitle, kTestContent, "gd", "01.00", "01.06");
+    const fs::path update_source = root / "source-106", repack_source = root / "source-repack";
+    WriteGameFolder(update_source, update);
+    WriteGameFolder(repack_source, update);
+    Write(repack_source / "sce_sys" / "param.sfo", repack_sfo);
+    const auto attempt = [&](const fs::path& source, PackageKind kind, bool replace) {
+        InstallHooks hooks;
+        hooks.expected = kind;
+        hooks.replace_active = replace;
+        return InstallFromFolder(source, roots, hooks, builds);
+    };
+    const auto snapshot = [&] { return std::make_pair(Tree(roots.prepared), Tree(roots.image)); };
+
+    // Official base, then the official update: it passes every gate (the synthetic executable stops at the boot image).
+    WritePrepared(roots, base);
+    MakeActive(roots, base, 1);
+    CHECK(InstalledProvenance(BuildPaths(roots, base).app0, base) == InstallProvenance::kBasePackage);
+    CHECK(attempt(update_source, PackageKind::kUpdate, true).status == InstallStatus::kPrepareFailed);
+
+    // The update laid over the base and active: the same update again is up to date, nothing is re-applied.
+    const GamePaths paths = BuildPaths(roots, update);
+    WritePrepared(roots, update);
+    MakeActive(roots, update, 2);
+    CHECK(InstalledProvenance(paths.app0, update) == InstallProvenance::kUpdateLayers);
+    auto before = snapshot();
+    InstallResult result = attempt(update_source, PackageKind::kUpdate, true);
+    CHECK(result.status == InstallStatus::kUpToDate && snapshot() == before);
+    CHECK(InstalledUpdatesOf(roots, kTestTitle, builds).size() == 1);
+
+    // The repack in the build's folder: the official update is already contained, refused as such and not as older.
+    Write(paths.app0 / "sce_sys" / "param.sfo", repack_sfo);
+    CHECK(InstalledProvenance(paths.app0, update) == InstallProvenance::kRepack);
+    CHECK(CheckGameFiles(paths, builds).state == GameFileState::kValid);
+    before = snapshot();
+    result = attempt(update_source, PackageKind::kUpdate, true);
+    CHECK(result.status == InstallStatus::kAlreadyContainsUpdate && result.contained_version == "1.06");
+    CHECK(DescribeInstall(result).title == "This game already contains version 1.06");
+    CHECK(snapshot() == before);
+    MakeActive(roots, base, 3);
+    CHECK(attempt(update_source, PackageKind::kUpdate, true).status == InstallStatus::kAlreadyContainsUpdate);
+    CHECK(snapshot().first.size() == before.first.size());
+    MakeActive(roots, update, 4);
+
+    // No update layer to remove, so no way back to the base through Remove update: the repack stays the build.
+    CHECK(InstalledUpdatesOf(roots, kTestTitle, builds).empty());
+    const RemoveAllResult removed = RemoveInstalledUpdatesOf(roots, kTestTitle, builds);
+    CHECK(removed.ok() && removed.removed == 0 && LastPreparedBuild(roots, builds) == &update);
+    CHECK(CheckGameFiles(paths, builds).state == GameFileState::kValid);
+
+    // Install game with the repack again: up to date, or the launcher's reinstall, which leaves it as it was on failure.
+    CHECK(attempt(repack_source, PackageKind::kBase, false).status == InstallStatus::kUpToDate);
+    CHECK(attempt(repack_source, PackageKind::kBase, true).status == InstallStatus::kPrepareFailed);
+    CHECK(InstalledProvenance(paths.app0, update) == InstallProvenance::kRepack);
+    CHECK(LastPreparedBuild(roots, builds) == &update && !AnyStaging(roots.prepared));
+
+    // Another title's game is refused before anything is written.
+    const fs::path foreign = root / "source-foreign";
+    WriteGameFolder(foreign, update);
+    Write(foreign / "sce_sys" / "param.sfo",
+          PackageSfo("CUSA99998", "EP9000-CUSA99998_00-ALIENATIONTEST00", "gp", "01.06", "01.00"));
+    before = snapshot();
+    CHECK(!attempt(foreign, PackageKind::kUpdate, true).ok() && snapshot() == before);
+    std::error_code ec;
     fs::remove_all(root, ec);
 }
 
@@ -614,7 +799,9 @@ void TestRealPackages(const fs::path& scratch) {
         std::printf("real package: %s is %s, layer %zu\n", Utf8(it->path().filename()).c_str(), identity.build->label,
                     identity.layer);
         if (identity.build == &eu106) {
-            CHECK(identity.layer == 1 && SfoString(package.sfo(), "CATEGORY") == "gp");
+            const bool repack = identity.alias != nullptr;
+            CHECK(repack ? identity.layer == 0 && SfoString(package.sfo(), "CATEGORY") == "gd"
+                         : identity.layer == 1 && SfoString(package.sfo(), "CATEGORY") == "gp");
             std::vector<uint8_t> eboot;
             CHECK(package.LoadFiles().ok() && package.ReadFile("eboot.bin", 512ull << 20, eboot).ok());
             CHECK(Sha256(std::string(eboot.begin(), eboot.end())) == eu106.eboot_sha256);
@@ -622,8 +809,18 @@ void TestRealPackages(const fs::path& scratch) {
             hooks.expected = PackageKind::kUpdate;
             const auto before = Tree(root);
             const InstallResult refused = InstallFromPackage(it->path(), roots, hooks);
-            CHECK(refused.status == InstallStatus::kUpdateForOtherTitle);
+            CHECK(refused.status == (repack ? InstallStatus::kExpectedUpdatePackage : InstallStatus::kUpdateForOtherTitle));
             CHECK(Tree(root) == before);
+            if (!repack) {
+                // With the DUPLEX repack installed as 1.06, the official update is already contained.
+                const GamePaths duplex = BuildPaths(roots, eu106);
+                Write(duplex.app0 / "sce_sys" / "param.sfo", PackageSfo(kEurope, kEuropeContent, "gd", "01.00", "01.06"));
+                Write(duplex.app0 / kPreparedMarker, "{\"version\": \"1.06\", \"scope\": \"full\"}");
+                const auto with_repack = Tree(root);
+                CHECK(InstallFromPackage(it->path(), roots, hooks).status == InstallStatus::kAlreadyContainsUpdate);
+                CHECK(Tree(root) == with_repack);
+                fs::remove_all(duplex.app0, ec);
+            }
         } else {
             CHECK(identity.layer == 0 && (identity.build == &eu100 || identity.build == &kr100));
         }
@@ -641,12 +838,15 @@ int main() {
     fs::create_directories(scratch);
     TestProfile();
     TestIdentity();
+    TestRepackIdentity();
     TestLoaderBuild(scratch);
     TestStageUpdateKeepsBase(scratch);
     TestPackageGates(scratch);
     TestOlderUpdate(scratch);
     TestFailedInstallKeepsGame(scratch);
     TestVersionRefreshAndRemoval(scratch);
+    TestRepackInstall(scratch);
+    TestInstallLineage(scratch);
     TestLauncherWiring();
     TestRealPackages(scratch);
     fs::remove_all(scratch, ec);

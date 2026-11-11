@@ -15,10 +15,12 @@
 #include "startup_phase.h"
 #include "boot_diagnostic.h"
 #include "aln_frame_rate.h"
+#include "aln_menu_buttons.h"
 #include "aln_resolution.h"
 #include "skip_intro.h"
 #include "exit_game.h"
 #include "exit_game_stream.h"
+#include "text_fix.h"
 #include "controller_prompts.h"
 #include "runtime_log.h"
 #include "aln_image_format.h"
@@ -649,6 +651,10 @@ int main(int argc, char **argv) {
                 printf("Controller prompts: %s\n",prompts_detail[0] ? prompts_detail : "PlayStation (original)");
             else
                 printf("Controller prompts: Xbox unavailable (%s)\n",prompts_detail);
+            char text_detail[160]="";
+            const int fixed=aln_text_fix_install(app0,build_key,text_detail,sizeof(text_detail));
+            if (fixed>0) printf("Text fixes: %s\n",text_detail);
+            else if (fixed<0) printf("Text fixes: unavailable (%s)\n",text_detail);
         }
         char sfo[4096], id[16]="";
         snprintf(sfo,sizeof(sfo),"%s/sce_sys/param.sfo",app0);
@@ -903,6 +909,12 @@ int main(int argc, char **argv) {
             fail_running(message);
         }
         printf("Frame rate: the game's engine_set_fps script calls are ignored; the engine's startup target stays 59.94\n");
+    }
+    if (known_build) {
+        char message[160];
+        aln_menu_buttons_apply(image,size,build_key,aln_menu_buttons_wanted(aln_asian_menu_buttons(settings_file)),
+                               message,sizeof(message));
+        printf("Asian menu buttons: %s\n",message);
     }
     if (skip_intro_requested) {
         if (known_build) skip_intro_install(image,size,build_key,image+round_page(size),skip_intro_bytes);

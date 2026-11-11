@@ -30,6 +30,7 @@
 #include "aln_png.h"
 #include "aln_displays.h"
 #include "aln_graphics.h"
+#include "aln_menu_buttons.h"
 #include "aln_resolution.h"
 #include "game_files.h"
 #include "game_install.h"
@@ -146,6 +147,9 @@ constexpr char kShowResolutionTitleHelp[] =
     "Shows the game's render resolution in the window title: Alienation | 1920x1080";
 constexpr char kFrameCounterHelp[] = "Shows the frame rate and frame time in a corner of the game.";
 constexpr char kSkipIntroHelp[] = "Skip startup videos and go directly to the title screen";
+constexpr char kAsianMenuButtonsHelp[] =
+    "Off: %s confirms and %s cancels in menus. On: %s confirms and %s cancels, as in the Asian release. Gameplay "
+    "controls do not change. Applies at the next game start.";
 constexpr char kAllowOverlayProgramsHelp[] =
     "For programs that draw over games (recording, chat, store and performance overlays). On, PLAY starts the game as a "
     "separate program from this launcher, so they can attach to it cleanly. Off starts the game the usual way.";
@@ -504,6 +508,7 @@ private:
         const GameCheck check = CheckAndLog(paths_);
         files_ = check.state;
         build_ = check.build;
+        alias_ = check.state == GameFileState::kValid ? check.alias : nullptr;
     }
 
     // A build whose executable has no verified render resolution sites runs at its native 16:9 size; a saved custom
@@ -643,9 +648,10 @@ private:
 
     void PagePlay(trg::Ui& ui) {
         const bool ready = files_ == GameFileState::kValid;
-        const std::string title = ready && build_ ? std::string(StatusTitle(files_)) + " \xC2\xB7 " + build_->label
-                                                  : StatusTitle(files_);
-        const std::string detail = ready && build_ ? BuildMetadataText(*build_) : StatusDetail(files_);
+        const std::string title =
+            ready && build_ ? std::string(StatusTitle(files_)) + " \xC2\xB7 " + BuildDisplayName(*build_) : StatusTitle(files_);
+        const std::string form = alias_ ? std::string(" \xC2\xB7 ") + Tr(alias_->name) : "";
+        const std::string detail = ready && build_ ? BuildMetadataText(*build_, alias_) + form : StatusDetail(files_);
         ui.StatusCard(ready ? trg::Status::kReady : trg::Status::kAttention, title.c_str(), detail.c_str());
         if (!install_failure_.empty()) {
             ui.Spacer(4);
@@ -726,7 +732,7 @@ private:
             trophy_page_->Invalidate();
         }
         if (build_) {
-            Log("active game build: %s (%s)", build_->label, BuildMetadataText(*build_).c_str());
+            Log("active game build: %s (%s)", build_->label, BuildMetadataText(*build_, alias_).c_str());
         }
         launcher_->SetStatus(removed.ok() ? Tr("Installed updates removed")
                                           : Tr("Some installed updates could not be removed. Close anything using the "
@@ -818,8 +824,8 @@ private:
             }
             std::string status = std::string(message.title) + ". " + message.text;
             if (build_ && files_ == GameFileState::kValid) {
-                Log("active game build: %s (%s)", build_->label, BuildMetadataText(*build_).c_str());
-                status += std::string(" ") + Tr("Installed version: ") + build_->label + ".";
+                Log("active game build: %s (%s)", build_->label, BuildMetadataText(*build_, alias_).c_str());
+                status += std::string(" ") + Tr("Installed version: ") + BuildDisplayName(*build_) + ".";
             }
             launcher_->SetStatus(status, 6.0);
             return;
@@ -962,6 +968,11 @@ private:
     void PageControls(trg::Ui& ui) {
         ui.Combo("Controller prompts", kControllerPromptsHelp, kControllerPromptsKey, kDefaultControllerPrompts,
                  {{kPromptsPlayStation, "PlayStation (Original)"}, {kPromptsXbox, "Xbox"}});
+        if (!build_ || aln_menu_button_site(BuildKey(*build_).c_str())) {
+            ui.Toggle("Asian Menu Buttons", AsianMenuButtonsHelp().c_str(), kAsianMenuButtonsKey, false, "Off", "On");
+        } else {
+            ui.Info("Asian Menu Buttons", "Not available for this game build: its menus always confirm with Cross.");
+        }
         ui.Info("Controller", "Automatic: PlayStation and Xbox controllers work without setup.");
         ui.Info("Keyboard", "Always on, together with the controller.");
         if (ui.ConfirmRow("Keyboard defaults", "Puts the keyboard controls and the port hotkeys back to their defaults.",
@@ -980,6 +991,15 @@ private:
                 KeyRow(ui, static_cast<AlnKeyAction>(action));
             }
         }
+    }
+
+    std::string AsianMenuButtonsHelp() const {
+        const bool xbox = settings_.Get(kControllerPromptsKey, kDefaultControllerPrompts) == kPromptsXbox;
+        const char* cross = Tr(xbox ? "A" : "Cross");
+        const char* circle = Tr(xbox ? "B" : "Circle");
+        char text[320];
+        std::snprintf(text, sizeof(text), Tr(kAsianMenuButtonsHelp), cross, circle, circle, cross);
+        return text;
     }
 
     void KeyRow(trg::Ui& ui, AlnKeyAction action) {
@@ -1018,8 +1038,9 @@ private:
     ReportFacts CurrentReportFacts() const {
         static const std::string operating_system = OperatingSystemText();
         const bool known = build_ && files_ == GameFileState::kValid;
-        return {ALN_PORT_VERSION, known ? build_->label : "Not installed", known ? build_->version : "",
-                known ? build_->title_id : "", operating_system};
+        const std::string name =
+            known ? BuildDisplayName(*build_) + (alias_ ? std::string(" (") + alias_->name + ")" : "") : "Not installed";
+        return {ALN_PORT_VERSION, name, known ? build_->version : "", known ? build_->title_id : "", operating_system};
     }
 
     void PageBugReport(trg::Ui& ui) { incident_page_->Draw(ui, CurrentReportFacts()); }
@@ -1100,6 +1121,7 @@ private:
     GamePaths paths_;
     GameFileState files_;
     const GameBuild* build_ = nullptr;
+    const PackageAlias* alias_ = nullptr;
     LauncherHost host_;
     ImTextureID sponsor_icon_{};
     std::map<std::pair<PageId, int>, ImTextureID> page_icons_;

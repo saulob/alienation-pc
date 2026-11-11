@@ -44,6 +44,8 @@ inline constexpr char kShowResolutionTitleKey[] = "show_resolution_title";
 inline constexpr char kShowFrameCounterKey[] = "show_fps";
 // Skips the intro video; the title screen follows (src/skip_intro.h). Read when the game starts.
 inline constexpr char kSkipIntroKey[] = "skip_intro";
+// On: Circle confirms and Cross cancels in the menus, as in the Asian release (launcher/aln_menu_buttons.h).
+inline constexpr char kAsianMenuButtonsKey[] = "asian_menu_buttons";
 // Keeps the run log of normal sessions; crash logs are kept whatever it says.
 inline constexpr char kDetailedLoggingKey[] = "detailed_logging";
 // Windows, on: Play starts the game as a separate process that overlay programs can attach to (game_process.h).

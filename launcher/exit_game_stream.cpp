@@ -87,7 +87,7 @@ extern "C" int aln_exit_game_stream_install(const char *app0, const char *build_
     if (crc32(0L, compressed.data(), static_cast<uInt>(compressed.size())) != site->crc)
         return Fail(detail, detail_size, "bytecode identity mismatch");
 
-    std::vector<unsigned char> bytecode(site->dsize + exit_game_script_extra());
+    std::vector<unsigned char> bytecode(site->dsize + exit_game_script_extra(site));
     uLongf inflated = site->dsize;
     if (uncompress(bytecode.data(), &inflated, compressed.data(), static_cast<uLong>(compressed.size())) != Z_OK ||
         inflated != site->dsize)

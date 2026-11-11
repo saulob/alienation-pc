@@ -44,6 +44,7 @@ constexpr ManagedSetting kBaseSettings[] = {
     {kShowResolutionTitleKey, "0"},
     {kShowFrameCounterKey, "0"},
     {kSkipIntroKey, "0"},
+    {kAsianMenuButtonsKey, "0"},
     {kDetailedLoggingKey, "1"},
     {kAllowOverlayProgramsKey, "0"},
     {kOnlineEnabledKey, "0"},
@@ -255,6 +256,15 @@ extern "C" int aln_skip_intro(const char* settings_file) {
     return settings.GetBool(kSkipIntroKey, false) ? 1 : 0;
 }
 
+extern "C" int aln_asian_menu_buttons(const char* settings_file) {
+    using namespace aln;
+    if (!settings_file || !*settings_file) {
+        return 0;
+    }
+    const LauncherSettings settings(PathFromUtf8(settings_file));
+    return settings.GetBool(kAsianMenuButtonsKey, false) ? 1 : 0;
+}
+
 extern "C" int aln_detailed_logging(const char* settings_file) {
     using namespace aln;
     if (!settings_file || !*settings_file) {
@@ -296,7 +306,8 @@ std::string SettingsSummary(const LauncherSettings& settings, const GameBuild* b
 
     line(std::string("Overlay programs ") +
          (kSeparateGameProcessAvailable ? OnOff(settings.GetBool(kAllowOverlayProgramsKey, false)) : "unsupported"));
-    line(std::string("Skip Intro ") + OnOff(settings.GetBool(kSkipIntroKey, false)));
+    line(std::string("Skip Intro ") + OnOff(settings.GetBool(kSkipIntroKey, false)) + ", Asian Menu Buttons " +
+         OnOff(settings.GetBool(kAsianMenuButtonsKey, false)));
     return out;
 }
 

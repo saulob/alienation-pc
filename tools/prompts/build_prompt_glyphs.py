@@ -2,6 +2,8 @@
 """Build the Xbox prompt glyph masks for Alienation's font atlases."""
 from __future__ import annotations
 
+import math
+import mmap
 import struct
 import zlib
 from pathlib import Path
@@ -57,6 +59,23 @@ CUSA04430_TEXT = [
     ("circle", 1424, 1, 1519, 96, "LS"), ("circle", 1521, 1, 1615, 96, "LS"),
     ("text", 1, 1, 178, 120, "MENU"), ("text", 833, 1, 930, 104, "VIEW"),
 ]
+# The PlayStation button glyphs are U+E000..U+E016 in the CUSA04430 and 1.06 fonts; these become Xbox ones (the D-pad
+# and the touch pad stay).
+BUTTON_GLYPHS = (
+    (0xE000, "face", "B"), (0xE001, "face", "X"), (0xE003, "face", "A"), (0xE002, "face", "Y"),
+    (0xE005, "shoulder", "LT"), (0xE007, "shoulder", "RT"), (0xE006, "shoulder", "RB"), (0xE004, "shoulder", "LB"),
+    (0xE014, "circle", "RS"), (0xE008, "circle", "RS"), (0xE009, "circle", "LS"), (0xE013, "circle", "LS"),
+    (0xE012, "text", "MENU"), (0xE00A, "text", "VIEW"),
+)
+
+
+class FontCells:
+    """An atlas's button cells, read from the glyph records of the FONT block that samples it."""
+
+    def __init__(self, font_offset: int):
+        self.font_offset = font_offset
+
+
 BUILDS = {
     "CUSA00062-1.00": [
         ("font0", 0x2E0A40, CUSA00062_TEXT0),
@@ -64,37 +83,64 @@ BUILDS = {
         ("font2", 0x3E9D00, CUSA00062_TEXT2),
         ("icon", 0x31851600, ICON),
     ],
+    # Every font of the build, by the FONT block whose glyphs sample the atlas: the three Latin weights, then the
+    # Korean, Japanese and two Traditional Chinese fonts the kr, jp and cn text languages draw with.
     "CUSA04430-1.00": [
-        ("font0", 0x5AB7C0, CUSA04430_TEXT),
-        ("font1", 0x2C4B80, CUSA04430_TEXT),
-        ("font2", 0xFDF880, CUSA04430_TEXT),
+        ("font0", 0x5AB7C0, FontCells(0x2045C0)),
+        ("font1", 0x2C4B80, FontCells(0x285C40)),
+        ("font2", 0xFDF880, FontCells(0x2BBDC0)),
         ("icon", 0x32B69B00, ICON),
+        ("font_kr", 0x38A040, FontCells(0x26AF40)),
+        ("font_jp", 0x66F340, FontCells(0x23D640)),
+        ("font_cn", 0xA21E80, FontCells(0x209F00)),
+        ("font_cn2", 0x325CE580, FontCells(0x28B480)),
+    ],
+    "CUSA00062-1.06": [
+        ("font0", 0x5AE540, FontCells(0x205F80)),
+        ("font1", 0x2C6B80, FontCells(0x287C40)),
+        ("font2", 0xFFDD00, FontCells(0x2BDDC0)),
+        ("icon", 0x3358B400, ICON),
+        ("font_kr", 0x38C040, FontCells(0x26CEC0)),
+        ("font_jp", 0x6720C0, FontCells(0x23F300)),
+        ("font_cn", 0xA2D880, FontCells(0x20B8C0)),
+        ("font_cn2", 0x32FEFE80, FontCells(0x28D480)),
     ],
 }
+# 1.06 ships CUSA04430 1.00's Latin and second Chinese atlases and 1.00's icon atlas byte for byte: their masks are
+# reused, not redrawn.
+SHARED_ATLASES = {
+    ("CUSA00062-1.06", "font0"): ("CUSA04430-1.00", "font0"),
+    ("CUSA00062-1.06", "font1"): ("CUSA04430-1.00", "font1"),
+    ("CUSA00062-1.06", "font2"): ("CUSA04430-1.00", "font2"),
+    ("CUSA00062-1.06", "icon"): ("CUSA00062-1.00", "icon"),
+    ("CUSA00062-1.06", "font_cn2"): ("CUSA04430-1.00", "font_cn2"),
+}
+
+
+def masks_name(build: str, atlas_name: str) -> str:
+    build, atlas_name = SHARED_ATLASES.get((build, atlas_name), (build, atlas_name))
+    return f"k_{build.replace('-', '_').replace('.', '_')}_{atlas_name}_masks"
 
 
 def micro_index(x, y):
     return (x & 1) | ((y & 1) << 1) | ((x & 2) << 1) | ((y & 2) << 2) | ((x & 4) << 2) | ((y & 4) << 3)
 
 
+def micro_order() -> np.ndarray:
+    return np.array([micro_index(i & 7, i >> 3) for i in range(64)])
+
+
 def untille(buf: bytes, width: int, height: int) -> bytes:
-    out = bytearray(width * height)
-    tiles_per_row = width // 8
-    for y in range(height):
-        for x in range(width):
-            src = ((y // 8) * tiles_per_row + (x // 8)) * 64 + micro_index(x & 7, y & 7)
-            out[y * width + x] = buf[src]
-    return bytes(out)
+    tiles = np.frombuffer(buf, dtype=np.uint8, count=width * height).reshape(-1, 64)[:, micro_order()]
+    return tiles.reshape(height // 8, width // 8, 8, 8).transpose(0, 2, 1, 3).tobytes()
 
 
 def tile(buf: bytes, width: int, height: int) -> bytes:
-    out = bytearray(width * height)
-    tiles_per_row = width // 8
-    for y in range(height):
-        for x in range(width):
-            dst = ((y // 8) * tiles_per_row + (x // 8)) * 64 + micro_index(x & 7, y & 7)
-            out[dst] = buf[y * width + x]
-    return bytes(out)
+    rows = np.frombuffer(buf, dtype=np.uint8, count=width * height).reshape(height // 8, 8, width // 8, 8)
+    tiles = rows.transpose(0, 2, 1, 3).reshape(-1, 64)
+    out = np.empty_like(tiles)
+    out[:, micro_order()] = tiles
+    return out.tobytes()
 
 
 def morph(mask: np.ndarray, size: int, mode: str) -> np.ndarray:
@@ -161,14 +207,19 @@ def shoulder(block: Image.Image, label: str) -> Image.Image:
     if hole.sum() > 0.02 * width * height:
         # Outlined button: keep the original frame, replace the caption inside.
         interior = morph(morph(hole, 21, "dilate"), 21, "erode") & solid
+        inner = morph(solid, 25, "erode")
         caption = core & interior
         cys, cxs = np.nonzero(caption)
+        ixs = np.nonzero(interior)[1]
+        if len(cxs) and cxs.max() - cxs.min() < 0.4 * (ixs.max() - ixs.min()):
+            # A letter fused to the frame is outside the hole's interior; take the ink that gets blanked instead.
+            cys, cxs = np.nonzero(core & inner)
         if len(cxs):
             box = (int(cxs.min()), int(cys.min()), int(cxs.max()), int(cys.max()))
         else:
             ys, xs = np.nonzero(interior)
             box = (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max()))
-        frame = solid & ~morph(solid, 25, "erode")
+        frame = solid & ~inner
         keep = np.where(frame | ~solid, source, 0).astype(np.uint8)
         text = fit_label((width, height), label, box)
         keep = np.maximum(keep, np.array(text))
@@ -254,9 +305,50 @@ def c_array(name: str, data: bytes) -> str:
     return f"static const unsigned char {name}[] = {{\n" + "\n".join(body) + "\n};\n"
 
 
+def read_font(stream: Path, offset: int) -> bytes:
+    """A FONT block's glyph tables: zlib after a table of 32-bit fixups."""
+    with stream.open("rb") as file:
+        mm = mmap.mmap(file.fileno(), 0, access=mmap.ACCESS_READ)
+        id0, zsize, dsize, units, id1, kind = struct.unpack_from("<6I", mm, offset)
+        if kind != 0x464F4E54 or id0 != id1:
+            raise ValueError(f"{offset:#x}: not a FONT block")
+        start = offset + 0x30 + 4 * struct.unpack_from("<I", mm, offset + 0x1C)[0]
+        data = zlib.decompressobj().decompress(mm[start:offset + units * 64])[:dsize]
+        mm.close()
+    if len(data) != dsize:
+        raise ValueError(f"{offset:#x}: short FONT block")
+    return data
+
+
+def font_cells(font: bytes, width: int, height: int) -> list:
+    """The button cells from the glyph records (page table at +0x28, 56-byte records starting u0, v0, u1, v1), one pixel
+    inside each record's rectangle, as the hand-measured cells of the first layouts."""
+    begin, end = struct.unpack_from("<QQ", font, 0x28 + 0xE0 * 16)
+    cells = []
+    for codepoint, kind, label in BUTTON_GLYPHS:
+        at = begin + (codepoint - 0xE000) * 56
+        if not begin or at + 56 > end:
+            raise ValueError(f"the font has no U+{codepoint:04X}")
+        u0, v0, u1, v1 = struct.unpack_from("<4f", font, at)
+        cells.append((kind, math.ceil(u0 * width) + 1, math.ceil(v0 * height) + 1, math.ceil(u1 * width) - 1,
+                      math.ceil(v1 * height) - 1, label))
+    # A cell must not reach into any other glyph the font samples.
+    buttons = {codepoint for codepoint, _, _ in BUTTON_GLYPHS}
+    for page in range(256):
+        begin, end = struct.unpack_from("<QQ", font, 0x28 + page * 16)
+        for at in range(begin, end if begin else begin, 56):
+            codepoint = page * 256 + (at - begin) // 56
+            u0, v0, u1, v1 = struct.unpack_from("<4f", font, at)
+            if codepoint in buttons or u1 <= u0 or v1 <= v0:
+                continue
+            for _, x0, y0, x1, y1, label in cells:
+                if x0 < u1 * width and u0 * width < x1 and y0 < v1 * height and v0 * height < y1:
+                    raise ValueError(f"the {label} cell overlaps U+{codepoint:04X}")
+    return cells
+
+
 def read_block(stream: Path, offset: int):
     with stream.open("rb") as file:
-        import mmap
         mm = mmap.mmap(file.fileno(), 0, access=mmap.ACCESS_READ)
         id0, zsize, dsize, units, id1, kind = struct.unpack_from("<6I", mm, offset)
         if kind != 0x54455820 or id0 != id1:
@@ -274,11 +366,24 @@ def main():
         "",
     ]
     rows = []
+    layouts = {}
     for build, atlases in BUILDS.items():
         stream = ROOT / "game" / "prepared" / build / "stream.dat"
         for atlas_name, offset, glyphs in atlases:
             zsize, dsize, units, compressed, payload = read_block(stream, offset)
-            image = Image.frombytes("L", (2048, 2048), untille(payload[16 + 0x100:], 2048, 2048))
+            dimensions = struct.unpack_from("<I", payload, 16 + 0x18)[0]
+            width, height = (dimensions & 0x3FFF) + 1, ((dimensions >> 14) & 0x3FFF) + 1
+            if isinstance(glyphs, FontCells):
+                glyphs = font_cells(read_font(stream, glyphs.font_offset), width, height)
+            layouts[(build, atlas_name)] = glyphs
+            shared = SHARED_ATLASES.get((build, atlas_name))
+            if shared:
+                owner = next(row for row in rows if (row[0], row[1]) == shared)
+                if owner[6] != zlib.crc32(compressed) & 0xFFFFFFFF or layouts[shared] != glyphs:
+                    raise SystemExit(f"{build} {atlas_name}: not the {shared[0]} {shared[1]} atlas")
+                rows.append((build, atlas_name, offset, zsize, dsize, units, owner[6], owner[7]))
+                continue
+            image = Image.frombytes("L", (width, height), untille(payload[16 + 0x100:], width, height))
             masks = []
             for index, (kind, x0, y0, x1, y1, label) in enumerate(glyphs):
                 block = image.crop((x0, y0, x1, y1))
@@ -300,7 +405,7 @@ def main():
                 parts.append(c_array(name, packed))
                 masks.append((x0, y0, block.width, block.height, len(packed), len(raw), name))
                 image.paste(block, (x0, y0))
-            new_pixel = tile(image.tobytes(), 2048, 2048)
+            new_pixel = tile(image.tobytes(), width, height)
             packed = zlib.compress(payload[:16 + 0x100] + new_pixel, 9)
             capacity = units * 64 - 40
             if len(packed) > capacity:
@@ -310,7 +415,9 @@ def main():
                          zlib.crc32(compressed) & 0xFFFFFFFF, masks))
 
     for build, atlas_name, offset, zsize, dsize, units, crc, masks in rows:
-        name = f"k_{build.replace('-', '_').replace('.', '_')}_{atlas_name}_masks"
+        if (build, atlas_name) in SHARED_ATLASES:
+            continue
+        name = masks_name(build, atlas_name)
         parts.append(f"static const AlnPromptGlyphMask {name}[] = {{")
         for x, y, width, height, packed, raw, data in masks:
             parts.append(f"    {{{x}u, {y}u, {width}u, {height}u, {packed}u, {raw}u, {data}}},")
@@ -319,8 +426,7 @@ def main():
     parts.append("const AlnPromptGlyphAtlas kPromptGlyphAtlases[] = {")
     for build, atlas_name, offset, zsize, dsize, units, crc, masks in rows:
         parts.append(f'    {{"{build}", "{atlas_name}", 0x{offset:x}, {zsize}u, {dsize}u, 0x{crc:08x}u, '
-                     f'{units}u, k_{build.replace("-", "_").replace(".", "_")}_{atlas_name}_masks, '
-                     f'{len(masks)}u}},')
+                     f'{units}u, {masks_name(build, atlas_name)}, {len(masks)}u}},')
     parts.append("};")
     parts.append("")
     parts.append("const AlnPromptGlyphAtlas *AlnPromptGlyphAtlases(size_t *count) {")

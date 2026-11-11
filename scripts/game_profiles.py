@@ -17,7 +17,7 @@ CORE_PATTERNS = ('eboot.bin', 'sce_module/*', 'sce_sys/*', '*.plt')
 PROFILES = {
     'CUSA00062': {
         'name': 'Alienation',
-        'region': 'Europe',
+        'region': 'EUR',
         'content_id': 'EP9000-CUSA00062_00-ALIENATIONGAMEEU',
         'versions': {
             '1.00': {
@@ -34,6 +34,9 @@ PROFILES = {
                 'folder': 'CUSA00062-1.06',
                 'data_files': ('audio.pck', 'stream.dat', 'video/intro.mp4', 'video/loading.mp4', 'video/splash.mp4',
                                'video/title.mp4'),
+                # DUPLEX: base and update in one package; accepted only with the eboot_sha256 above.
+                'package_aliases': ({'name': 'single-package repack', 'category': 'gd', 'app_ver': '01.00',
+                                     'sfo_version': '01.06', 'extract_folder': 'CUSA00062-1.06-repack'},),
             },
         },
         'entry': ENTRY,
@@ -43,7 +46,7 @@ PROFILES = {
     },
     'CUSA04430': {
         'name': 'Alienation',
-        'region': 'Asia',
+        'region': 'ASIA/KR',
         'content_id': 'HP9000-CUSA04430_00-ALIENATIONGAMEKR',
         'versions': {
             '1.00': {
@@ -102,32 +105,50 @@ def package_identity(info):
     return sfo['TITLE_ID'], sfo.get('APP_VER'), sfo.get('VERSION'), sfo.get('CATEGORY') == 'gp'
 
 
+def alias_identity(title, alias):
+    """The identity, as package_identity() names it, of a build's repack package."""
+    return title, alias['app_ver'], alias['sfo_version'], alias['category'] == 'gp'
+
+
+def alias_of(title, identity):
+    """(profile version, alias) of the repack with this identity, or None. Its eboot.bin still has to be checked."""
+    for version, build in PROFILES[title]['versions'].items():
+        for alias in build.get('package_aliases', ()):
+            if alias_identity(title, alias) == identity:
+                return version, alias
+    return None
+
+
 def finishing_version(title, identity):
     """The version of `title` whose finished game is the package with this identity, or None."""
     for version, build in PROFILES[title]['versions'].items():
         if layer_identity(title, finished_layer(build)) == identity:
             return version
-    return None
+    found = alias_of(title, identity)
+    return found[0] if found else None
 
 
 def version_of(game):
-    """The profile version whose finished param.sfo matches the game folder, or None."""
+    """The profile version whose finished param.sfo (or a repack's) matches the game folder, or None."""
     try:
         sfo = parse_sfo((Path(game) / 'sce_sys' / 'param.sfo').read_bytes())
     except (OSError, ValueError):
         return None
-    found = PROFILES.get(sfo.get('TITLE_ID', ''))
-    if not found:
+    title = sfo.get('TITLE_ID', '')
+    if title not in PROFILES:
         return None
-    return next((v for v, build in found['versions'].items()
-                 if (finished_layer(build)['app_ver'], finished_layer(build)['sfo_version'])
-                 == (sfo.get('APP_VER'), sfo.get('VERSION'))), None)
+    for version, build in PROFILES[title]['versions'].items():
+        if (finished_layer(build)['app_ver'], finished_layer(build)['sfo_version']) == (sfo.get('APP_VER'), sfo.get('VERSION')):
+            return version
+    found = alias_of(title, (title, sfo.get('APP_VER'), sfo.get('VERSION'), sfo.get('CATEGORY') == 'gp'))
+    return found[0] if found and found[1]['category'] == sfo.get('CATEGORY') else None
 
 
 def package_layer(info):
     """(TITLE_ID, profile version, layer index) of the package of a supported build's finished game, or None.
 
-    `info` is what scripts/pkg_info.py reads. The index is the package's place in the build's layers.
+    `info` is what scripts/pkg_info.py reads. The index is the package's place in the build's layers; a repack is a
+    complete build by itself (index 0) whose executable is checked when it is prepared.
     """
     identity = package_identity(info)
     if identity is None:
@@ -135,4 +156,6 @@ def package_layer(info):
     version = finishing_version(identity[0], identity)
     if version is None:
         return None
+    if alias_of(identity[0], identity):
+        return identity[0], version, 0
     return identity[0], version, len(PROFILES[identity[0]]['versions'][version]['layers']) - 1

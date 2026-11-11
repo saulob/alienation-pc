@@ -6,41 +6,206 @@ and from the SHA-256 of the finished game's `eboot.bin`, never from a file name.
 
 ## Supported builds
 
-| Build key | Region | Packages | eboot.bin SHA-256 | Status |
-|---|---|---|---|---|
-| `CUSA00062-1.00` | Europe | base (`gd` 01.00) | `f5f41f870db752add56920c5538441bc3750b1442f69c1de3895ee282887d855` | primary build |
-| `CUSA00062-1.06` | Europe | base + update (`gp` 01.06 / VERSION 01.00) | `c65c18865691d7288055cae70af983aa86898d59936976ef12f5eb033eda7243` | install and detection only; no guest patches yet |
-| `CUSA04430-1.00` | Asia (Korea) | base (`gd` 01.00) | `11928457792fdba30aee3ceb9f5fb300bac720d0f3c1774825a8380a2dc9b72e` | supported |
+| Title ID | Version | Region | Package form | eboot.bin SHA-256 | Support status | Feature parity |
+|---|---|---|---|---|---|---|
+| `CUSA00062` | 1.00 | EUR | base (`gd` APP_VER 01.00, VERSION 01.00) | `f5f41f870db752add56920c5538441bc3750b1442f69c1de3895ee282887d855` | supported | reference build |
+| `CUSA00062` | 1.06 | EUR | base + official update (`gp` APP_VER 01.06, VERSION 01.00) | `c65c18865691d7288055cae70af983aa86898d59936976ef12f5eb033eda7243` | supported | full (table below) |
+| `CUSA00062` | 1.06 | EUR | DUPLEX single-package repack (`gd` APP_VER 01.00, VERSION 01.06) | `c65c18865691d7288055cae70af983aa86898d59936976ef12f5eb033eda7243` | supported, runs as CUSA00062 1.06 | as 1.06, but no update can be installed or removed |
+| `CUSA04430` | 1.00 | ASIA/KR | base (`gd` APP_VER 01.00, VERSION 01.00) | `11928457792fdba30aee3ceb9f5fb300bac720d0f3c1774825a8380a2dc9b72e` | supported | full (table below) |
+
+The launcher shows a build as `CUSA00062 1.00 · EUR`, `CUSA00062 1.06 · EUR` and `CUSA04430 1.00 · ASIA/KR`. CUSA04430's
+`HP` content ID prefix and `KR` suffix make it the Asian (Korean) release. The USA release (CUSA04181) is not supported:
+no game data of it was available, so none of its sites could be verified.
 
 Each build has its own folders, `game\prepared\<build key>` and the boot image folder `<build key>`. The active build is
 the complete one prepared last. 1.00 and 1.06 can be installed side by side.
 
-## Feature availability
+## DUPLEX
 
-Every guest patch is tied to one build's verified code. A build that is not listed for a feature never gets it: the
-loader logs the feature as unavailable and the game runs unpatched. `tests/game_profile_tests.py` fails when a build
-without verified sites is named by any patch table.
+`Alienation.PS4-DUPLEX.pkg` (2,168,717,312 bytes, fake PKG, 38 entries, content ID `EP9000-CUSA00062_00-ALIENATIONGAMEEU`,
+CATEGORY `gd`, APP_VER 01.00, VERSION 01.06, PUBTOOLINFO c_date 2018-06-27) is the 1.00 base and the 1.06 update in one
+package. Compared file by file with the official base laid over by the official update, read in place from the package:
 
-| Feature | CUSA00062 1.00 | CUSA00062 1.06 | CUSA04430 1.00 |
+- `eboot.bin` is byte-identical to official 1.06 (`c65c1886...a7243`; entry `0xda320`, image end `0x2ce99b8`, code
+  `0`-`0x1e9f300`, 372,824 relocations, 660 imports, the same 44 NEEDED libraries, procparam SDK `0x3008041`);
+- 953 of its 954 game files are byte-identical, `stream.dat`, `audio.pck`, every video, Havok and Navmesh file among
+  them, as are `libc.prx`, `libSceFios2.prx`, `right.sprx`, `nptitle.dat`, `keystone` and `trophy00.trp`;
+- `sce_discmap.plt` differs (the repack merges the update's `sce_discmap_patch.plt`, which it lacks); the runtime's
+  DiscMap calls never read either file. `npbind.dat` differs only in its trailing 4-byte digest (same NPWR09388_00).
+  `param.sfo` differs in CATEGORY, APP_VER, VERSION, PUBTOOLVER and c_date only.
+
+So DUPLEX is no build of its own: it is a package alias of `CUSA00062-1.06` (`PackageAlias` in the build table). Its
+metadata alone never identifies it: the installer reads its `eboot.bin` before unpacking and refuses the package unless
+the executable is 1.06's, and the readiness check requires the same executable in the installed folder. Another package
+with the same metadata and another executable is reported as an unsupported build with its identity in the log.
+Installed, it is `CUSA00062 1.06 · EUR` with the 1.06 boot image, patches, online key and saves; the Play page shows its
+own APP_VER 1.00 · VERSION 1.06 and "single-package repack".
+
+Running as 1.06 is its runtime identity; how its files got there is its installation provenance, read back from the
+installed `param.sfo` (`InstalledProvenance` in `launcher/game_files.cpp`): CATEGORY `gp` is the official update laid
+over the base, CATEGORY `gd` with the 1.06 build's executable is the repack. Install update with the official 1.06 update
+over an installed DUPLEX is refused before anything is written, with "This game already contains version 1.06" (status
+`kAlreadyContainsUpdate`), whether the repack is the active build or only installed. Remove update is not offered for it:
+there is no update layer to remove, so it cannot be turned back into 1.00.
+
+## Feature parity
+
+Generated by `python scripts/feature_parity.py` and checked by `tests/feature_parity_tests.py` against the patch tables
+and the tests that carry each claim. Every cell gives a status and how strongly it is verified:
+
+- **STATICALLY VERIFIED**: the sites and data are checked byte for byte against the real executables and `stream.dat`
+  (`tests/patch_site_tests.py`); nothing is executed.
+- **HEADLESS SEMANTICALLY VERIFIED**: the behaviour is executed or derived without the game, on the real game data where
+  it exists; the note names the test (`tests/exit_game_menu_tests.c` runs each build's real menu bytecode,
+  `tests/prompt_language_tests.py` checks every font of every language against the redrawn cells,
+  `tests/game_install_tests.cpp` installs, updates and removes package layouts).
+- **MANUAL TEST REQUIRED**: only playing the game can show it.
+
+No entry is final until the manual test matrix has passed in game.
+
+|  | CUSA00062 1.00 · EUR | CUSA00062 1.06 · EUR | DUPLEX (CUSA00062 1.06) | CUSA04430 1.00 · ASIA/KR |
+|---|---|---|---|---|
+| Runtime build identity | CUSA00062-1.00 | CUSA00062-1.06 | CUSA00062-1.06 | CUSA04430-1.00 |
+| Installation provenance | base package (gd, APP_VER 01.00) | base 1.00 + official update layers (gp, APP_VER 01.06), removable | single-package repack (gd, APP_VER 01.00, VERSION 01.06), no update layer | base package (gd, APP_VER 01.00) |
+| Online key | CUSA00062-1.00 | CUSA00062-1.06 | CUSA00062-1.06 | CUSA04430-1.00 |
+
+| Feature | CUSA00062 1.00 · EUR | CUSA00062 1.06 · EUR | DUPLEX (CUSA00062 1.06) | CUSA04430 1.00 · ASIA/KR |
+|---|---|---|---|---|
+| Boot | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED |
+| Save | SUPPORTED · MANUAL TEST REQUIRED: user\savedata\CUSA00062 | SUPPORTED · MANUAL TEST REQUIRED: user\savedata\CUSA00062, shared with 1.00 | SUPPORTED · MANUAL TEST REQUIRED: user\savedata\CUSA00062, shared with 1.00 | SUPPORTED · MANUAL TEST REQUIRED: user\savedata\CUSA04430 |
+| Trophies | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED |
+| Audio | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED |
+| Controller support | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED |
+| PlayStation Original prompts | SUPPORTED · STATICALLY VERIFIED | SUPPORTED · STATICALLY VERIFIED | SUPPORTED · STATICALLY VERIFIED | SUPPORTED · STATICALLY VERIFIED |
+| Xbox prompts | SUPPORTED · STATICALLY VERIFIED: 7 textures, 2 scenes, 4 glyph atlases | SUPPORTED · STATICALLY VERIFIED: 7 textures, 2 scenes, 8 glyph atlases | SUPPORTED · STATICALLY VERIFIED: 7 textures, 2 scenes, 8 glyph atlases | SUPPORTED · STATICALLY VERIFIED: 7 textures, 2 scenes, 8 glyph atlases |
+| Xbox prompts in every language | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED: 15 languages, Latin and Cyrillic fonts share the 3 redrawn atlases; tests/prompt_language_tests.py | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED: 18 languages: 15 on the Latin and Cyrillic fonts, kr, jp, cn on their own fonts; every font redrawn; tests/prompt_language_tests.py | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED: 18 languages: 15 on the Latin and Cyrillic fonts, kr, jp, cn on their own fonts; every font redrawn; tests/prompt_language_tests.py | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED: 18 languages: 15 on the Latin and Cyrillic fonts, kr, jp, cn on their own fonts; every font redrawn; tests/prompt_language_tests.py |
+| Asian Menu Buttons | UNAVAILABLE · STATICALLY VERIFIED: Cross always confirms: the menu scripts compare with Cross and ask no engine getter | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED: Off: Cross confirms, Circle cancels; On: the reverse, through the engine getters; native Off; tests/menu_buttons_tests.c | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED: Off: Cross confirms, Circle cancels; On: the reverse, through the engine getters; native Off; tests/menu_buttons_tests.c | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED: Off: Cross confirms, Circle cancels; On: the reverse, through the engine getters; native On; tests/menu_buttons_tests.c |
+| Skip Intro | SUPPORTED · STATICALLY VERIFIED | SUPPORTED · STATICALLY VERIFIED | SUPPORTED · STATICALLY VERIFIED | SUPPORTED · STATICALLY VERIFIED |
+| Exit Game: Options | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED |
+| Exit Game: Select Campaign | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED |
+| 60 FPS | SUPPORTED · STATICALLY VERIFIED | SUPPORTED · STATICALLY VERIFIED | SUPPORTED · STATICALLY VERIFIED | SUPPORTED · STATICALLY VERIFIED |
+| Render Resolution | SUPPORTED · STATICALLY VERIFIED | SUPPORTED · STATICALLY VERIFIED | SUPPORTED · STATICALLY VERIFIED | SUPPORTED · STATICALLY VERIFIED |
+| Aspect Ratio | SUPPORTED · STATICALLY VERIFIED | SUPPORTED · STATICALLY VERIFIED | SUPPORTED · STATICALLY VERIFIED | SUPPORTED · STATICALLY VERIFIED |
+| True Ultrawide | SUPPORTED · STATICALLY VERIFIED | SUPPORTED · STATICALLY VERIFIED | SUPPORTED · STATICALLY VERIFIED | SUPPORTED · STATICALLY VERIFIED |
+| GPU heap scaling | SUPPORTED · STATICALLY VERIFIED | SUPPORTED · STATICALLY VERIFIED | SUPPORTED · STATICALLY VERIFIED | SUPPORTED · STATICALLY VERIFIED |
+| SMAA | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED |
+| FSR | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED |
+| Texture filtering | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED |
+| Online | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED |
+| Matching2 | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED |
+| P2P | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED |
+| Install Game | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED: from its base package; tests/game_install_tests.cpp | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED: from its base package; tests/game_install_tests.cpp | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED: as CUSA00062 1.06, executable checked; tests/game_install_tests.cpp | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED: from its base package; tests/game_install_tests.cpp |
+| Install Update | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED: base of the 1.06 update; tests/game_install_tests.cpp | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED: laid over CUSA00062 1.00; tests/game_install_tests.cpp | INTENTIONALLY DIFFERENT · HEADLESS SEMANTICALLY VERIFIED: refused before any change: it already contains 1.06; tests/game_install_tests.cpp | UNAVAILABLE · STATICALLY VERIFIED: no CUSA04430 update is known; the profile has no update build |
+| Remove Update | UNAVAILABLE · HEADLESS SEMANTICALLY VERIFIED: nothing to remove: the base; removing 1.06 returns here; tests/game_install_tests.cpp | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED: official layers only; returns to 1.00; tests/game_install_tests.cpp | UNAVAILABLE · HEADLESS SEMANTICALLY VERIFIED: no update layer: a complete package cannot become 1.00; tests/game_install_tests.cpp | UNAVAILABLE · STATICALLY VERIFIED: no CUSA04430 update is known |
+| Build diagnostics | SUPPORTED · STATICALLY VERIFIED | SUPPORTED · STATICALLY VERIFIED | SUPPORTED · STATICALLY VERIFIED | SUPPORTED · STATICALLY VERIFIED |
+| Bug reports | SUPPORTED · STATICALLY VERIFIED | SUPPORTED · STATICALLY VERIFIED | SUPPORTED · STATICALLY VERIFIED | SUPPORTED · STATICALLY VERIFIED |
+
+### Guest patch sites
+
+Image offsets (`eboot.bin` mapped at 0). Each 1.06 site was found structurally (the same function bodies, registrations,
+call graph and constants as 1.00), not by copying offsets, and every site is checked against its original bytes before
+anything is written; a build whose code differs gets the feature reported unavailable and runs unpatched.
+
+| Site | CUSA00062 1.00 | CUSA00062 1.06 | CUSA04430 1.00 | How 1.06 was matched |
+|---|---|---|---|---|
+| GPU heap literals (startup functions) | `0x3bb`, `0x47b` | `0x3bb`, `0x47b` | `0x3bb`, `0x47b` | startup functions identical but for relocated calls |
+| Display height / width (`mov dword [rdi+0x34], 1080` / `[rdi+0x30], 1920`) | `0x1fa8da` / `0x1fa8e1` | `0x1fd98a` / `0x1fd991` | `0x1fb4ea` / `0x1fb4f1` | constructor byte-identical, same two callers, the only such stores |
+| `engine_set_fps` binding | `0x2507b0` | `0x253f10` | `0x2513c0` | registered under that name; body identical; tail call to the engine's SetFps |
+| Skip Intro isDown / wasPressed / update / vtable slot | `0x129f960` / `0x129fb40` / `0x129fd20` / `0x1f5dc78` | `0x12a4ae0` / `0x12a4cc0` / `0x12a4ea0` / `0x1f59d08` | `0x12a0be0` / `0x12a0dc0` / `0x12a0fa0` / `0x1f51c58` | same fingerprints, unique, same vtable layout |
+| Exit Game native / hud text copy / layout box text | `0x239350` / `0x252943` / `0x25ac45` | `0x23c880` / `0x256183` / `0x25e715` | `0x239f60` / `0x253633` / `0x25bb55` | registered as `exit_game_application`; fingerprints unique |
+| Menu Confirm / Back getters (`lea rsi, name`) | none: the scripts confirm with Cross | `0xb1efb` / `0xb1f6b` ("cross" / "circle") | `0xb18fb` / `0xb196b` ("circle" / "cross") | registered as `engine_get_confirm_button` / `engine_get_cancel_button` |
+
+The simulation runs at the engine's frame rate in every build: the frame update multiplies the engine's delta by the same
+`an__delta_t_multiplier` tunable (1.00 `0x14035fc`, 1.06 `0x140a01c`) and the engine starts with `SetFps(59.94)` (1.00
+`0x1402f4f`, 1.06 `0x140996f`). With the binding a no-op the scripts' `engine_set_fps(29.97)` calls change nothing, so
+1.06 steps its game at 59.94 like 1.00, not only its presentation.
+
+### stream.dat blocks
+
+| Block | CUSA00062 1.00 | CUSA00062 1.06 | CUSA04430 1.00 |
 |---|---|---|---|
-| Install, detection, boot image | yes | yes | yes |
-| Render resolution, aspect ratio (incl. ultrawide), GPU heap scaling | yes | no: forced to native 16:9 | yes |
-| 59.94 FPS engine target (`engine_set_fps`) | yes | no: the game's own frame rate | yes |
-| Skip Intro | yes | no | yes |
-| Exit Game (Options, Select Campaign) | yes | no | yes |
-| Xbox controller prompts | yes | no: PlayStation prompts | yes |
-| SMAA, FSR, filtering, presentation (renderer side, no guest patch) | yes | yes | yes |
-| Online (lobby, Matching2, P2P; unverified in game) | own build | own build: never meets 1.00 | own build |
-| Tested in game | as before this change | not yet: boot and gameplay untested | as before this change |
+| Stated bytecode (DATS) | `0x475f6c00` | `0x493718c0` | `0x489456c0` |
+| `menu_layout` script (IRCS) | `0x475a5580` | `0x4931f480` | `0x488f3c80` |
+| controller textures, help textures, accept textures, controller scene | 1.00 offsets | identical blocks at new offsets | KR offsets |
+| font atlases font0 / font1 / font2 (Latin and Cyrillic, 2048²) | 1.00 atlases | the CUSA04430 atlases, byte for byte | KR atlases |
+| font atlases kr / jp / cn / cn2 (4096²) | none | `0x38c040` / `0x6720c0` / `0xa2d880` / `0x32fefe80` (cn2 is KR's) | `0x38a040` / `0x66f340` / `0xa21e80` / `0x325ce580` |
+| icon atlas | `0x31851600` | `0x3358b400`, the same atlas | `0x32b69b00`, the same atlas |
+| Portuguese text blocks (DWAR) | no voice language option | the same, no defect | `0x3c053c00` (pt-BR), `0x3c16d200` (pt-PT) |
 
-## Install update
+ASIA/KR's two Portuguese Audio settings texts hold the Voice-Over Language value as `" Inglês"` with a leading space,
+which the game draws as "Inglê". `launcher/text_fix.c` rewrites those 8 bytes in place as `"Inglês "` (same size, checked
+against the original bytes and the block's CRC; the blocks recompress within their units) and serves the blocks through
+the file overlay. 1.00 and 1.06 do not have the leading space and are not touched.
+
+1.06's Options menu builds its list one `list_add` at a time, several rows only under conditions, so the row count before
+Credits is not known statically (1.00 builds the list whole and inserts at index 4). Since `list_add` is an intrinsic only
+inside the block's code range and `list_insert` does not check its index, the 1.06 patch reverses the list, inserts
+Credits and then Exit Game at index 0 and reverses it back (`list_reverse` is a real native): Exit Game ends up last
+whatever rows the page added. The patched block recompresses to 2,800,044 of its 2,800,920 bytes. Select Campaign has
+the same layout as 1.00 (`NEW`, `LOAD`, `CONTINUE` boxes unchanged), so its row and the one-row offset are 1.00's.
+
+1.06's block also holds an unreachable copy of the Options page with the same bytes, so a byte fingerprint alone can
+match the wrong one: the earlier 1.06 site was that copy, and the game kept five rows. A site is now accepted only
+if the Credits row's localized text returns into the patched list operation, and the Load row's into the Select Campaign
+list (`row_returns_to` in `launcher/exit_game_script.c`). `tests/exit_game_menu_tests.c` runs each prepared build's real
+Options and Select Campaign bytecode through the patch in a small Stated interpreter: Options must end with six rows,
+Exit Game last, and Select Campaign with `NEW`, `LOAD`, Exit Game.
+
+## Asian Menu Buttons (Confirm and Cancel)
+
+On PS4, CUSA04430 confirms with Circle and cancels with Cross. Its menu scripts ask the engine which button that is:
+`engine_get_confirm_button` returns the name `"circle"` and `engine_get_cancel_button` `"cross"`, constants compiled into
+the executable (it never reads the console's enter-button setting). Menu input (`controller_was_pressed(pad,
+engine_get_confirm_button())`) and the prompt tags (`CTRL_ACCEPT`, `CTRL_CANCEL`) both follow them. 1.06 has the same
+getters answering `"cross"` and `"circle"`; CUSA00062 1.00 has none: its scripts compare with Cross directly.
+
+**Asian Menu Buttons** (Controls page, setting `asian_menu_buttons`) follows the Japanese Menu Buttons option of the Dragon
+port: Off (the default) makes Cross confirm and Circle cancel in the menus, On makes Circle confirm and Cross cancel. The
+loader points the two getters' `lea` operands at the `"cross"` or `"circle"` name, after checking the code and both
+names, and logs `Asian menu buttons:` with what it did. So with the default, CUSA04430 confirms with Cross like the
+Western releases, and On gives back its original layout; 1.06 can be switched the same way. CUSA00062 1.00 shows the
+option as unavailable: its scripts always confirm with Cross.
+
+The choice does not depend on the prompt style: the prompts follow the same getters, so the glyph shown is always the
+button that works (Cross is shown as A with the Xbox prompts, Circle as B). Gameplay buttons, the prompt style and the
+text language are not changed by it, and changing the language keeps both settings. `ALN_ASIAN_MENU_BUTTONS=1|0`
+overrides the saved choice.
+
+## Xbox prompts in every language
+
+The game draws the controller buttons in text as glyphs U+E000 to U+E016 of its fonts, and each text language draws with
+its own fonts: CUSA04430 and 1.06 have 18 text languages, 15 on the three Latin and Cyrillic fonts, `kr` on a Hangul
+font, `jp` on a Japanese font and `cn` on two Traditional Chinese fonts, each with its own 4096² atlas. The Xbox prompts
+first redrew the three Latin atlases only, so Korean, Japanese and Chinese text kept the PlayStation glyphs; font1's cells
+were also taken from font0's layout, which differs, so Cross and Square, L2 and R2, and L and R were drawn in each other's
+place in that atlas.
+
+The cells are now read from each font's own glyph records (`tools/prompts/build_prompt_glyphs.py`), every font that
+holds the button glyphs is redrawn, and the launcher rebuilds the atlases in parallel (about one second for the eight).
+`tests/prompt_language_tests.py` reads each prepared build's language table, finds every font in `stream.dat`, and fails
+if a font with button glyphs has no redrawn atlas or if a redrawn cell is not exactly the cell that glyph samples.
+CUSA00062 1.00 has 15 languages, all on the Latin and Cyrillic fonts, whose cells are hand measured. The PlayStation
+style changes nothing in any language.
+
+## Install game and Install update
+
+| Package | Action | Result |
+|---|---|---|
+| CUSA00062 1.00 base | Install game | CUSA00062 1.00 · EUR |
+| CUSA00062 1.06 update | Install update, with 1.00 installed | CUSA00062 1.06 · EUR, laid over 1.00 |
+| DUPLEX | Install game | CUSA00062 1.06 · EUR (complete package, executable checked) |
+| CUSA04430 1.00 base | Install game | CUSA04430 1.00 · ASIA/KR |
+| any other Alienation package | either | refused as unsupported, identity in the log |
 
 1. Install the base game with **Install game...** (Play page).
 2. Once it is ready, the Play page shows **Install update...**. Select the update `.pkg` (any file name).
 3. The launcher reads the package's `param.sfo` and refuses, before writing anything:
-   - a base package (`This is the base game package`), or an update chosen in Install game (`This is an update package`);
+   - a base package (`This is the base game package`), a complete repack (`This is a complete game package`), or an
+     update chosen in Install game (`This is an update package`);
    - an update of another title than the active game (`This update is for CUSA00062, but the installed game is CUSA04430`);
    - an update older than the active update of the same title (`A newer update is installed`);
+   - an update that an installed complete repack of the title already contains (`This game already contains version
+     1.06`): DUPLEX is 1.06 already and has no base to lay the update over;
    - another game, an unknown version (logged with its TITLE_ID, APP_VER, VERSION, CATEGORY and executable hash), a
      package encrypted for a console, an incomplete download, a package inside the port's own game folders.
 4. The update's base build must be installed and valid (`Base game required` otherwise).
@@ -50,15 +215,16 @@ without verified sites is named by any patch table.
    `<boot image>.install-temp`. Only then are both folders swapped in by rename; a failed swap puts the previous ones back.
 6. Any failure or cancellation before the swap removes the staging folders and leaves the installed game as it was. Saves,
    settings, logs, trophies, online identity, friends and bug reports live under `user\` and `logs` and are never touched.
-7. The launcher re-reads the active build and shows it, for example `Ready · CUSA00062 1.06`, `APP_VER 1.06 · VERSION 1.00`,
-   and logs `package recognized: ... is CUSA00062 1.06 (update, ..., laid over CUSA00062 1.00)`.
+7. The launcher re-reads the active build and shows it, for example `Ready · CUSA00062 1.06 · EUR`,
+   `APP_VER 1.06 · VERSION 1.00`, and logs `package recognized: ... is CUSA00062 1.06 (update, ..., laid over CUSA00062
+   1.00)`; a repack logs `... is CUSA00062 1.06 · EUR (single-package repack, ..., accepted only with the eboot.bin ...)`.
 
-**Remove update** (Play page, when an update of the active title is installed) removes the update's two folders only,
-after renaming them aside, and makes the base active again. A removal that was interrupted is finished at the next start.
-Install game with the base package of an installed build also makes that build active again without copying.
-
-The space check counts the update's full size (about 1.6 GB for 1.06); the base's files are links and cost nothing on
-the same drive.
+**Remove update** (Play page, when an update of the active title is installed from its official packages: its
+installed `param.sfo` is the update's `gp` one) removes the update's two folders only, after renaming them aside, and
+makes the base active again. A repack is never offered for removal. A removal that was interrupted is
+finished at the next start. Install game with the base package of an installed build also makes that build active again
+without copying. The space check counts the update's full size (about 1.6 GB for 1.06); the base's files are links and
+cost nothing on the same drive.
 
 ## CUSA00062 1.06
 
@@ -93,34 +259,21 @@ The update replaces the whole `stream.dat` (1,256,531,200 bytes against 1,226,73
 | Boot image | 49,628,528 bytes, 8,338 TLS loads rewritten | 49,628,528 bytes, 8,338 TLS loads rewritten |
 
 The same 44 NEEDED libraries. 7,824 of the 7,840 4 KiB code pages differ at the same offset from byte `0x2d` on: the
-code moved, so no 1.00 address applies.
+code moved, so no 1.00 address applies. 1.06 also gained CUSA04430's language table (28 entries against 20) and its
+menu button getters (answering Cross).
 
 Imports only in 1.06: `sceNpTusCreateRequest`, `sceNpTusDeleteRequest`, `sceNpTusDeleteNpTitleCtx`, `sceNpTusPollAsync`,
 `sceNpTssCreateNpTitleCtx`, `sceNpTssGetDataAsync` (libSceNpTus) and `sceAppContentGetAddcontInfo`. Only in 1.00:
 `sceAudioOutSetMixLevelPadSpk`. The runtime binds all of them (`src/import_names.inc`): TSS and TUS answer as signed
 out, and `sceAppContentGetAddcontInfo` reports no entitlement, as the offline content provider does for every add-on.
 
-### Where the 1.00 patch fingerprints occur in 1.06
-
-Candidates for porting, found by unique byte pattern only. None is enabled: each needs the full verification the 1.00
-site has (`tests/patch_site_tests.py`, `tests/skip_intro_tests.c`, `tests/exit_game_tests.c`) and an in-game test.
-
-| 1.00 site | 1.00 | 1.06 candidate |
-|---|---|---|
-| GPU heap literals (startup functions) | `0x3bb`, `0x47b` | `0x3bb`, `0x47b` |
-| Display height / width (`mov dword [rdi+0x34], 1080` / `[rdi+0x30], 1920`) | `0x1fa8da` / `0x1fa8e1` | `0x1fd98a` / `0x1fd991` |
-| Skip Intro `wasPressed` / pad update | `0x129fb40` / `0x129fd20` | `0x12a4cc0` / `0x12a4ea0` |
-| Exit Game exit-app sequence | `0x239350` | `0x23c880` |
-| `engine_set_fps` name string | `0x17e2cbf` | `0x17e12bf` |
-
-The `engine_set_fps` binding itself, the Skip Intro vtable slot, the Exit Game data sites and the Stated bytecode block
-in the new `stream.dat` (the 1.00 block at `0x475f6c00` does not apply) still have to be found.
-
 ## Online
 
-The build key is the online identity of the game version: the client sends `CUSA00062-1.06` and the lobby only lists,
-joins and relays rooms of exactly the same key (`server/lobby/src/lobby.js`). 1.00 and 1.06 players never meet until a
-compatibility of their simulation and network data is proven. No lobby change or deployment is needed for this.
+The build key is the online identity of the game version: the client sends `CUSA00062-1.00`, `CUSA00062-1.06` or
+`CUSA04430-1.00`, and the lobby only lists, joins and relays rooms of exactly the same key (`server/lobby/src/lobby.js`).
+DUPLEX runs as `CUSA00062-1.06` and meets official 1.06 players: its executable and game data are the same. 1.00 and 1.06
+players never meet until a compatibility of their simulation and network data is proven. No lobby change or deployment
+is needed for this.
 
 ### 1.06 multiplayer reconnaissance
 
@@ -142,9 +295,10 @@ Image offsets in 1.06 (`eboot.bin` mapped at 0). The menu text itself is in the 
 Weekly missions and leagues read server data through TSS and rankings; the runtime answers those as signed out, so
 these modes should report themselves unavailable rather than crash. Not verified in game.
 
-## Saves
+## Saves and trophies
 
-1.00 and 1.06 use the same save folder (`user\savedata\CUSA00062`, from TITLE_ID; neither sets `INSTALL_DIR_SAVEDATA`),
-as on a PS4 where an update keeps the title's saves. The executables have the same save-data strings (`savedata` folder
-name, the same dialogs). Whether 1.06 writes a save layout 1.00 cannot read is not known: nothing migrates or rewrites
-saves, and going back to 1.00 after playing 1.06 should be done with a copy of `user\savedata\CUSA00062`.
+1.00, 1.06 and DUPLEX use the same save folder (`user\savedata\CUSA00062`, from TITLE_ID; none sets
+`INSTALL_DIR_SAVEDATA`), as on a PS4 where an update keeps the title's saves. CUSA04430 keeps its own
+(`user\savedata\CUSA04430`). Whether 1.06 writes a save layout 1.00 cannot read is not known: nothing migrates or rewrites
+saves, and going back to 1.00 after playing 1.06 should be done with a copy of `user\savedata\CUSA00062`. Trophies are
+kept per NP communication ID, `NPWR09388_00` in every build, so they form one set.
