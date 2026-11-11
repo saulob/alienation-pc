@@ -116,6 +116,11 @@ static ABI int32_t addon_enqueue_download(uint32_t service,const void *label) {
     (void)service;
     return label ? NO_ENTITLEMENT : PARAMETER;
 }
+static ABI int32_t addon_info(uint32_t service,const void *label,void *info) {
+    require_initialized();
+    (void)service;
+    return label && info ? NO_ENTITLEMENT : PARAMETER;
+}
 uintptr_t runtime_content_resolve(const char *name) {
     if (!strcmp(name,"g8cM39EUZ6o#libSceSysmodule")) return (uintptr_t)module_load;
     if (!strcmp(name,"fMP5NHUOaMk#libSceSysmodule")) return (uintptr_t)module_loaded;
@@ -127,6 +132,7 @@ uintptr_t runtime_content_resolve(const char *name) {
     if (!strcmp(name,"Gl6w5i0JokY#libSceAppContent")) return (uintptr_t)download_space_kb;
     if (!strcmp(name,"VANhIWcqYak#libSceAppContent")) return (uintptr_t)addon_mount;
     if (!strcmp(name,"7gxh+5QubhY#libSceAppContent")) return (uintptr_t)addon_enqueue_download;
+    if (!strcmp(name,"m47juOmH0VE#libSceAppContent")) return (uintptr_t)addon_info;
     return 0;
 }
 void runtime_content_report(void) {

@@ -48,12 +48,6 @@ eboot.bin
 /gpu/third_party/miniz/
 /gpu/third_party/xbyak/
 
-# Local AI tooling (Claude Code, OpenCode), never tracked
-/CLAUDE.md
-/CLAUDE.local.md
-/.claude/
-/AGENTS.md
-/.opencode/
 # Lobby Worker: Wrangler cache and Node packages (nothing is installed by the repository)
 /server/lobby/.wrangler/
 /server/lobby/node_modules/

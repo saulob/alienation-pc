@@ -40,8 +40,8 @@ Two real game instances entering one native session has not been verified yet; s
    request.
 6. Press **Play**, then use the game's Online menu.
 
-Only the same game build plays together: CUSA00062 1.00 (Europe) and CUSA04430 1.00 (Asia/Korea) never meet, because the
-game's lockstep simulation needs the same executable on every PC.
+Only the same game build plays together: CUSA00062 1.00 (Europe), CUSA00062 1.06 (Europe, updated) and CUSA04430 1.00
+(Asia/Korea) never meet each other, because the game's lockstep simulation needs the same executable on every PC.
 
 ## Bug reports
 

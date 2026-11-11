@@ -47,6 +47,7 @@ $tests = [ordered]@{
     'aln-present-tests'            = 'presentation tests'
     'aln-trophy-tests'             = 'trophy tests'
     'aln-incident-tests'           = 'bug report tests'
+    'aln-game-install-tests'       = 'Install game and Install update tests (synthetic packages)'
     'aln-update-tests'             = 'updater tests (no network)'
     'aln-update-helper-tests'      = 'update helper tests'
 }

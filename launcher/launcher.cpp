@@ -71,6 +71,8 @@ const char* TranslateLauncherText(const char* english) { return Tr(english); }
 const ImVec4 kAccent = ImVec4(kAccentRed / 255.0f, kAccentGreen / 255.0f, kAccentBlue / 255.0f, 1.0f);
 constexpr double kPlayFeedbackSeconds = 0.4;
 constexpr char kPortTitle[] = "Alienation PC";
+constexpr char kInstallTitle[] = "Select your Alienation base game package";
+constexpr char kInstallUpdateTitle[] = "Select your Alienation update package";
 const std::string kPortUrl = std::string("https://") + kPortRepository;
 
 ImGuiKey ImGuiKeyOf(int scancode) {
@@ -89,9 +91,13 @@ int ScancodeOf(ImGuiKey key) {
 }
 std::string GameFilesHelp() {
     return Tr("Select your own legally obtained Alienation package (.pkg). Supported: ") + SupportedBuildsText() +
-           Tr(". The game is unpacked into the game folder next to the program (about 2.5 GB). No game files are "
-              "included. Reinstalling keeps your saves and settings.");
+           Tr(". The base game is required and plays on its own; an update is optional and can be added later. The game "
+              "is unpacked into the game folder next to the program (about 2.5 GB). No game files are included. "
+              "Reinstalling keeps your saves and settings.");
 }
+constexpr char kUpdateHelp[] =
+    "Optional. Select the update package (.pkg) of the installed game: it is checked, laid over the base game and "
+    "activated. The base game stays installed, and saves and settings are kept.";
 #ifdef _WIN32
 constexpr char kShowLauncherHelp[] = "Off starts the game directly. Hold Shift while starting to bring it back.";
 #else
@@ -283,6 +289,9 @@ public:
         }
         displays_ = ListDisplays();
         gpu_names_ = AlnGraphics::GpuChoices(ListGpuNames());
+        if (!FinishInterruptedRemovals(RootsOf(paths_))) {
+            Log("an interrupted update removal could not be finished yet");
+        }
         placement_ = PlacementTracker(host_.Restored());
         fonts_ = trg::LoadSystemFonts(trg::layout::kTextBody);
         sponsor_icon_ = LoadSponsorIcon(host_);
@@ -376,7 +385,7 @@ private:
             }
         }
         if (const std::optional<std::filesystem::path> picked = browser_.Draw(fonts_.regular, fonts_.size, LauncherTheme())) {
-            StartInstall(Utf8(*picked));
+            StartInstall(Utf8(*picked), browsing_for_);
         }
         if (play_.starting()) {
             DrawStartingMessage();
@@ -658,11 +667,30 @@ private:
             const bool clicked = ready ? ImGui::Button(Tr("Reinstall game..."), ImVec2(-FLT_MIN, 0))
                                        : ui.AccentButton("Install game...");
             if (clicked) {
-                BrowseAndInstall();
+                BrowseAndInstall(PackageKind::kBase);
             }
         }
         ui.EndRows();
         ui.Help(GameFilesHelp().c_str());
+        if (ready) {
+            ui.Row("Update", kUpdateHelp);
+            ImGui::BeginDisabled(install_.running());
+            if (ImGui::Button(Tr("Install update..."), ImVec2(-FLT_MIN, 0))) {
+                BrowseAndInstall(PackageKind::kUpdate);
+            }
+            ImGui::EndDisabled();
+            if (build_ && !InstalledUpdatesOf(RootsOf(paths_), build_->title_id).empty()) {
+                const std::string question = std::string(Tr("Remove installed updates?")) + "\n\n" +
+                                             Tr("This removes installed game updates for ") + build_->title_id +
+                                             Tr(" and returns the game to its base version.") + "\n" +
+                                             Tr("The base game and save data will not be removed.");
+                if (ui.ConfirmRow("Remove update", "Returns to the base game; saves are kept.", "Remove Update...",
+                                  question.c_str(), "Remove Update")) {
+                    RemoveUpdates();
+                }
+            }
+            ui.EndRows();
+        }
         ui.Toggle("Show this launcher", kShowLauncherHelp, kShowLauncherKey, true, "Off", "On");
         ui.EndRows();
     }
@@ -680,16 +708,44 @@ private:
 #endif
     }
 
-    void BrowseAndInstall() {
+    void RemoveUpdates() {
+        if (install_.running() || !build_) {
+            return;
+        }
+        if (OtherProcessRunning(trg::update::CurrentExecutablePath())) {
+            launcher_->SetStatus(Tr("Close the game before removing installed updates"), 6.0);
+            return;
+        }
+        const std::string title_id = build_->title_id;
+        const RemoveAllResult removed = RemoveInstalledUpdatesOf(RootsOf(paths_), title_id);
+        Log("remove updates of %s: %zu removed, %zu failed%s%s", title_id.c_str(), removed.removed, removed.failed,
+            removed.detail.empty() ? "" : ": ", removed.detail.c_str());
+        paths_ = ActiveBuildPaths(RootsOf(paths_));
+        Recheck();
+        if (trophy_page_) {
+            trophy_page_->Invalidate();
+        }
+        if (build_) {
+            Log("active game build: %s (%s)", build_->label, BuildMetadataText(*build_).c_str());
+        }
+        launcher_->SetStatus(removed.ok() ? Tr("Installed updates removed")
+                                          : Tr("Some installed updates could not be removed. Close anything using the "
+                                               "game files and try again."),
+                             removed.ok() ? 6.0 : 8.0);
+    }
+
+    void BrowseAndInstall(PackageKind kind) {
         if (install_.running() || browser_.active() || BuildPinned()) {
             return;
         }
         if (UseBuiltInChooser()) {
+            browsing_for_ = kind;
             browser_.Open(paths_.app0.parent_path().parent_path().parent_path());
             return;
         }
-        StartInstall(trg::BrowseForFile(Tr("Select your Alienation package"),
-                                        {{Tr("PS4 packages (*.pkg)"), "*.pkg"}}));
+        StartInstall(trg::BrowseForFile(Tr(kind == PackageKind::kUpdate ? kInstallUpdateTitle : kInstallTitle),
+                                        {{Tr("PS4 packages (*.pkg)"), "*.pkg"}}),
+                     kind);
     }
 
     // A test instance keeps its ALN_GAME_BUILD: installing or activating another build would move the active build
@@ -703,7 +759,7 @@ private:
         return true;
     }
 
-    void StartInstall(const std::string& picked) {
+    void StartInstall(const std::string& picked, PackageKind kind) {
         if (picked.empty() || BuildPinned()) {
             return;
         }
@@ -713,9 +769,10 @@ private:
         const bool started = install_.Start(
             "Checking the package...",
             [outcome = outcome_, source = PathFromUtf8(picked), roots = RootsOf(paths_),
-             replace = files_ == GameFileState::kValid](trg::Task& task) {
+             replace = files_ == GameFileState::kValid, kind](trg::Task& task) {
                 InstallHooks hooks;
                 hooks.replace_active = replace;
+                hooks.expected = kind;
                 hooks.phase = [&task](const char* text) {
                     task.SetLabel(text);
                     task.Progress(0, 0);
@@ -725,10 +782,10 @@ private:
                     return !task.cancelled();
                 };
                 *outcome = InstallGame(source, roots, hooks);
-                return outcome->ok() ? std::string() : std::string(DescribeInstall(outcome->status).title);
+                return outcome->ok() ? std::string() : std::string(DescribeInstall(*outcome).title);
             });
         if (started) {
-            Log("installing the game from %s", picked.c_str());
+            Log("%s from %s", kind == PackageKind::kUpdate ? "installing an update" : "installing the game", picked.c_str());
         }
     }
 
@@ -741,7 +798,10 @@ private:
         if (!outcome) {
             return;
         }
-        const InstallMessage message = DescribeInstall(outcome->status);
+        const InstallMessage message = DescribeInstall(*outcome);
+        if (!outcome->recognition.empty()) {
+            Log("%s", outcome->recognition.c_str());
+        }
         if (outcome->ok()) {
             if (outcome->status == InstallStatus::kUpToDate) {
                 Log("game already up to date: %s", outcome->detail.c_str());
@@ -756,7 +816,12 @@ private:
             if (trophy_page_) {
                 trophy_page_->Invalidate();
             }
-            launcher_->SetStatus(std::string(message.title) + ". " + message.text, 6.0);
+            std::string status = std::string(message.title) + ". " + message.text;
+            if (build_ && files_ == GameFileState::kValid) {
+                Log("active game build: %s (%s)", build_->label, BuildMetadataText(*build_).c_str());
+                status += std::string(" ") + Tr("Installed version: ") + build_->label + ".";
+            }
+            launcher_->SetStatus(status, 6.0);
             return;
         }
         if (outcome->status == InstallStatus::kCancelled) {
@@ -1054,6 +1119,7 @@ private:
     std::shared_ptr<InstallResult> outcome_;
     trg::Task install_;
     PackageBrowser browser_;
+    PackageKind browsing_for_ = PackageKind::kBase;
     std::string install_failure_;
     std::string install_failure_text_;
     bool skip_finish_save_ = false;

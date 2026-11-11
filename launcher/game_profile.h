@@ -39,7 +39,7 @@ struct GameBuild {
     const AlnFrameRatePatch* frame_rate;                 // the verified engine_set_fps binding
 };
 
-// The supported builds.
+// The supported builds: each title's base first, then its updates.
 std::span<const GameBuild> SupportedBuilds();
 
 // The finished game's layer: its param.sfo is the one of the installed game.
@@ -47,6 +47,11 @@ const PackageLayer& FinishedLayer(const GameBuild& build);
 
 // The finished package's APP_VER and VERSION, formatted for display (01.00 becomes 1.00).
 std::string BuildMetadataText(const GameBuild& build);
+
+// True for a build finished by an update package.
+inline bool IsUpdateBuild(const GameBuild& build) {
+    return build.layers.size() > 1;
+}
 
 // The build whose base package a build's update is laid over, or nullptr when the build has no update.
 const GameBuild* BaseBuildOf(const GameBuild& build, std::span<const GameBuild> builds = SupportedBuilds());

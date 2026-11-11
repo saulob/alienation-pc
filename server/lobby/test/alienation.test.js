@@ -7,6 +7,7 @@ import { encodeRelayFrame, roomToken } from '../src/relay.js';
 import { ROOM, makeLobby } from './harness.js';
 
 const EU = 'CUSA00062-1.00';
+const EU_106 = 'CUSA00062-1.06';
 const KR = 'CUSA04430-1.00';
 const PUBLIC = 0x04000000;
 const HIDDEN = 0x14000000;
@@ -50,6 +51,18 @@ test('rooms.list shows public rooms of the reader build only, with no address, k
   assert.deepEqual(reader.call('rooms.list', { rev: list.rev }).unchanged, true);
   const kr = greeted(env, { build: KR });
   assert.deepEqual(kr.call('rooms.list').rooms.map((r) => r.host), ['Korea']);
+});
+
+test('two versions of one title are separate builds: their rooms and joins never meet', () => {
+  const env = makeLobby({ log: () => {} });
+  const { room: old } = host(env, { name: 'Old' });
+  const { room: updated } = host(env, { name: 'Updated', build: EU_106 });
+  assert.deepEqual(greeted(env).call('rooms.list').rooms.map((r) => r.host), ['Old']);
+  const reader = greeted(env, { build: EU_106 });
+  assert.deepEqual(reader.call('rooms.list').rooms.map((r) => r.host), ['Updated']);
+  assert.equal(reader.call('room.join', { room: old.id }).code, 'incompatible');
+  assert.equal(greeted(env).call('room.join', { room: updated.id }).code, 'incompatible');
+  assert.equal(greeted(env, { build: EU_106 }).call('room.join', { room: updated.id }).code, 'ok');
 });
 
 test('rooms.list counts a full room as not joinable and a launcher without a build sees none', () => {

@@ -15,9 +15,14 @@ You need your own legally obtained copy of the game: a decrypted Alienation
 PS4 package (.pkg). This port currently accepts these builds:
 
   Title ID CUSA00062, APP_VER 01.00 (content ID EP9000-CUSA00062_00-ALIENATIONGAMEEU, Europe)
+  Title ID CUSA00062, APP_VER 01.06 (the European update, installed over 01.00)
   Title ID CUSA04430, APP_VER 01.00 (content ID HP9000-CUSA04430_00-ALIENATIONGAMEKR, Asia)
 
-Updates are not supported yet: the European 1.06 update package is refused.
+To add the European 1.06 update, install the base game first, then click
+"Install update..." on the Play page and select the update package. 1.06 is
+recognized but not ported yet: it runs without the 1.00 enhancements (render
+resolution, aspect ratio, frame rate target, Skip Intro, Exit Game, Xbox
+prompts) and is untested. "Remove update" returns to 1.00; saves are kept.
 
 Any other build is refused, and the log names what was found. A package still
 encrypted for a PS4 console cannot be unpacked on a PC.

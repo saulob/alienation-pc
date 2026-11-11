@@ -131,6 +131,13 @@ target_link_libraries(aln-incident-tests PRIVATE aln_launcher_core)
 set_target_properties(aln-incident-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 target_compile_options(aln-incident-tests PRIVATE -Wall -Wextra)
 
+# Focused tests of Install game and Install update, on synthetic packages and folders: no window, no game files needed.
+add_executable(aln-game-install-tests EXCLUDE_FROM_ALL ../tests/game_install_tests.cpp)
+target_compile_definitions(aln-game-install-tests PRIVATE ALN_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+target_link_libraries(aln-game-install-tests PRIVATE aln_launcher_core)
+set_target_properties(aln-game-install-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_compile_options(aln-game-install-tests PRIVATE -Wall -Wextra)
+
 # Focused tests of the local trophies (tools/test.ps1); not part of the default build.
 add_executable(aln-trophy-tests EXCLUDE_FROM_ALL ../tests/trophy_tests.cpp ${ALN_LOG_SOURCES} ../gpu/shim/aln_png.cpp)
 target_link_libraries(aln-trophy-tests PRIVATE aln_launcher_core PNG::PNG)

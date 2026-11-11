@@ -520,6 +520,57 @@ std::optional<InstallResult> ReuseInstalledBuild(const GameRoots& roots, std::sp
     return result;
 }
 
+// Install update upgrades the active game: an update of another title is refused, whatever other title is installed.
+std::optional<InstallResult> RefuseUpdateOfOtherTitle(const GameRoots& roots, const InstallHooks& hooks,
+                                                      std::span<const GameBuild> builds, const GameBuild& update) {
+    if (hooks.expected != PackageKind::kUpdate || !IsUpdateBuild(update)) {
+        return std::nullopt;
+    }
+    const GameBuild* active = LastPreparedBuild(roots, builds);
+    if (!active || std::string_view(active->title_id) == update.title_id) {
+        return std::nullopt;
+    }
+    InstallResult result = Failure(InstallStatus::kUpdateForOtherTitle, std::string(update.label) + " is an update of " +
+                                                                             update.title_id + ", the active game is " +
+                                                                             active->label);
+    result.update_title_id = update.title_id;
+    result.installed_title_id = active->title_id;
+    return result;
+}
+
+// Install update never goes back: an update older than the active update of its title is refused. Going back is Remove
+// update, or Install game with the base package.
+std::optional<InstallResult> RefuseOlderUpdate(const GameRoots& roots, const InstallHooks& hooks,
+                                               std::span<const GameBuild> builds, const GameBuild& update) {
+    if (hooks.expected != PackageKind::kUpdate || !IsUpdateBuild(update)) {
+        return std::nullopt;
+    }
+    const GameBuild* active = LastPreparedBuild(roots, builds);
+    if (!active || active == &update || std::string_view(active->title_id) != update.title_id || !IsUpdateBuild(*active) ||
+        std::string_view(FinishedLayer(update).app_ver) >= FinishedLayer(*active).app_ver) {
+        return std::nullopt;
+    }
+    InstallResult result = Failure(InstallStatus::kOlderUpdate,
+                                   std::string(update.label) + " is older than the active " + active->label);
+    result.installed_label = active->label;
+    return result;
+}
+
+// The action's package kind, the active title and the active update's version, checked before anything is written.
+std::optional<InstallResult> RefuseForAction(const GameRoots& roots, const InstallHooks& hooks,
+                                             std::span<const GameBuild> builds, const GameBuild& build, bool update) {
+    if (hooks.expected == PackageKind::kBase && update) {
+        return Failure(InstallStatus::kExpectedBasePackage, std::string("update package for ") + build.label);
+    }
+    if (hooks.expected == PackageKind::kUpdate && !update) {
+        return Failure(InstallStatus::kExpectedUpdatePackage, std::string("base package for ") + build.label);
+    }
+    if (std::optional<InstallResult> refused = RefuseUpdateOfOtherTitle(roots, hooks, builds, build)) {
+        return refused;
+    }
+    return RefuseOlderUpdate(roots, hooks, builds, build);
+}
+
 // A base package that names a supported build but carries another executable is refused before anything is unpacked;
 // nothing is returned when the installation should go on. An update's executable is checked once it is laid over its base.
 std::optional<InstallResult> RejectForeignExecutable(Package& package, const GameCheck& identity) {
@@ -606,7 +657,8 @@ InstallResult InstallUpdatePackage(const fs::path& source, Package& package, con
         return Failure(FromPackage(loaded.code), loaded.detail);
     }
     const uint64_t total = package.total_bytes();
-    if (InstallResult prepared = PrepareStaging(layout, 0); !prepared.ok()) {
+    // The base's files are linked; the update's are unpacked in full.
+    if (InstallResult prepared = PrepareStaging(layout, total); !prepared.ok()) {
         return prepared;
     }
     StagingGuard app0_guard(layout.app0_stage), image_guard(layout.image_stage);
@@ -654,11 +706,174 @@ InstallResult StageUpdate(const fs::path& base_app0, const fs::path& update_dir,
     return OverlayUpdate(update_dir, staged_app0);
 }
 
+namespace {
+
+constexpr char kRemovingSuffix[] = ".removing";
+
+bool IsLinkOrJunction(const fs::path& path) {
+    std::error_code ec;
+    if (fs::is_symlink(fs::symlink_status(path, ec))) {
+        return true;
+    }
+#ifdef _WIN32
+    const DWORD attributes = GetFileAttributesW(path.c_str());
+    return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_REPARSE_POINT);
+#else
+    return false;
+#endif
+}
+
+// The build's own two folders, directly in the roots and named after the build; nothing else is ever removed.
+bool OwnedFolders(const GameRoots& roots, const GameBuild& build, const Layout& layout) {
+    const auto owned = [&](const fs::path& dir, const fs::path& root) {
+        return dir.parent_path() == Normal(root) && dir.filename() == PathFromUtf8(build.folder) && !IsLinkOrJunction(dir) &&
+               !IsLinkOrJunction(root);
+    };
+    return owned(layout.app0, roots.prepared) && owned(layout.image, roots.image);
+}
+
+bool RemoveAside(const fs::path& aside, std::string& detail) {
+    std::error_code ec;
+    if (!fs::exists(aside, ec)) {
+        return true;
+    }
+    fs::remove_all(aside, ec);
+    if (ec) {
+        detail += (detail.empty() ? "" : "; ") + Utf8(aside) + " left for later: " + ec.message();
+        return false;
+    }
+    return true;
+}
+
+} // namespace
+
+RemoveResult RemoveInstalledUpdate(const GameRoots& roots, const GameBuild& build, std::span<const GameBuild> builds) {
+    RemoveResult result;
+    const auto fail = [&](RemoveStatus status, std::string detail) {
+        result.status = status;
+        result.detail = std::move(detail);
+        return result;
+    };
+    if (!BaseBuildOf(build, builds)) {
+        return fail(RemoveStatus::kNotUpdate, std::string(build.label) + " is not an update");
+    }
+    const Layout layout(BuildPaths(roots, build));
+    if (!OwnedFolders(roots, build, layout)) {
+        return fail(RemoveStatus::kForeignFolder, Utf8(layout.app0) + " is not the update's own folder");
+    }
+    std::error_code ec;
+    if (!fs::exists(layout.app0, ec) && !fs::exists(layout.image, ec)) {
+        return fail(RemoveStatus::kNotInstalled, std::string(build.label) + " is not installed");
+    }
+    std::string sfo;
+    {
+        std::ifstream sfo_file(layout.app0 / "sce_sys" / "param.sfo", std::ios::binary);
+        sfo.assign(std::istreambuf_iterator<char>(sfo_file), std::istreambuf_iterator<char>());
+    }
+    if (fs::exists(layout.app0, ec) && CheckSfoIdentity(sfo, builds).build != &build) {
+        return fail(RemoveStatus::kForeignFolder, Utf8(layout.app0) + " does not hold " + build.label);
+    }
+    const fs::path app0_aside = WithSuffix(layout.app0, kRemovingSuffix);
+    const fs::path image_aside = WithSuffix(layout.image, kRemovingSuffix);
+    RemoveAside(app0_aside, result.detail);
+    RemoveAside(image_aside, result.detail);
+    if (fs::exists(app0_aside, ec) || fs::exists(image_aside, ec)) {
+        return fail(RemoveStatus::kInUse, "an earlier removal is still in use: " + result.detail);
+    }
+    if (fs::exists(layout.app0, ec) && !RenameWithRetry(layout.app0, app0_aside)) {
+        return fail(RemoveStatus::kInUse, Utf8(layout.app0) + " is in use");
+    }
+    if (fs::exists(layout.image, ec) && !RenameWithRetry(layout.image, image_aside)) {
+        if (fs::exists(app0_aside, ec)) {
+            RenameWithRetry(app0_aside, layout.app0);
+        }
+        return fail(RemoveStatus::kInUse, Utf8(layout.image) + " is in use");
+    }
+    RemoveAside(app0_aside, result.detail);
+    RemoveAside(image_aside, result.detail);
+    return result;
+}
+
+std::vector<const GameBuild*> InstalledUpdatesOf(const GameRoots& roots, std::string_view title_id,
+                                                 std::span<const GameBuild> builds) {
+    std::vector<const GameBuild*> updates;
+    for (const GameBuild* build : PreparedBuilds(roots, builds)) {
+        if (IsUpdateBuild(*build) && title_id == build->title_id) {
+            updates.push_back(build);
+        }
+    }
+    return updates;
+}
+
+RemoveAllResult RemoveInstalledUpdatesOf(const GameRoots& roots, std::string_view title_id,
+                                         std::span<const GameBuild> builds) {
+    RemoveAllResult result;
+    for (const GameBuild& build : builds) {
+        if (!IsUpdateBuild(build) || title_id != build.title_id) {
+            continue;
+        }
+        const RemoveResult removed = RemoveInstalledUpdate(roots, build, builds);
+        if (removed.status == RemoveStatus::kRemoved) {
+            ++result.removed;
+        } else if (removed.status != RemoveStatus::kNotInstalled) {
+            ++result.failed;
+        }
+        if (!removed.detail.empty() && removed.status != RemoveStatus::kNotInstalled) {
+            result.detail += (result.detail.empty() ? "" : "; ") + removed.detail;
+        }
+    }
+    for (const GameBuild& build : builds) {
+        if (IsUpdateBuild(build) || title_id != build.title_id) {
+            continue;
+        }
+        const fs::path base_app0 = BuildPaths(roots, build).app0;
+        if (result.removed > 0 && PreparationScope(base_app0) == "full") {
+            ActivatePrepared(base_app0);
+        }
+        result.base_selected = LastPreparedBuild(roots, builds) == &build;
+    }
+    return result;
+}
+
+bool FinishInterruptedRemovals(const GameRoots& roots, std::span<const GameBuild> builds) {
+    bool clean = true;
+    std::string detail;
+    for (const GameBuild& build : builds) {
+        if (!IsUpdateBuild(build)) {
+            continue;
+        }
+        const Layout layout(BuildPaths(roots, build));
+        if (!OwnedFolders(roots, build, layout)) {
+            continue;
+        }
+        clean = RemoveAside(WithSuffix(layout.app0, kRemovingSuffix), detail) && clean;
+        clean = RemoveAside(WithSuffix(layout.image, kRemovingSuffix), detail) && clean;
+    }
+    return clean;
+}
+
+bool RefusedPackageKind(InstallStatus status) {
+    return status == InstallStatus::kExpectedBasePackage || status == InstallStatus::kExpectedUpdatePackage;
+}
+
 InstallResult InstallGame(const fs::path& source, const GameRoots& roots, const InstallHooks& hooks,
                           std::span<const GameBuild> builds) {
     std::error_code ec;
     return fs::is_directory(source, ec) ? InstallFromFolder(source, roots, hooks, builds)
                                         : InstallFromPackage(source, roots, hooks, builds);
+}
+
+// The package as recognized from its param.sfo: its build, whether it is the base or an update, and the base an update
+// goes over.
+static std::string PackageRecognition(const fs::path& file, const GameCheck& identity, std::span<const GameBuild> builds) {
+    const GameBuild& build = *identity.build;
+    std::string text = "package recognized: " + Utf8(file.filename()) + " is " + build.label + " (" +
+                       (identity.layer > 0 ? "update" : "base") + ", " + BuildMetadataText(build) + ", layer " +
+                       std::to_string(identity.layer + 1) + " of " + std::to_string(build.layers.size());
+    if (const GameBuild* base = BaseBuildOf(build, builds); base && identity.layer > 0) {
+        text += std::string(", laid over ") + base->label;
+    }
+    return text + ")";
 }
 
 InstallResult InstallFromPackage(const fs::path& package_file, const GameRoots& roots, const InstallHooks& hooks,
@@ -690,20 +905,28 @@ InstallResult InstallFromPackage(const fs::path& package_file, const GameRoots& 
         return Failure(FromCheck(identity), identity.detail);
     }
     const GameBuild& build = *identity.build;
+    const std::string recognition = PackageRecognition(source, identity, builds);
+    const auto recognized = [&](InstallResult result) {
+        result.recognition = recognition;
+        return result;
+    };
+    if (std::optional<InstallResult> refused = RefuseForAction(roots, hooks, builds, build, identity.layer > 0)) {
+        return recognized(*refused);
+    }
     if (std::optional<InstallResult> reused = ReuseInstalledBuild(roots, builds, build, hooks.replace_active)) {
-        return *reused;
+        return recognized(*reused);
     }
     const PackageResult loaded = package.LoadFiles();
     if (loaded.ok()) {
         if (std::optional<InstallResult> foreign = RejectForeignExecutable(package, identity)) {
-            return *foreign;
+            return recognized(*foreign);
         }
     }
     const Layout layout(BuildPaths(roots, build));
     if (identity.layer > 0) {
-        return InstallUpdatePackage(source, package, loaded, layout, roots, hooks, builds, build);
+        return recognized(InstallUpdatePackage(source, package, loaded, layout, roots, hooks, builds, build));
     }
-    return InstallBasePackage(source, package, loaded, layout, hooks, builds, build);
+    return recognized(InstallBasePackage(source, package, loaded, layout, hooks, builds, build));
 }
 
 InstallResult InstallFromFolder(const fs::path& source_dir, const GameRoots& roots, const InstallHooks& hooks,
@@ -728,6 +951,9 @@ InstallResult InstallFromFolder(const fs::path& source_dir, const GameRoots& roo
         return UnsupportedOrFailure(check, source);
     }
     const GameBuild& build = *check.build;
+    if (std::optional<InstallResult> refused = RefuseForAction(roots, hooks, builds, build, IsUpdateBuild(build))) {
+        return *refused;
+    }
     if (std::optional<InstallResult> reused = ReuseInstalledBuild(roots, builds, build, hooks.replace_active)) {
         return *reused;
     }
@@ -833,7 +1059,7 @@ InstallMessage DescribeInstall(InstallStatus status) {
                 Tr("The port's game folder holds other files. Move them out and try again.")};
     case InstallStatus::kNoSpace:
         return {Tr("Not enough free space"),
-                Tr("The game needs about 2.5 GB. Free up disk space and try again.")};
+                Tr("The game needs about 2.5 GB and an update up to 1.7 GB more. Free up disk space and try again.")};
     case InstallStatus::kWriteFailed:
         return {Tr("Could not install the game"), Tr("The game files could not be written next to the port.")};
     case InstallStatus::kPrepareFailed:
@@ -841,7 +1067,8 @@ InstallMessage DescribeInstall(InstallStatus status) {
                 Tr("The game's code could not be prepared. The log has the details.")};
     case InstallStatus::kUpdateNeedsBase:
         return {Tr("Base game required"),
-                Tr("This package is an update. Install the base package of the same game first, then install the update.")};
+                Tr("This package is an update. Install the base game package of the same title ID (CUSA number) first, "
+                   "then install the update.")};
     case InstallStatus::kActivated:
         return {Tr("Game activated"), Tr("The selected build is now the active game.")};
     case InstallStatus::kUpToDate:
@@ -850,8 +1077,31 @@ InstallMessage DescribeInstall(InstallStatus status) {
         return {Tr("Alienation version not supported yet"),
                 Tr("This port supports ") + SupportedBuildsText() +
                     Tr(". The package's identity was written to the latest log; share it when reporting this version.")};
+    case InstallStatus::kExpectedBasePackage:
+        return {Tr("This is an update package"),
+                Tr("Install game needs the base game. Use Install update for an update package.")};
+    case InstallStatus::kExpectedUpdatePackage:
+        return {Tr("This is the base game package"),
+                Tr("Install update needs an update package. Use Install game for the base game.")};
+    case InstallStatus::kUpdateForOtherTitle:
+        return {Tr("Update for another game version"),
+                Tr("Install the matching game version before applying this update.")};
+    case InstallStatus::kOlderUpdate:
+        return {Tr("A newer update is installed"),
+                Tr("This update is older than the installed one. Remove the installed update first to go back.")};
     }
     return {Tr("Could not install the game"), Tr("An unexpected error occurred.")};
+}
+
+InstallMessage DescribeInstall(const InstallResult& result) {
+    InstallMessage message = DescribeInstall(result.status);
+    if (result.status == InstallStatus::kUpdateForOtherTitle) {
+        message.title = Tr("This update is for ") + result.update_title_id + Tr(", but the installed game is ") +
+                        result.installed_title_id;
+    } else if (result.status == InstallStatus::kOlderUpdate) {
+        message.title = Tr("A newer update is installed: ") + result.installed_label;
+    }
+    return message;
 }
 
 } // namespace aln

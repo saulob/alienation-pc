@@ -790,6 +790,7 @@ static const RuntimeExport exports[]={
     {"sceNpAuthCreateRequest",np_request}, {"sceNpAuthAbortRequest",ok_void},
     {"sceNpAuthGetAuthorizationCodeA",np_signed_out}, {"sceNpAuthGetIdTokenA",np_signed_out},
     {"sceNpTusCreateNpTitleCtxA",np_request_ctx}, {"sceNpTssCreateNpTitleCtxA",np_request_ctx},
+    {"sceNpTssCreateNpTitleCtx",np_request_ctx},
     {"sceNpTusDeleteNpTitleCtx",ok_void}, {"sceNpTusCreateRequest",np_request}, {"sceNpTusDeleteRequest",ok_void},
     {"sceNpTusAbortRequest",ok_void}, {"sceNpTusPollAsync",np_poll},
     {"sceNpTusGetDataAAsync",np_signed_out}, {"sceNpTusSetDataAAsync",np_signed_out},

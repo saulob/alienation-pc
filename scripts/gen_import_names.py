@@ -4,7 +4,8 @@ runtime_lookup() binds the runtime's name tables through this list, so a functio
 implements is only reachable when its NID is listed here. Names come from shadPS4's aerolib
 (src/core/aerolib/aerolib.inl), which this repository does not vendor.
 
-Usage: python scripts/gen_import_names.py <game dir> --aerolib <aerolib.inl>   (or ALN_AEROLIB)
+Usage: python scripts/gen_import_names.py <game dir> [<game dir> ...] --aerolib <aerolib.inl>   (or ALN_AEROLIB)
+Pass every supported build's prepared folder: the names are the union of their imports.
 """
 import argparse
 import os
@@ -27,17 +28,19 @@ HEADER = ('/* NID -> symbol name for the eboot and bundled-module imports (diagn
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('game', type=Path)
+    parser.add_argument('game', type=Path, nargs='+')
     parser.add_argument('--aerolib', type=Path, default=os.environ.get('ALN_AEROLIB'))
     args = parser.parse_args()
     if not args.aerolib or not Path(args.aerolib).is_file():
         parser.error('aerolib.inl not found: pass --aerolib or set ALN_AEROLIB')
-    profile = game_profiles.profile(args.game)
-    modules = list(profile['modules']) if profile else ['libc.prx']
-    extra = list(profile['extra_executables']) if profile else []
     names = dict(re.findall(r'STUB\(\s*"([^"]+)"\s*,\s*([^)\s]+)\s*\)', Path(args.aerolib).read_text(errors='replace')))
     names.update(EXTRA_NAMES)
-    paths = [args.game / 'eboot.bin'] + [args.game / 'sce_module' / m for m in modules] + [args.game / e for e in extra]
+    paths = []
+    for game in args.game:
+        profile = game_profiles.profile(game)
+        modules = list(profile['modules']) if profile else ['libc.prx']
+        extra = list(profile['extra_executables']) if profile else []
+        paths += [game / 'eboot.bin'] + [game / 'sce_module' / m for m in modules] + [game / e for e in extra]
     found = {}
     for path in paths:
         for s in read_module(path)['symbols']:

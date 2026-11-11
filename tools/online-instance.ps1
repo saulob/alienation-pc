@@ -22,7 +22,7 @@
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
     [Parameter(Mandatory = $true)][ValidatePattern('^[A-Za-z0-9-]{1,16}$')][string]$Name,
-    [ValidateSet('', 'CUSA00062-1.00', 'CUSA04430-1.00')][string]$Build = '',
+    [ValidateSet('', 'CUSA00062-1.00', 'CUSA00062-1.06', 'CUSA04430-1.00')][string]$Build = '',
     [ValidatePattern('^[A-Za-z0-9_-]{0,16}$')][string]$OnlineName = '',
     [ValidatePattern('^(wss?://[^\s]+)?$')][string]$Lobby = '',
     [switch]$NoUpnp,

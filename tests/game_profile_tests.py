@@ -11,6 +11,9 @@ sys.path.insert(0, str(ROOT / 'scripts'))
 import game_profiles  # noqa: E402
 
 failures = []
+# The guest patch tables keyed by build ("CUSA00062-1.00"): a build is patched only when it is named here.
+FEATURE_TABLES = ('src/skip_intro.c', 'src/exit_game.c', 'launcher/exit_game_script.c',
+                  'launcher/controller_prompts_data.c', 'launcher/controller_prompts_glyphs_data.c')
 
 
 def check(condition, text):
@@ -76,11 +79,51 @@ def main():
         check(all(f'sce_module/{m}' in shared for m in modules), f'{title} {version}: a module is not a shared file')
         check(not set(build['data_files']) & set(shared), f'{title} {version}: a data file is also a shared file')
 
+    check_updates(python)
+    check_feature_isolation(cpp, python)
     for text in failures:
         print(f'FAILED: {text}')
     if not failures:
         print(f'game profile tests passed ({len(python)} builds)')
     return 1 if failures else 0
+
+
+def check_updates(python):
+    """Every update build is laid over exactly one base build of its title, listed before it."""
+    order = [(title, version) for title, version, _ in python]
+    for title, version, build in python:
+        layers = build['layers']
+        check(not layers[0]['update'] and all(layer['update'] for layer in layers[1:]),
+              f'{title} {version}: only the layers after the base may be updates')
+        check(layers[-1]['app_ver'] == version.zfill(5), f'{title} {version}: the finished APP_VER does not name the version')
+        if len(layers) == 1:
+            continue
+        bases = [v for v, b in game_profiles.PROFILES[title]['versions'].items()
+                 if len(b['layers']) == 1 and b['layers'][0] == layers[0]]
+        check(len(bases) == 1, f'{title} {version}: {len(bases)} base builds')
+        if bases:
+            check(order.index((title, bases[0])) < order.index((title, version)), f'{title} {version}: listed before its base')
+    check(('CUSA00062', '1.06') in order, 'CUSA00062 1.06 is not a supported build')
+
+
+def check_feature_isolation(cpp, python):
+    """A build without verified patch sites is named by no guest patch table, so no other build's patch applies to it."""
+    keys = {name: set(re.findall(r'\{"(CUSA\d{5}-\d+\.\d\d)"', (ROOT / name).read_text(encoding='utf-8')))
+            for name in FEATURE_TABLES}
+    supported = {f'{title}-{version}' for title, version, _ in python}
+    for name, found in keys.items():
+        check(found, f'{name}: no build keys found')
+        check(found <= supported, f'{name}: {sorted(found - supported)} are not supported builds')
+    unported = []
+    for fields, (title, version, _) in zip(cpp, python):
+        key = f'{title}-{version}'
+        if fields[9] == '{}' and fields[10] == 'nullptr':
+            unported.append(key)
+            for name, found in keys.items():
+                check(key not in found, f'{key} has no verified sites but {name} names it')
+        else:
+            check(fields[9] != '{}' and fields[10] != 'nullptr', f'{key}: resolution and frame rate sites must come together')
+    check('CUSA00062-1.06' in unported, 'CUSA00062 1.06 must stay without guest patches until its sites are verified')
 
 
 if __name__ == '__main__':

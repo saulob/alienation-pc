@@ -18,7 +18,7 @@ No dependencies are installed for either the tests or the local server.
 
 ## What is specific to Alienation
 
-- **Builds never mix.** A client's `hello` carries `build` (`CUSA00062-1.00`, `CUSA04430-1.00`). The game runs a
+- **Builds never mix.** A client's `hello` carries `build` (`CUSA00062-1.00`, `CUSA00062-1.06`, `CUSA04430-1.00`). The game runs a
   deterministic lockstep simulation, so peers must run the same executable: rooms remember their creator's build, searches
   leave other builds out (counted in `incompatible`), a join is refused with `incompatible` and the room's `build`, and the
   relay never routes between two builds. `room.create`, `room.search`, `room.join`, `room.external` and `room.members` need

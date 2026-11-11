@@ -11,20 +11,35 @@ No game files are included. You need your own decrypted Alienation PS4 package.
 
 ## Supported builds
 
-| Title ID | APP_VER | Content ID | eboot.bin SHA-256 |
-|---|---|---|---|
-| `CUSA00062` | `01.00` | `EP9000-CUSA00062_00-ALIENATIONGAMEEU` | `f5f41f870db752add56920c5538441bc3750b1442f69c1de3895ee282887d855` |
-| `CUSA04430` | `01.00` | `HP9000-CUSA04430_00-ALIENATIONGAMEKR` | `11928457792fdba30aee3ceb9f5fb300bac720d0f3c1774825a8380a2dc9b72e` |
+| Build | Title ID | APP_VER | Content ID | eboot.bin SHA-256 |
+|---|---|---|---|---|
+| CUSA00062 1.00 EU | `CUSA00062` | `01.00` | `EP9000-CUSA00062_00-ALIENATIONGAMEEU` | `f5f41f870db752add56920c5538441bc3750b1442f69c1de3895ee282887d855` |
+| CUSA00062 1.06 EU | `CUSA00062` | `01.06` (update) | `EP9000-CUSA00062_00-ALIENATIONGAMEEU` | `c65c18865691d7288055cae70af983aa86898d59936976ef12f5eb033eda7243` |
+| CUSA04430 1.00 KR | `CUSA04430` | `01.00` | `HP9000-CUSA04430_00-ALIENATIONGAMEKR` | `11928457792fdba30aee3ceb9f5fb300bac720d0f3c1774825a8380a2dc9b72e` |
 
 The `HP` publisher prefix and `KR` suffix of CUSA04430's content ID identify an Asian (Korean) release, whatever name
-the package file has. Each build is installed in its own folder (`game\prepared\<TITLE_ID>-1.00`); choosing the package
-of an installed build again makes it the active one. The European 1.06 update is not supported yet and is refused.
+the package file has. Each build is installed in its own folder (`game\prepared\<TITLE_ID>-<version>`); choosing the
+package of an installed build again makes it the active one.
+
+**CUSA00062 1.06 is installed and recognized, not yet ported:** it runs without the 1.00 guest patches (native 16:9
+render size, the game's own frame rate, no Skip Intro, Exit Game or Xbox prompts) and has not been tested in game.
+Online, 1.06 players only meet 1.06 players. See [docs/GAME_BUILDS.md](docs/GAME_BUILDS.md) for the per-build feature
+table, the update's identity and what is left to port.
+
+### Installing an update
+
+Install the base game first (**Install game...**), then press **Install update...** on the Play page and select the update
+package. The launcher checks the package's metadata (title, update category, version), refuses a base package, another
+title's update or an older update before writing anything, lays the update over the installed base in a staging folder,
+checks it and builds its boot image, and only then switches to it. A failed or cancelled update leaves the installed game
+as it was. Saves and settings are never touched. **Remove update** returns to the base game.
 
 ## Features
 
 Working in the launcher:
 
 - Install from your own `.pkg`, with the build identified by its metadata and executable hash; other builds are refused
+- Install update and Remove update, staged and checked before the installed game changes
 - Graphics card and renderer selection, window mode, monitor, VSync, presentation, SMAA, anisotropic filtering,
   FSR 1 and RCAS, frame counter, render resolution (native to 4K) and aspect ratio (16:9, 16:10, 21:9, 32:9, 4:3, 5:4),
   and a 59.94 FPS engine target; the last three are untested in game

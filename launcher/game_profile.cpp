@@ -8,8 +8,9 @@ namespace aln {
 namespace {
 
 constexpr PackageLayer kBase100Layers[] = {{"01.00", "01.00", false}};
+constexpr PackageLayer kUpdate106Layers[] = {{"01.00", "01.00", false}, {"01.06", "01.00", true}};
 
-constexpr const char* kEurope100DataFiles[] = {
+constexpr const char* kEuropeDataFiles[] = {
     "audio.pck", "stream.dat", "video/intro.mp4", "video/loading.mp4", "video/splash.mp4", "video/title.mp4",
 };
 
@@ -46,12 +47,26 @@ constexpr GameBuild kGameBuilds[] = {
         "1.00",
         "CUSA00062-1.00",
         "f5f41f870db752add56920c5538441bc3750b1442f69c1de3895ee282887d855",
-        kEurope100DataFiles,
+        kEuropeDataFiles,
         "CUSA00062 1.00",
         "Europe",
         kBase100Layers,
         kEurope100ResolutionSites,
         &kEurope100FrameRate,
+    },
+    // No patch site is verified in this executable yet: it runs without the 1.00 guest patches.
+    {
+        "CUSA00062",
+        "EP9000-CUSA00062_00-ALIENATIONGAMEEU",
+        "1.06",
+        "CUSA00062-1.06",
+        "c65c18865691d7288055cae70af983aa86898d59936976ef12f5eb033eda7243",
+        kEuropeDataFiles,
+        "CUSA00062 1.06",
+        "Europe",
+        kUpdate106Layers,
+        {},
+        nullptr,
     },
     {
         "CUSA04430",

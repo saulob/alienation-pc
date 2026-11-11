@@ -32,4 +32,7 @@ std::wstring WindowsCommandLine(const std::filesystem::path& executable, const s
 bool CreateGameProcess(const std::filesystem::path& executable, const std::vector<std::string>& arguments,
                        std::string& error);
 
+// True when another running process is this executable (the game started from it, or another launcher).
+bool OtherProcessRunning(const std::filesystem::path& executable);
+
 } // namespace aln

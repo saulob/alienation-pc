@@ -41,6 +41,8 @@ std::string PreparationScope(const std::filesystem::path& app0);
 GamePaths BuildPaths(const GameRoots& roots, const GameBuild& build);
 // The build whose complete folder was prepared last, or nullptr when no supported build is complete.
 const GameBuild* LastPreparedBuild(const GameRoots& roots, std::span<const GameBuild> builds = SupportedBuilds());
+// The builds whose own folder holds a complete preparation marker, in table order.
+std::vector<const GameBuild*> PreparedBuilds(const GameRoots& roots, std::span<const GameBuild> builds = SupportedBuilds());
 // The folders of the installed build: the complete game that was prepared last, else the first build's.
 GamePaths ActiveBuildPaths(const GameRoots& roots, std::span<const GameBuild> builds = SupportedBuilds());
 GameRoots RootsOf(const GamePaths& paths);

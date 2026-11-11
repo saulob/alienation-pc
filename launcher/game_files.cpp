@@ -298,6 +298,16 @@ const GameBuild* LastPreparedBuild(const GameRoots& roots, std::span<const GameB
     return chosen;
 }
 
+std::vector<const GameBuild*> PreparedBuilds(const GameRoots& roots, std::span<const GameBuild> builds) {
+    std::vector<const GameBuild*> prepared;
+    for (const GameBuild& build : builds) {
+        if (PreparationScope(BuildPaths(roots, build).app0) == "full") {
+            prepared.push_back(&build);
+        }
+    }
+    return prepared;
+}
+
 GamePaths ActiveBuildPaths(const GameRoots& roots, std::span<const GameBuild> builds) {
     const GameBuild* last = LastPreparedBuild(roots, builds);
     return BuildPaths(roots, last ? *last : builds[0]);

@@ -14,7 +14,7 @@ Read from the user's own packages without running game code. It says what the lo
 | Pubtool date | 2018-06-02 | 2018-03-11 | 2018-06-02 |
 | Image key | 3: fake PKG | 3: fake PKG | 3: fake PKG |
 | Header vs file size | match | match | match |
-| Supported | yes (primary) | yes | no: refused until analysed |
+| Supported | yes (primary) | yes | installed and recognized, guest patches not ported ([GAME_BUILDS.md](GAME_BUILDS.md)) |
 
 CUSA04430's content ID (`HP` publisher prefix, `KR` suffix) is an Asian Korean release, not a USA one. Neither base
 param.sfo has `USER_DEFINED_PARAM_*`, so both content profiles are `ALNCONT1`, SKU 3 and four zeros.
@@ -30,6 +30,9 @@ Contents: `eboot.bin`, `sce_module/{libc,libSceFios2}.prx`, `sce_sys/`, `sce_dis
 | `eboot.bin` | `f5f41f870db752add56920c5538441bc3750b1442f69c1de3895ee282887d855` | `11928457792fdba30aee3ceb9f5fb300bac720d0f3c1774825a8380a2dc9b72e` |
 | `sce_module/libc.prx` | `e436eb5bd6bc6dd706edea917da1e52460ce760971b8f067149f479fd3410bfe` | same |
 | `sce_module/libSceFios2.prx` | `cf4f3e57d05df4cd22a54de08ff790d5aca979f02bd5ed5c70c10ac7f5f69410` | same |
+
+CUSA00062 1.06's `eboot.bin` is `c65c18865691d7288055cae70af983aa86898d59936976ef12f5eb033eda7243`; its two modules are the
+same as above. Its layout and imports are compared with 1.00 in [GAME_BUILDS.md](GAME_BUILDS.md).
 
 ## Executables
 
