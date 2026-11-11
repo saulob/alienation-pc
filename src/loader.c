@@ -17,6 +17,8 @@
 #include "aln_frame_rate.h"
 #include "aln_resolution.h"
 #include "skip_intro.h"
+#include "exit_game.h"
+#include "exit_game_stream.h"
 #include "controller_prompts.h"
 #include "runtime_log.h"
 #include "aln_image_format.h"
@@ -426,6 +428,23 @@ static int sfo_value(const char *path, const char *key, char *text, size_t text_
     }
     return 0;
 }
+/* The Options row and its hooks go in together: the bytecode is patched only when the hooked code is the known one. */
+static void install_exit_game(const char *app0, const char *build_key, uint8_t *code, uint64_t size, uint8_t *stubs,
+                              size_t stubs_size) {
+    const ExitGameSite *site = exit_game_site(build_key);
+    const char *why = "";
+    char detail[160] = "";
+    if (!exit_game_verify(code, size, site, &why)) {
+        printf("Exit Game: unavailable: %s\n", why);
+        return;
+    }
+    if (aln_exit_game_stream_install(app0, build_key, detail, sizeof(detail)) != 0) {
+        printf("Exit Game: unavailable: %s\n", detail);
+        return;
+    }
+    exit_game_set_handler(alngpu_request_close);
+    if (exit_game_install(code, size, site, stubs, stubs_size)) printf("Exit Game: %s\n", detail);
+}
 static int mapped(Segment *segments, uint64_t count, uint64_t address, uint64_t bytes) {
     for (uint64_t i = 0; i < count; ++i)
         if (address >= segments[i].address && bytes <= segments[i].size &&
@@ -518,7 +537,8 @@ int main(int argc, char **argv) {
     snprintf(log_folder,sizeof(log_folder),"%s",paths.logs_dir);
     int log_started=0;
 #ifdef _WIN32
-    if (game_child) log_started=runtime_log_continue(log_file,log_path,sizeof(log_path));
+    /* An existing --log file is continued: the game child's, or the session tools\build.ps1 -Run started. */
+    if (log_file) log_started=runtime_log_continue(log_file,log_path,sizeof(log_path));
 #endif
     if (!log_started) log_started=runtime_log_start(paths.logs_dir,log_file,log_path,sizeof(log_path));
     if (log_started) {
@@ -745,7 +765,9 @@ int main(int argc, char **argv) {
         }
     }
     const int skip_intro_requested = aln_skip_intro(settings_file);
-    const size_t hook_bytes = known_build && skip_intro_requested ? round_page(skip_intro_stub_bytes()) : 0;
+    const size_t skip_intro_bytes = known_build && skip_intro_requested ? skip_intro_stub_bytes() : 0;
+    const size_t exit_game_bytes = known_build ? exit_game_stub_bytes() : 0;
+    const size_t hook_bytes = skip_intro_bytes + exit_game_bytes ? round_page(skip_intro_bytes + exit_game_bytes) : 0;
     /* The hook stubs follow the image, within a jump of it. */
     image = allocate(round_page(size) + hook_bytes);
     if (fread(image, 1, size, f) != size || fgetc(f) != EOF) fail("incorrect memory image size");
@@ -881,9 +903,11 @@ int main(int argc, char **argv) {
         printf("Frame rate: the game's engine_set_fps script calls are ignored; the engine's startup target stays 59.94\n");
     }
     if (skip_intro_requested) {
-        if (known_build) skip_intro_install(image,size,build_key,image+round_page(size),hook_bytes);
+        if (known_build) skip_intro_install(image,size,build_key,image+round_page(size),skip_intro_bytes);
         else puts("Skip Intro: requested but unavailable for an unknown game build: not a supported build");
     }
+    if (known_build)
+        install_exit_game(app0,build_key,image,size,image+round_page(size)+skip_intro_bytes,exit_game_bytes);
     printf("Display: render resolution %dx%d (%s), aspect ratio %s\n",render_target.width,render_target.height,
            render_resolution->key,aspect_ratio->name);
     const AlnRunSettings run_settings={known_build ? game_build.label : NULL,render_target.width,render_target.height,

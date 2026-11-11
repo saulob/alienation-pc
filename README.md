@@ -31,6 +31,10 @@ Working in the launcher:
 - Keyboard mapping, Xbox and PlayStation controllers, up to four local players' controllers
 - Trophies page, bug report page, update check against this repository, GitHub Sponsors link
 
+In game:
+
+- Exit Game as the last row of the Options menu (after Credits) and of the Select Campaign menu, in the game's language
+
 Not available yet:
 
 - Online play: the Online page is present but disabled; the launcher makes no online connection
@@ -45,8 +49,9 @@ tools\build.ps1
 
 The executable is `build\cmake\clang64\bin\alienation.exe`. Start it yourself; the launcher opens and installs the game
 from your package. Game logs go to `build\logs\alienation_NNN.log`, settings to `user\alienation.ini`. The build is
-incremental; `-Clean` rebuilds from scratch. Every build run writes one new, never overwritten log,
-`build\logs\build\alienation_NNN.log`, with the tool output, warnings, errors and the exit code.
+incremental; `-Clean` rebuilds from scratch. Every build run writes one new, never overwritten log with the tool
+output, warnings, errors and the exit code: `build\logs\build\build_NNN.log`, or with `-Run` the session log
+`build\logs\alienation_NNN.log`, whose `[build]` section the game's `[run]` lines then continue.
 
 `tools\test.ps1` builds and runs the focused headless tests and the static script tests (`tests\*.ps1`).
 

@@ -8,7 +8,8 @@
 #   tools/build.sh --run [args...]   start the loader that was just built (arguments after --run go to it)
 #
 # Missing tools or libraries are listed; packaging/linux/ci-deps.sh installs them on Ubuntu 20.04 (the release baseline).
-# Every run writes one new log, build/logs/build/alienation_NNN.log (never overwritten, kept when the build fails).
+# Every run writes one new log (never overwritten, kept when the build fails): build/logs/build/build_NNN.log, or with
+# --run the session log build/logs/alienation_NNN.log, which holds the [build] section and then the game's [run] lines.
 set -euo pipefail
 root=$(cd -- "$(dirname -- "$0")/.." && pwd)
 build_dir=$root/build/cmake/linux
@@ -20,7 +21,7 @@ while (($#)); do
         --clean) clean=1 ;;
         --test) test=1 ;;
         --run) run=1; shift; loader_args=("$@"); break ;;
-        -h|--help) sed -n '2,11p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "Unknown option: $1" >&2; exit 2 ;;
     esac
     shift
@@ -32,7 +33,6 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 [[ $(uname -s) == Linux && $(uname -m) == x86_64 ]] || die 'This script builds for Linux x86_64 only (Windows: tools\build.ps1).'
 
 # BEGIN build log
-log_dir=$root/build/logs/build
 project_name() {
     local name
     name=$(sed -n 's/.*"game"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$root/.recomp.json" 2>/dev/null | head -n 1)
@@ -72,12 +72,15 @@ close_build_log() { # exit code; idempotent, never changes the exit code
     echo "Build log: $build_log"
 }
 project=$(project_name)
-reserve_build_log "$project" || die "Could not reserve a build log in $log_dir"
+# With --run the game continues this log, so one invocation has one log.
+if ((run)); then log_dir=$root/build/logs log_name=$project; else log_dir=$root/build/logs/build log_name=build; fi
+reserve_build_log "$log_name" || die "Could not reserve a build log in $log_dir"
 exec 3>&1 4>&2
 exec > >(tee -a "$build_log") 2>&1
 tee_pid=$!
 build_log_open=1
 trap 'close_build_log $?' EXIT
+((run)) && printf '[build]\n'
 printf 'Project: %s\nStarted: %s\nConfiguration: %s\nMode: %s\n\n' "$project" "$(date '+%Y-%m-%d %H:%M:%S %z')" "$config" \
     "$( ((clean)) && echo 'complete (--clean)' || echo incremental)"
 # END build log
@@ -147,7 +150,7 @@ if ! grep -qs "CMAKE_BUILD_TYPE:STRING=$config" "$build_dir/CMakeCache.txt" || [
 fi
 step 'Building'
 targets=(alienation)
-tests=(aln-image-format-tests aln-resolution-patch-tests aln-runtime-tests aln-runtime-overlay-tests aln-controller-prompts-tests aln-module-history-tests aln-rtc-tests aln-ime-keyboard-tests aln-json2-tests aln-thread-cancel-tests aln-tiling-tests aln-renderer-selection-tests aln-opengl-backend-tests aln-opengl-perf-tests aln-cursor-tests aln-window-tests aln-sdl-compat-tests aln-present-tests aln-trophy-tests aln-incident-tests aln-update-tests)
+tests=(aln-image-format-tests aln-resolution-patch-tests aln-runtime-tests aln-runtime-overlay-tests aln-controller-prompts-tests aln-exit-game-testsaln-module-history-tests aln-rtc-tests aln-ime-keyboard-tests aln-json2-tests aln-thread-cancel-tests aln-tiling-tests aln-renderer-selection-tests aln-opengl-backend-tests aln-opengl-perf-tests aln-cursor-tests aln-window-tests aln-sdl-compat-tests aln-present-tests aln-trophy-tests aln-incident-tests aln-update-tests)
 ((test)) && targets+=("${tests[@]}")
 ninja -C "$build_dir" "${targets[@]}"
 loader=$build_dir/bin/alienation
@@ -184,5 +187,17 @@ done
 printf '\nBuilt %s\n' "$loader"
 ((run)) || exit 0
 close_build_log 0
+trap - EXIT
+build_section=$(cat -- "$build_log")
+run_args=("${loader_args[@]}")
+if [[ " ${loader_args[*]} " != *" --log "* && " ${loader_args[*]} " != *" --logs "* ]]; then
+    run_args=(--log "$build_log" "${loader_args[@]}")
+fi
 cd -- "$(dirname -- "$loader")"
-exec "$loader" "${loader_args[@]}"
+code=0
+"$loader" "${run_args[@]}" || code=$?
+# The runtime deletes its log after a clean exit when detailed logging is off; the build section stays.
+[[ -e $build_log ]] || printf '%s\n' "$build_section" > "$build_log"
+printf '[run] alienation exit code %d\n' "$code" >> "$build_log"
+echo "Session log: $build_log"
+exit "$code"

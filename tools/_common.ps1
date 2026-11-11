@@ -31,10 +31,32 @@ function Get-ProjectName {
     return 'project'
 }
 
-# Reserves <project>_NNN.log (one more than the highest in the folder) with an exclusive create, so concurrent builds
-# never share a number and an existing log is never opened for writing. Runtime game logs live in build\logs itself.
+# Where a build.ps1 run logs. A build alone writes build\logs\build\build_NNN.log; a build that runs the game writes the
+# session log, build\logs\<project>_NNN.log, which the game then continues, so one invocation has one log.
+function Get-BuildLogPlan([switch]$Run) {
+    if ($Run) { return @{ Directory = (Join-Path $script:RepoRoot 'build\logs'); Name = (Get-ProjectName); Session = $true } }
+    return @{ Directory = (Join-Path $script:RepoRoot 'build\logs\build'); Name = 'build'; Session = $false }
+}
+
+# The loader continues the session log given with --log; arguments that already choose the log are kept as they are.
+function Get-SessionLoaderArgs([string]$SessionLog, [string[]]$Arguments = @()) {
+    if ($Arguments -contains '--log' -or $Arguments -contains '--logs') { return $Arguments }
+    return @('--log', $SessionLog) + $Arguments
+}
+
+# After the game ended: the runtime deletes its log after a clean exit when detailed logging is off, so the build
+# section is written back before the exit code is recorded.
+function Complete-SessionLog([string]$Path, [string]$BuildSection, [int]$ExitCode) {
+    if (-not (Test-Path -LiteralPath $Path)) {
+        [IO.File]::WriteAllText($Path, $BuildSection, (New-Object Text.UTF8Encoding($false)))
+    }
+    Add-Content -LiteralPath $Path -Value "[run] alienation.exe exit code $ExitCode"
+}
+
+# Reserves <name>_NNN.log (one more than the highest in the folder) with an exclusive create, so concurrent builds
+# never share a number and an existing log is never opened for writing. -Session starts the log with a [build] line.
 function Start-BuildLog([string]$Mode, [string]$Configuration, [string]$Directory = (Join-Path $script:RepoRoot 'build\logs\build'),
-                        [string]$Name = (Get-ProjectName)) {
+                        [string]$Name = 'build', [switch]$Session) {
     New-Item -ItemType Directory -Force -Path $Directory | Out-Null
     $pattern = '^' + [regex]::Escape($Name) + '_(\d+)\.log$'
     $stream = $null
@@ -54,12 +76,13 @@ function Start-BuildLog([string]$Mode, [string]$Configuration, [string]$Director
     $writer = New-Object IO.StreamWriter($stream, (New-Object Text.UTF8Encoding($false)))
     $writer.AutoFlush = $true
     $script:BuildLog = @{ Path = $path; Writer = $writer; Started = Get-Date; Warnings = 0; Errors = 0 }
-    $writer.WriteLine("Project: $Name")
+    if ($Session) { $writer.WriteLine('[build]') }
+    $writer.WriteLine("Project: $(Get-ProjectName)")
     $writer.WriteLine("Started: $($script:BuildLog.Started.ToString('yyyy-MM-dd HH:mm:ss zzz'))")
     $writer.WriteLine("Configuration: $Configuration")
     $writer.WriteLine("Mode: $Mode")
     $writer.WriteLine('')
-    Write-Host "Build log: $path"
+    Write-Host "$(if ($Session) { 'Session log' } else { 'Build log' }): $path"
     return $path
 }
 

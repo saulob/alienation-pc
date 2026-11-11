@@ -117,8 +117,9 @@ typedef struct {
     const void *data;
 } RuntimeFilePatch;
 /* The guest sees `guest` as `length` bytes: the host file, zeros past its end, and the patches on top. The patches'
- * data is borrowed and must outlive the process. Before the guest starts only; -1 with nothing registered when the
- * table is full, the path already has one or a patch falls outside `length`. */
+ * data is borrowed and must outlive the process. Before the guest starts only. A path registered again with the same
+ * length gets the new patches on top of the earlier ones. -1 with nothing registered when the table is full, the path
+ * already has an overlay of another length or a patch falls outside `length`. */
 int runtime_file_overlay(const char *guest, uint64_t length, const RuntimeFilePatch *patches, size_t count);
 int runtime_file_translate(const char *guest, char *out, size_t size);
 int64_t runtime_file_open(const char *path, int flags, int mode);

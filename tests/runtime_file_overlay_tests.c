@@ -128,8 +128,7 @@ int main(void) {
     runtime_file_close((int)fd);
     CHECK(read_all("/app0/arch.cpk", seen, 32) == 32 && memcmp(seen, "0123QQQQQQQQCDEF", 16) == 0);
 
-    CHECK(runtime_file_overlay("/app0/arch.cpk", 32, &one, 1) == -1);
-    CHECK(runtime_file_overlay("/APP0/ARCH.CPK", 32, &one, 1) == -1);
+    CHECK(runtime_file_overlay("/APP0/ARCH.CPK", 16, &one, 1) == -1);
     CHECK(read_all("/app0/arch.cpk", seen, 32) == 32 && memcmp(seen, "0123QQQQQQQQCDEF", 16) == 0);
 
     const RuntimeFilePatch outside = {30, 8, patch};
@@ -138,6 +137,12 @@ int main(void) {
 
     CHECK(runtime_file_overlay("/app0/other.cpk", 32, NULL, 0) == 0);
     CHECK(read_all("/app0/other.cpk", seen, 32) == 32 && memcmp(seen, "0123456789ABCDEF", 16) == 0);
+    unsigned char *later = malloc(3);
+    memcpy(later, "xyz", 3);
+    const RuntimeFilePatch added[] = {{10, 3, later}, {20, 3, later}};
+    CHECK(runtime_file_overlay("/APP0/OTHER.CPK", 32, added, 2) == 0);
+    CHECK(read_all("/app0/other.cpk", seen, 32) == 32 && memcmp(seen, "0123456789xyzDEF", 16) == 0);
+    CHECK(seen[19] == 0 && memcmp(seen + 20, "xyz", 3) == 0 && seen[23] == 0);
     CHECK(runtime_file_overlay("/app0/third.cpk", 8, NULL, 0) == 0);
     CHECK(runtime_file_overlay("/app0/fourth.cpk", 8, NULL, 0) == 0);
     CHECK(runtime_file_overlay("/app0/fifth.cpk", 8, NULL, 0) == -1);

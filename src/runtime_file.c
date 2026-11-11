@@ -141,11 +141,23 @@ static const Overlay *overlay_of(const char *guest) {
     return NULL;
 }
 /* Registered before the guest starts: opens and reads take no lock for the table. The patches' data is borrowed, not
- * copied, and must stay valid for the life of the process. */
+ * copied, and must stay valid for the life of the process. A later registration of the same file with the same length
+ * adds its patches on top of the earlier ones. */
 int runtime_file_overlay(const char *guest,uint64_t length,const RuntimeFilePatch *patches,size_t count) {
-    if (!guest || overlay_count==MAX_OVERLAYS || overlay_of(guest) || strlen(guest)+6>=sizeof(overlays[0].guest)) return -1;
+    if (!guest || strlen(guest)+6>=sizeof(overlays[0].guest)) return -1;
     for (size_t i=0;i<count;++i)
         if (patches[i].offset>length || patches[i].size>length-patches[i].offset) return -1;
+    Overlay *existing=(Overlay *)overlay_of(guest);
+    if (existing) {
+        if (existing->length!=length) return -1;
+        OverlayPatch *grown=realloc(existing->patches,(existing->count+count+1)*sizeof(OverlayPatch));
+        if (!grown) return -1;
+        existing->patches=grown;
+        for (size_t i=0;i<count;++i)
+            existing->patches[existing->count++]=(OverlayPatch){patches[i].offset,patches[i].size,patches[i].data};
+        return 0;
+    }
+    if (overlay_count==MAX_OVERLAYS) return -1;
     Overlay o={.length=length,.patches=calloc(count ? count : 1,sizeof(OverlayPatch))};
     if (!o.patches) return -1;
     for (;o.count<count;++o.count) {

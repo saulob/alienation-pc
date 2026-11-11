@@ -36,6 +36,8 @@ constexpr size_t kLogTailBytes = 256 * 1024;
 constexpr std::string_view kGameStartMarks[] = {"Launcher: closed, starting the game", "ALN: game build"};
 constexpr std::string_view kLauncherClosedMark = "Launcher: closed";
 constexpr std::string_view kGuestCodeMark = "Runtime: guest thread '";
+constexpr std::string_view kBuildSectionMark = "[build]";
+constexpr std::string_view kRunSectionMark = "\n[run] ";
 
 constexpr char kDescriptionKey[] = "description";
 constexpr char kLogTextKey[] = "log_text";
@@ -90,10 +92,30 @@ std::string ReadPart(const fs::path& file, uintmax_t offset, size_t size) {
 struct Session {
     LogActivity activity = LogActivity::kLauncher;
     bool closed_in_launcher = false;
+    bool build_only = false;
 };
 
+// tools\build.ps1 -Run writes its build section first; the session starts at the first [run] line. npos when there is
+// none, as when the build failed and nothing ran.
+uintmax_t SessionStart(const fs::path& file, const std::string& head) {
+    if (!head.starts_with(kBuildSectionMark)) return 0;
+    std::error_code ec;
+    const uintmax_t size = fs::file_size(file, ec);
+    std::string chunk = head;
+    for (uintmax_t offset = 0;;) {
+        const size_t found = chunk.find(kRunSectionMark);
+        if (found != std::string::npos) return offset + found + 1;
+        if (ec || offset + chunk.size() >= size || chunk.size() < kRunSectionMark.size()) return uintmax_t(-1);
+        offset += chunk.size() - (kRunSectionMark.size() - 1);
+        chunk = ReadPart(file, offset, kSessionHeadBytes);
+    }
+}
+
 Session ReadSession(const fs::path& file) {
-    const std::string head = ReadPart(file, 0, kSessionHeadBytes);
+    std::string head = ReadPart(file, 0, kSessionHeadBytes);
+    const uintmax_t start = SessionStart(file, head);
+    if (start == uintmax_t(-1)) return {LogActivity::kLauncher, false, true};
+    if (start) head = ReadPart(file, start, kSessionHeadBytes);
     const auto holds = [&](std::string_view mark) { return head.find(mark) != std::string::npos; };
     if (holds(kGuestCodeMark)) return {LogActivity::kGameplay, false};
     if (std::any_of(std::begin(kGameStartMarks), std::end(kGameStartMarks), holds)) return {LogActivity::kGameStarted, false};
@@ -196,7 +218,7 @@ std::vector<GameLog> FindGameLogs(const fs::path& folder, const fs::path& runnin
         if (logs.size() == most) break;
         const Session session = ReadSession(candidate.path);
         // A session that ended without closing the launcher stays: that is what a launcher crash leaves.
-        if (session.closed_in_launcher && !candidate.running) continue;
+        if ((session.closed_in_launcher || session.build_only) && !candidate.running) continue;
         LogRole role = LogRole::kNone;
         if (candidate.running) {
             role = session.activity == LogActivity::kGameplay ? LogRole::kCurrentGameplay : LogRole::kCurrentLauncher;

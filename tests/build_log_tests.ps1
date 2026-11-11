@@ -85,26 +85,82 @@ Stop-Tool 'simulated early failure'
     Check ($stopExit -eq 1) "Stop-Tool exits with code 1 (got $stopExit)"
     Check ($stopLog -match 'error: simulated early failure' -and $stopLog -match 'Exit code: 1') 'a build that fails early keeps its log'
 
+    # One log per invocation: a build alone is build_NNN.log; with -Run the build section starts the session log
+    # build\logs\alienation_NNN.log, which the game continues with --log.
+    $buildOnly = Get-BuildLogPlan
+    $session = Get-BuildLogPlan -Run
+    Check ($buildOnly.Name -eq 'build' -and $buildOnly.Directory -eq (Join-Path $root 'build\logs\build') -and -not $buildOnly.Session) 'a build alone logs to build\logs\build\build_NNN.log'
+    Check ($session.Name -eq 'alienation' -and $session.Directory -eq (Join-Path $root 'build\logs') -and $session.Session) 'a build with -Run logs to the session namespace build\logs\alienation_NNN.log'
+    $plainDir = Join-Path $work 'plain'
+    $plain = Start-BuildLog 'incremental' 'RelWithDebInfo' $plainDir $buildOnly.Name 6>$null
+    Close-BuildLog 0
+    Check ((Split-Path $plain -Leaf) -eq 'build_001.log' -and (Get-Content -LiteralPath $plain -TotalCount 1) -eq 'Project: alienation') 'a build-only log is build_001.log without a session marker'
+    $loaderArgs = @(Get-SessionLoaderArgs 'X:\logs\alienation_004.log' @('--check-imports'))
+    Check ($loaderArgs.Count -eq 3 -and $loaderArgs[0] -eq '--log' -and $loaderArgs[1] -eq 'X:\logs\alienation_004.log' -and $loaderArgs[2] -eq '--check-imports') 'the loader is given the session log with --log'
+    $own = @(Get-SessionLoaderArgs 'X:\logs\alienation_004.log' @('--log', 'mine.log'))
+    Check ($own.Count -eq 2 -and $own[1] -eq 'mine.log') 'a --log the user gives is kept'
+    Check ((Get-SessionLoaderArgs 'X:\a.log' @()).Count -eq 2) 'the session log is passed when there are no other arguments'
+
+    $sessionDir = Join-Path $work 'session'
+    Set-Content -LiteralPath (Join-Path (New-Item -ItemType Directory -Force -Path $sessionDir).FullName 'alienation_069.log') -Value '[run] earlier session'
+    $sessionPath = Start-BuildLog 'incremental' 'RelWithDebInfo' $sessionDir $session.Name -Session 6>$null
+    Write-BuildLogLine 'ninja: no work to do.'
+    Close-BuildLog 0
+    $buildSection = [IO.File]::ReadAllText($sessionPath)
+    Check ((Split-Path $sessionPath -Leaf) -eq 'alienation_070.log') 'the session log takes the next game log number'
+    Check ((Get-Content -LiteralPath $sessionPath -TotalCount 1) -eq '[build]') 'the session log starts with its [build] section'
+    Add-Content -LiteralPath $sessionPath -Value "[run] 2026-11-11T01:00:00`nRuntime: guest thread 'main' created"
+    Complete-SessionLog $sessionPath $buildSection 0
+    $sessionText = Get-Content -LiteralPath $sessionPath -Raw
+    Check ($sessionText.IndexOf('[build]') -eq 0 -and $sessionText.IndexOf('Result: SUCCESS') -lt $sessionText.IndexOf('[run] 2026') -and
+           $sessionText.TrimEnd().EndsWith('[run] alienation.exe exit code 0')) 'build section, then the game, then the exit code, in one file'
+    Check (@(Get-ChildItem -LiteralPath $sessionDir -Filter 'alienation_*.log').Count -eq 2 -and -not (Test-Path (Join-Path $sessionDir 'build'))) 'no second log is made for the same invocation'
+    Remove-Item -LiteralPath $sessionPath
+    Complete-SessionLog $sessionPath $buildSection 0
+    $restored = Get-Content -LiteralPath $sessionPath -Raw
+    Check ($restored.StartsWith('[build]') -and $restored -match 'ninja: no work to do' -and $restored.TrimEnd().EndsWith('exit code 0')) 'a session log the runtime removed after a clean exit keeps its build section'
+
+    $loaderSource = Get-Content -LiteralPath (Join-Path $root 'src\loader.c') -Raw
+    Check ($loaderSource -match 'if \(log_file\) log_started=runtime_log_continue\(log_file') 'the loader continues an existing --log file instead of truncating it'
+    $posixLog = Get-Content -LiteralPath (Join-Path $root 'src\runtime_log_posix.c') -Raw
+    Check ($posixLog -match 'flags \| O_APPEND' -and $posixLog -notmatch 'O_TRUNC') 'on Linux a given log file is appended to'
+    $buildScript = Get-Content -LiteralPath (Join-Path $root 'tools\build.ps1') -Raw
     $build = Get-Content -LiteralPath (Join-Path $root 'tools\build.sh') -Raw
+    Check ($buildScript -match 'Get-SessionLoaderArgs \$sessionLog' -and $buildScript -match 'Complete-SessionLog \$sessionLog' -and
+           $buildScript -notmatch "Filter 'alienation_\*\.log'") 'build.ps1 -Run uses its own session log, not the newest file in build\logs'
+    $scripts = $buildScript + (Get-Content -LiteralPath (Join-Path $root 'tools\_common.ps1') -Raw) + $build
+    Check ($scripts -notmatch '[A-Za-z]:\\\\?(VisualStudio|Users)') 'no machine-specific path is embedded'
+
     Check ($build -match 'build/logs/build' -and $build -match 'noclobber' -and $build -match "trap 'close_build_log") 'build.sh reserves the same numbered log'
+    Check ($build -match '--log "\$build_log"' -and $build -notmatch '(?m)^exec "\$loader"') 'build.sh --run passes its session log to the game and records the exit code'
     $msys = Get-Msys2Root
     $bash = if ($msys) { Join-Path $msys 'usr\bin\bash.exe' } else { $null }
     if ($bash -and (Test-Path -LiteralPath $bash)) {
-        $unix = $work.Replace('\', '/') + '/sh'
-        New-Item -ItemType Directory -Force -Path $unix | Out-Null
-        Copy-Item -LiteralPath (Join-Path $root '.recomp.json') $unix
         $block = [regex]::Match($build, '(?s)# BEGIN build log.*?# END build log').Value
-        $header = "set -euo pipefail`nroot=$unix config=RelWithDebInfo clean=0`ndie() { echo `"ERROR: `$*`" >&2; exit 1; }`n"
         $body = "echo out-line`necho 'x.c:1: error: boom' >&2`nexit 5`n"
-        [IO.File]::WriteAllText("$work\sh.sh", ($header + $block + "`n" + $body).Replace("`r`n", "`n"), (New-Object Text.UTF8Encoding($false)))
-        & $bash "$unix.sh" *> $null
-        $shExit1 = $LASTEXITCODE
-        & $bash "$unix.sh" *> $null
-        $shLogs = @(Get-ChildItem -LiteralPath (Join-Path $work 'sh\build\logs\build') -Filter 'alienation_*.log' | Sort-Object Name)
-        Check ($shExit1 -eq 5) "build.sh keeps the failing exit code (got $shExit1)"
-        Check ($shLogs.Count -eq 2 -and $shLogs[0].Name -eq 'alienation_001.log' -and $shLogs[1].Name -eq 'alienation_002.log') 'build.sh numbers its logs and keeps the earlier one'
-        $shText = Get-Content -LiteralPath $shLogs[0].FullName -Raw
-        Check ($shText -match 'out-line' -and $shText -match 'error: boom' -and $shText -match 'Exit code: 5') 'build.sh log holds stdout, stderr and the exit code'
+        foreach ($mode in 0, 1) {
+            $unix = $work.Replace('\', '/') + "/sh$mode"
+            New-Item -ItemType Directory -Force -Path $unix | Out-Null
+            Copy-Item -LiteralPath (Join-Path $root '.recomp.json') $unix
+            $header = "set -euo pipefail`nroot=$unix config=RelWithDebInfo clean=0 run=$mode`ndie() { echo `"ERROR: `$*`" >&2; exit 1; }`n"
+            [IO.File]::WriteAllText("$work\sh$mode.sh", ($header + $block + "`n" + $body).Replace("`r`n", "`n"), (New-Object Text.UTF8Encoding($false)))
+            & $bash "$unix.sh" *> $null
+            $shExit1 = $LASTEXITCODE
+            & $bash "$unix.sh" *> $null
+            if ($mode -eq 0) {
+                $shLogs = @(Get-ChildItem -LiteralPath (Join-Path $work 'sh0\build\logs\build') -Filter 'build_*.log' | Sort-Object Name)
+                Check ($shExit1 -eq 5) "build.sh keeps the failing exit code (got $shExit1)"
+                Check ($shLogs.Count -eq 2 -and $shLogs[0].Name -eq 'build_001.log' -and $shLogs[1].Name -eq 'build_002.log') 'build.sh numbers its build-only logs and keeps the earlier one'
+                $shText = Get-Content -LiteralPath $shLogs[0].FullName -Raw
+                Check ($shText -match 'out-line' -and $shText -match 'error: boom' -and $shText -match 'Exit code: 5') 'build.sh log holds stdout, stderr and the exit code'
+            }
+            else {
+                $shLogs = @(Get-ChildItem -LiteralPath (Join-Path $work 'sh1\build\logs') -Filter 'alienation_*.log' | Sort-Object Name)
+                Check ($shLogs.Count -eq 2 -and $shLogs[0].Name -eq 'alienation_001.log' -and
+                       (Get-Content -LiteralPath $shLogs[0].FullName -TotalCount 1) -eq '[build]' -and
+                       -not (Test-Path (Join-Path $work 'sh1\build\logs\build'))) 'build.sh --run starts the session log alienation_NNN.log with its [build] section'
+            }
+        }
     }
     else { Write-Host 'skipped: build.sh log block run (MSYS2 bash not found)' }
 }

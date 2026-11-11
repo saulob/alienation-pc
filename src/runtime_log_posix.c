@@ -53,7 +53,8 @@ int runtime_log_create(const char *dir, const char *file, char *path, size_t siz
             make_directories(path);
             *separator = '/';
         }
-        int fd = open(path, flags | O_TRUNC, 0666);
+        /* An existing file is continued: tools/build.sh --run writes its build section first. */
+        int fd = open(path, flags | O_APPEND, 0666);
         if (fd < 0) return 0;
         *handle = (void *)(intptr_t)fd;
         return 1;

@@ -37,7 +37,7 @@ add_library(aln_launcher_core STATIC boot_image.cpp file_browser.cpp game_files.
     game_profile.cpp incident_report.cpp log_scrubber.cpp report_history.cpp online_client.cpp online_settings.cpp
     online_view.cpp options.cpp page_icons.cpp paths.cpp frame_rate.c pkg_extract.cpp resolution.c settings.cpp
     controller_prompts.cpp controller_prompts_style.c controller_prompts_data.c
-    controller_prompts_glyphs_data.c trophy_content.cpp
+    controller_prompts_glyphs_data.c exit_game_script.c exit_game_stream.cpp trophy_content.cpp
     ${PROJECT_SOURCE_DIR}/src/trophies/trophy_data.cpp ${PROJECT_SOURCE_DIR}/src/trophies/trophy_key.cpp ${PROJECT_SOURCE_DIR}/src/trophies/trophy_pack.cpp
     ${PROJECT_SOURCE_DIR}/src/trophies/trophy_runtime.cpp ${PROJECT_SOURCE_DIR}/src/trophies/trophy_service.cpp
     ${PROJECT_SOURCE_DIR}/src/trophies/trophy_store.cpp ${PROJECT_SOURCE_DIR}/src/trophies/trophy_view.cpp

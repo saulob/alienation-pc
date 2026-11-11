@@ -7,11 +7,11 @@
   installed build (build\image\<TITLE_ID>-<version>). Every DLL the game loads ends up beside it. The one build configuration,
   RelWithDebInfo (-O2 -g -DNDEBUG), is what is tested and what a package must contain; nothing else is built.
   The game is installed from the launcher (Play page, Install game...), as in a release.
-  Every run writes one new log, build\logs\build\alienation_NNN.log (never overwritten, kept when the build fails); the
-  game's own run logs stay in build\logs.
+  Every run writes one new log (never overwritten, kept when the build fails): build\logs\build\build_NNN.log, or with
+  -Run the session log build\logs\alienation_NNN.log, which holds the [build] section and then the game's [run] lines.
 .PARAMETER Run
   Launches the loader that was just built and stays attached until the game is closed. The launcher opens first
-  when its rules say so (docs\LAUNCHER.md). Logs to build\logs\alienation_NNN.log.
+  when its rules say so (docs\LAUNCHER.md). The game continues this invocation's session log.
 .PARAMETER Clean
   Deletes build\cmake first (the installed game, the boot image and the logs are kept).
 .PARAMETER CheckImports
@@ -84,7 +84,8 @@ function Test-ImageCurrent([string]$View, [string]$Image) {
 }
 
 $buildMode = if ($Clean) { 'complete (-Clean)' } else { 'incremental' }
-$null = Start-BuildLog $buildMode $config
+$logPlan = Get-BuildLogPlan -Run:$Run
+$sessionLog = Start-BuildLog $buildMode $config $logPlan.Directory $logPlan.Name -Session:$logPlan.Session
 try {
 $tc = Resolve-Toolchain 'auto'
 $env:PATH = "$($tc.Bin);$env:PATH"
@@ -143,11 +144,13 @@ if ($running.Count -gt 0) {
     Write-Warn "alienation.exe is already running (PID $($running.Id -join ', ')); not launching another copy."
     return
 }
-# The loader finds the game, the boot image, user\ and build\logs by itself in this tree.
+# The loader finds the game, the boot image and user\ by itself in this tree, and continues the session log.
+$buildSection = [IO.File]::ReadAllText($sessionLog)
 $arguments = @()
 if ($CheckImports) { $arguments += '--check-imports' }
 if ($TimeoutSeconds -gt 0) { $arguments += '--aln-skip-launcher' }
 $arguments += $LoaderArgs
+$arguments = @(Get-SessionLoaderArgs $sessionLog $arguments)
 Push-Location (Split-Path $loader -Parent)
 try {
     if ($TimeoutSeconds -gt 0) {
@@ -171,20 +174,17 @@ finally {
     Pop-Location
 }
 Write-Host "alienation.exe exit code $code"
-$sessionLog = Get-ChildItem (Join-Path $PSScriptRoot '..\build\logs') -Filter 'alienation_*.log' -ErrorAction SilentlyContinue |
-    Sort-Object LastWriteTime | Select-Object -Last 1
-if ($sessionLog) {
-    Add-Content -LiteralPath $sessionLog.FullName -Value "[run] alienation.exe exit code $code"
-    if ($code -ne 0) {
-        $logText = Get-Content -LiteralPath $sessionLog.FullName -Raw
-        if ($logText -notmatch 'CRASH: the process ends with exit code') {
-            $candidates = [regex]::Matches($logText, 'Diagnostics: first-chance [^\r\n]*UNCONFIRMED[^\r\n]*')
-            if ($candidates.Count -gt 0) {
-                Write-Warn 'The process ended without a crash report. Last first-chance fault in the log (UNCONFIRMED, not proven to be the cause):'
-                Write-Host $candidates[$candidates.Count - 1].Value
-            }
-            else { Write-Warn 'The process ended without a crash report or a first-chance fault in the log.' }
+Complete-SessionLog $sessionLog $buildSection $code
+Write-Host "Session log: $sessionLog"
+if ($code -ne 0) {
+    $logText = Get-Content -LiteralPath $sessionLog -Raw
+    if ($logText -notmatch 'CRASH: the process ends with exit code') {
+        $candidates = [regex]::Matches($logText, 'Diagnostics: first-chance [^\r\n]*UNCONFIRMED[^\r\n]*')
+        if ($candidates.Count -gt 0) {
+            Write-Warn 'The process ended without a crash report. Last first-chance fault in the log (UNCONFIRMED, not proven to be the cause):'
+            Write-Host $candidates[$candidates.Count - 1].Value
         }
+        else { Write-Warn 'The process ended without a crash report or a first-chance fault in the log.' }
     }
 }
 if ($code -eq $loadExecExit) { Write-Host 'The game requested sceSystemServiceLoadExec (see the LoadExec lines above).' }

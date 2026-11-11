@@ -28,6 +28,7 @@ $tests = [ordered]@{
     'aln-image-format-tests'       = 'boot image and content profile contract'
     'aln-resolution-patch-tests'   = 'render resolution and frame rate patch tests'
     'aln-skip-intro-tests'         = 'Skip Intro hook site and startup video tests'
+    'aln-exit-game-tests'          = 'Exit Game bytecode patch, hook sites and row text'
     'aln-crash-guard-tests'        = 'crash reporting (isolated crashing child processes)'
     'aln-controller-prompts-tests' = 'controller prompt style, patch identity and glyph table'
     'aln-runtime-overlay-tests'    = 'guest file overlay tests'

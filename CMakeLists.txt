@@ -77,6 +77,7 @@ add_subdirectory(launcher)
 
 set(ALN_RUNTIME_SOURCES
     src/boot_diagnostic.c
+    src/exit_game.c
     src/guest_hook.c
     src/runtime.c
     src/runtime_ajm.c
@@ -185,6 +186,14 @@ target_compile_options(aln-resolution-patch-tests PRIVATE -Wall -Wextra -Werror)
 add_executable(aln-skip-intro-tests EXCLUDE_FROM_ALL tests/skip_intro_tests.c src/skip_intro.c src/guest_hook.c)
 target_include_directories(aln-skip-intro-tests PRIVATE src)
 target_compile_options(aln-skip-intro-tests PRIVATE -Wall -Wextra -Werror)
+
+# Focused tests of the Exit Game bytecode patch, hook site checks and row text (tools/test.ps1, tools/build.sh --test);
+# not part of the default build.
+add_executable(aln-exit-game-tests EXCLUDE_FROM_ALL tests/exit_game_tests.c src/exit_game.c src/guest_hook.c
+    launcher/exit_game_script.c)
+target_include_directories(aln-exit-game-tests PRIVATE src launcher)
+target_compile_definitions(aln-exit-game-tests PRIVATE ALN_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+target_compile_options(aln-exit-game-tests PRIVATE -Wall -Wextra -Werror)
 
 # Focused tests of the Windows crash reporting: each case crashes an isolated child process through the production
 # handlers and checks the log, the minidump and the exit code (tools/test.ps1); not part of the default build.

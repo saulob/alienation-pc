@@ -5,7 +5,8 @@
 extern "C" {
 #endif
 
-/* Creates the next free alienation_NNN.log in dir, or exactly file when it is given. 0 on failure. */
+/* Creates the next free alienation_NNN.log in dir, or exactly file when it is given (on Linux an existing file is
+ * appended to). 0 on failure. */
 int runtime_log_create(const char *dir, const char *file, char *path, size_t size, void **handle);
 
 /* Sends stdout and stderr to that log and echoes them to the standard output the process started with, if any. */

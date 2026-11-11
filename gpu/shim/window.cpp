@@ -290,7 +290,7 @@ bool WindowSDL::TrackControllerEvent(const SDL_Event& event) {
 
 bool WindowSDL::PollEvents() {
     if (close_requested.load(std::memory_order_relaxed)) {
-        if (is_open.exchange(false)) std::printf("Exit Game: hard exit\n");
+        if (is_open.exchange(false)) std::printf("Exit Game: closing the window\n");
     }
     {
         std::scoped_lock lock{text_mutex};

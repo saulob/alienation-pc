@@ -114,6 +114,20 @@ void TestNewestFiveFirst() {
     CHECK(logs[0].bytes == kGameSession.size() && logs[0].written > logs[1].written);
 }
 
+// tools\build.ps1 -Run puts its build section before the session in the same log; a long build must not hide the
+// session, and a build that never ran the game is not a game log.
+void TestBuildSectionBeforeTheSession() {
+    TempFolder temp;
+    std::string build = "[build]\nProject: alienation\nMode: incremental\n";
+    while (build.size() < 300 * 1024) build += "[12/345] Building CXX object CMakeFiles/alienation.dir/src/loader.c.obj\n";
+    build += "Result: SUCCESS\nExit code: 0\n";
+    WriteLog(temp.path, LogName(1), build + kGameplaySession, 20);
+    WriteLog(temp.path, LogName(2), "[build]\nProject: alienation\nResult: FAILED\nExit code: 1\n", 10);
+    const std::vector<GameLog> logs = FindGameLogs(temp.path, {});
+    CHECK(Names(logs) == std::vector<std::string>{LogName(1)});
+    CHECK(!logs.empty() && logs[0].activity == LogActivity::kGameplay);
+}
+
 void TestFewerThanFive() {
     TempFolder temp;
     CHECK(FindGameLogs(temp.path, {}).empty());
@@ -1044,6 +1058,7 @@ void TestProductionLobbyOnly() {
 
 int main() {
     TestNewestFiveFirst();
+    TestBuildSectionBeforeTheSession();
     TestFewerThanFive();
     TestSessionsThatAreNotGameLogs();
     TestCurrentSessionAndLastGameplay();
