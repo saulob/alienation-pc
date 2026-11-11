@@ -75,7 +75,7 @@ constexpr const char* PageNote(Page page) {
     case Page::Gameplay:
         return "";
     case Page::Controls:
-        return "Keyboard bindings and port hotkeys are launcher-only.";
+        return "Keyboard bindings, controller prompts and port hotkeys are launcher-only.";
     }
     return "";
 }

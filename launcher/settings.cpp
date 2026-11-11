@@ -24,6 +24,7 @@ namespace {
 
 constexpr ManagedSetting kBaseSettings[] = {
     {kShowLauncherKey, "1"},
+    {kControllerPromptsKey, kDefaultControllerPrompts},
     {kDisplayModeKey, "windowed"},
     {kWindowWidthKey, "1920"},
     {kWindowHeightKey, "1080"},
@@ -90,6 +91,9 @@ bool IsValidSetting(std::string_view key, std::string_view value) {
     if (std::any_of(std::begin(aln_key_actions), std::end(aln_key_actions),
                     [&](const AlnKeyInfo& action) { return key == action.ini_key; })) {
         return aln_key_from_name(std::string(value).c_str()) != 0;
+    }
+    if (key == kControllerPromptsKey) {
+        return AlnParsePromptStyle(std::string(value).c_str(), nullptr) != 0;
     }
     if (key == kDisplayModeKey) {
         return one_of({"windowed", "borderless"});
@@ -231,6 +235,17 @@ extern "C" int aln_aspect_ratio(const char* settings_file, const char* image_dir
     return aln_aspect_index(settings.Get(kAspectRatioKey, kDefaultAspectRatio).c_str());
 }
 
+extern "C" int aln_controller_prompts_style(const char* settings_file) {
+    using namespace aln;
+    if (!settings_file || !*settings_file) {
+        return ALN_PROMPTS_PLAYSTATION;
+    }
+    const LauncherSettings settings(PathFromUtf8(settings_file));
+    int style = ALN_PROMPTS_PLAYSTATION;
+    AlnParsePromptStyle(settings.Get(kControllerPromptsKey, kDefaultControllerPrompts).c_str(), &style);
+    return style;
+}
+
 extern "C" int aln_skip_intro(const char* settings_file) {
     using namespace aln;
     if (!settings_file || !*settings_file) {
@@ -263,6 +278,7 @@ std::string SettingsSummary(const LauncherSettings& settings, const GameBuild* b
     line("Alienation PC v" + net::port_version() + ", " + net::host_platform() + ", game build " +
          (build_label ? build_label : "not a supported build"));
     line("Online Play off (not available for Alienation yet)");
+    line(std::string("Controller prompts ") + AlnPromptStyleLabel(aln_controller_prompts_style(Utf8(settings.file()).c_str())));
 
     const std::string mode = settings.Get(kDisplayModeKey, "windowed");
     line(std::string("Window ") + (mode == "borderless" ? "Borderless Fullscreen" : "Windowed") + ", frame counter " +

@@ -341,6 +341,13 @@ target_include_directories(aln-avplayer-thread-tests PRIVATE gpu/shadps4)
 target_compile_options(aln-avplayer-thread-tests PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(aln-avplayer-thread-tests PRIVATE Threads::Threads)
 
+# Focused tests of the controller prompt style, asset patch identity and generated Xbox glyph table (tools/test.ps1,
+# tools/build.sh --test); not part of the default build.
+add_executable(aln-controller-prompts-tests EXCLUDE_FROM_ALL tests/controller_prompts_tests.c
+    launcher/controller_prompts_style.c launcher/controller_prompts_data.c)
+target_include_directories(aln-controller-prompts-tests PRIVATE launcher)
+target_compile_options(aln-controller-prompts-tests PRIVATE -Wall -Wextra -Werror)
+
 # Focused test of the borrowed overlay data in the guest file layer (tools/test.ps1); not part of the default build.
 add_executable(aln-runtime-overlay-tests EXCLUDE_FROM_ALL tests/runtime_file_overlay_tests.c src/runtime_file.c
     $<$<BOOL:${WIN32}>:src/compat_win.c>)

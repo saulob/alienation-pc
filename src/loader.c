@@ -17,6 +17,7 @@
 #include "aln_frame_rate.h"
 #include "aln_resolution.h"
 #include "skip_intro.h"
+#include "controller_prompts.h"
 #include "runtime_log.h"
 #include "aln_image_format.h"
 #include "isa_emulate.h"
@@ -621,6 +622,13 @@ int main(int argc, char **argv) {
     }
     if (app0) {
         runtime_file_configure(app0, user_dir ? user_dir : "user");
+        if (known_build) {
+            char prompts_detail[160]="";
+            if (aln_controller_prompts_install(settings_file,app0,build_key,prompts_detail,sizeof(prompts_detail))==0)
+                printf("Controller prompts: %s\n",prompts_detail[0] ? prompts_detail : "PlayStation (original)");
+            else
+                printf("Controller prompts: Xbox unavailable (%s)\n",prompts_detail);
+        }
         char sfo[4096], id[16]="";
         snprintf(sfo,sizeof(sfo),"%s/sce_sys/param.sfo",app0);
         if (sfo_value(sfo,"INSTALL_DIR_SAVEDATA",id,sizeof(id),NULL) || sfo_value(sfo,"TITLE_ID",id,sizeof(id),NULL))

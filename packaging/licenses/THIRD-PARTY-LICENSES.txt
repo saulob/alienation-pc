@@ -295,3 +295,54 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+========================================================================
+Xbox Series controller line art (gameplay tutorial)
+=====================================================================
+
+Gamepad Line Art Pack, Xbox Series line art
+  https://gidedin.itch.io/gamepad-line-art-pack
+  Author: gidedin
+  License: CC0 1.0 Universal Public Domain Dedication
+  Source: svg/regular/xbox-series.svg and png/regular/light/xbox-series.png
+  Full notice: assets/source/controller/LICENSE-Gamepad-Line-Art-Pack.txt
+
+The pack is dedicated to the public domain under CC0 1.0. The dedication covers the drawings only;
+Xbox and Microsoft are trademarks of their respective owners. The artwork is not affiliated with,
+sponsored by or endorsed by Microsoft.
+
+=====================================================================
+Xbox Series X controller illustration
+========================================================================
+
+Gamepad Asset Pack, Xbox Series X Controller VSCView Black.svg
+  https://github.com/AL2009man/Gamepad-Asset-Pack
+  Author: Al. Lopez
+  License: MIT License, Copyright (c) 2024 Al. Lopez
+  Source: Controller Asset Pack/Xbox Wireless Controller Images/Default Theme/Theme SVG/Xbox Series X Color/Xbox Series X Controller VSCView Black.svg
+  Adapted for Alienation PC: dark body, light outlines.
+  The upstream README notes that some assets are based on official controller graphics. The SVG is
+  used under the repository MIT terms and is not presented as original Alienation artwork.
+  Full notice: assets/source/controller/LICENSE-Gamepad-Asset-Pack.txt
+
+MIT License
+
+Copyright (c) 2024 Al. Lopez
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

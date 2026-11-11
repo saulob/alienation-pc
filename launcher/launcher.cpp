@@ -129,6 +129,8 @@ constexpr char kAspectRatioHelp[] =
 constexpr char kRenderResolutionHelp[] =
     "The resolution the game renders at. It is separate from the window size: the picture is scaled to the window. "
     "1440p and above need a powerful graphics card.";
+constexpr char kControllerPromptsHelp[] =
+    "PlayStation keeps the game's original symbols. Xbox shows Xbox buttons and an Xbox controller. Applies after a restart.";
 constexpr char kAntiAliasingHelp[] =
     "SMAA smooths jagged edges on the finished picture, at a small cost in performance.";
 constexpr char kAnisotropyHelp[] =
@@ -893,6 +895,8 @@ private:
     }
 
     void PageControls(trg::Ui& ui) {
+        ui.Combo("Controller prompts", kControllerPromptsHelp, kControllerPromptsKey, kDefaultControllerPrompts,
+                 {{kPromptsPlayStation, "PlayStation (Original)"}, {kPromptsXbox, "Xbox"}});
         ui.Info("Controller", "Automatic: PlayStation and Xbox controllers work without setup.");
         ui.Info("Keyboard", "Always on, together with the controller.");
         if (ui.ConfirmRow("Keyboard defaults", "Puts the keyboard controls and the port hotkeys back to their defaults.",

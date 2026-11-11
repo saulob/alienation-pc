@@ -8,6 +8,7 @@
 #include <string>
 #include <string_view>
 
+#include "controller_prompts.h"
 #include "game_profile.h"
 #include "trg/settings.h"
 
@@ -16,6 +17,10 @@ struct AlnRunSettings;
 namespace aln {
 
 inline constexpr char kShowLauncherKey[] = "show_launcher";
+inline constexpr char kControllerPromptsKey[] = ALN_PROMPTS_KEY;
+inline constexpr char kPromptsPlayStation[] = ALN_PROMPTS_PLAYSTATION_KEY;
+inline constexpr char kPromptsXbox[] = ALN_PROMPTS_XBOX_KEY;
+inline constexpr char kDefaultControllerPrompts[] = ALN_PROMPTS_DEFAULT_KEY;
 inline constexpr char kDisplayModeKey[] = "display_mode";
 inline constexpr char kWindowWidthKey[] = "window_width";
 inline constexpr char kWindowHeightKey[] = "window_height";

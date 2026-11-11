@@ -29,6 +29,7 @@ $tests = [ordered]@{
     'aln-resolution-patch-tests'   = 'render resolution and frame rate patch tests'
     'aln-skip-intro-tests'         = 'Skip Intro hook site and startup video tests'
     'aln-crash-guard-tests'        = 'crash reporting (isolated crashing child processes)'
+    'aln-controller-prompts-tests' = 'controller prompt style, patch identity and glyph table'
     'aln-runtime-overlay-tests'    = 'guest file overlay tests'
     'aln-tiling-tests'             = 'GPU tiling tests'
     'aln-gds-lane-offset-tests'    = 'GPU GDS lane offset tests'
@@ -68,6 +69,10 @@ else {
     if ($LASTEXITCODE -ne 0) { $failed.Add("game_profile_tests.py (exit code $LASTEXITCODE)") }
     & $python.Exe @($python.Args) '-I' (Join-Path $script:RepoRoot 'tests\patch_site_tests.py')
     if ($LASTEXITCODE -ne 0) { $failed.Add("patch_site_tests.py (exit code $LASTEXITCODE)") }
+    & $python.Exe @($python.Args) '-I' (Join-Path $script:RepoRoot 'tests\controller_prompts_static_tests.py')
+    if ($LASTEXITCODE -ne 0) { $failed.Add("controller_prompts_static_tests.py (exit code $LASTEXITCODE)") }
+    & $python.Exe @($python.Args) '-I' (Join-Path $script:RepoRoot 'tools\prompts\verify_prompts.py')
+    if ($LASTEXITCODE -ne 0) { $failed.Add("verify_prompts.py (exit code $LASTEXITCODE)") }
 }
 
 Write-Step 'script tests (build script and log contract, ANGLE dependency; no build, no network)'

@@ -13,6 +13,9 @@ typedef aln_jmp_buf sigjmp_buf;
 #else
 #include <setjmp.h>
 #endif
+#ifdef __cplusplus
+extern "C" {
+#endif
 /* Recovery point for speculative guest memory reads on this thread (probe.c fault handler). */
 extern __thread sigjmp_buf *runtime_fault_recover;
 #define ABI __attribute__((sysv_abi))
@@ -156,4 +159,7 @@ void runtime_thread_attach_host(const char *name);
 /* Name of a guest thread handle, or NULL when it is not a live thread. */
 const char *runtime_thread_name(void *handle);
 uint64_t runtime_memory_flexible_available(void);
+#ifdef __cplusplus
+}
+#endif
 #endif
