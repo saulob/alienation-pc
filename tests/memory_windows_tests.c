@@ -92,6 +92,9 @@ int main(void) {
     CHECK(protect_at((char *)at+PAGE)==PAGE_READWRITE);
     runtime_memory_gpu_protect((uintptr_t)at,4*PAGE,0,0);
     CHECK(kernel_mprotect(at,4*PAGE,3)==0);
+    CHECK(protect_at(at)==PAGE_NOACCESS);
+    CHECK(kernel_mprotect(at,4*PAGE,1)==0);
+    CHECK(kernel_mprotect(at,4*PAGE,3)==0);
     CHECK(protect_at(at)==PAGE_READWRITE);
     CHECK(kernel_mprotect(at,4*PAGE,1)==0);
     runtime_memory_gpu_protect((uintptr_t)at,4*PAGE,1,1);

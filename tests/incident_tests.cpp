@@ -1041,7 +1041,7 @@ void TestLobbyAgrees() {
 }
 
 void TestProductionLobbyOnly() {
-    // The page reaches a report service only the way the Online page does; by default there is none.
+    // The page reaches a report service only the way the Online page does; by default it is the production lobby.
     for (const char* file : {"incident_page.cpp", "incident_page.h", "incident_report.cpp", "incident_report.h"}) {
         const std::string text = ReadAll(kSource / "launcher" / file);
         CHECK(!text.empty() && !Has(text, "workers.dev") && !Has(text, "wss://") && !Has(text, "ws://") && !Has(text, "localhost") &&
@@ -1050,7 +1050,8 @@ void TestProductionLobbyOnly() {
     const std::string page = ReadAll(kSource / "launcher" / "incident_page.cpp");
     CHECK(Has(page, "net::OnlineConfig config = OnlineConfigOf(ui.settings());") && Has(page, "net::apply_environment(config);"));
     const std::string settings = ReadAll(kSource / "src" / "net" / "online_config.h");
-    CHECK(Has(settings, "kDefaultLobbyUrl[] = \"\";"));
+    CHECK(Has(settings, "kDefaultLobbyUrl[] = \"wss://alienation-lobby.saulobenigno.workers.dev\";"));
+    CHECK(!Has(settings, "dcp") && !Has(settings, "dragon") && !Has(settings, "DCP_"));
     CHECK(Has(settings, "std::string lobby = kDefaultLobbyUrl;"));
 }
 

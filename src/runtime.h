@@ -108,6 +108,22 @@ uintptr_t runtime_lookup(const RuntimeExport *table, size_t count, const char *n
 uintptr_t runtime_kernel_resolve(const char *name);
 uintptr_t runtime_file_resolve(const char *name);
 uintptr_t runtime_services_resolve(const char *name);
+/* Online play for this process (runtime_online.cpp): reads the settings, the profile's online identity and the game
+ * build ("CUSA00062-1.00"; NULL for an unknown build, which stays offline), then configures the NP layer. Before the
+ * imports are bound. */
+void runtime_online_configure(const char *settings_file, const char *user_dir, const char *build);
+int runtime_online_active(void);
+/* Matching2 and the game's P2P socket while online play is on; 0 otherwise or for another import. */
+uintptr_t runtime_online_resolve(const char *name);
+/* Lobby messages, the endpoint exchange and the queued Matching2 callbacks, on the thread calling sceNpCheckCallback. */
+void runtime_online_pump(void);
+/* The initial user signed in as `online_id` (16 characters at most), the network connected at `ip` (host byte
+ * order). Off: runtime_np_resolve answers nothing and runtime_services.c keeps the offline behaviour. */
+void runtime_np_configure(int enabled, uint64_t account, const char *online_id, uint32_t ip);
+int runtime_np_enabled(void);
+/* Called at the end of every sceNpCheckCallback while online play is on. */
+void runtime_np_set_pump(void (*pump)(void));
+uintptr_t runtime_np_resolve(const char *name);
 void runtime_file_report(void);
 void runtime_file_configure(const char *app0, const char *user);
 int runtime_file_mount(const char *guest, const char *host);

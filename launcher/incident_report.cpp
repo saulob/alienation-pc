@@ -438,7 +438,7 @@ IncidentReceipt FileIncident(const net::OnlineConfig& config, const fs::path& us
     }
     net::LobbySession session;
     std::string error, refusal;
-    if (!session.open(config.lobby, net::hello_body(identity, net::online_name(config.name), game, false), nullptr, &error, 8000,
+    if (!session.open(config.lobby, net::hello_body(identity, net::online_id(config.name, identity.account), game, false), nullptr, &error, 8000,
                       &refusal)) {
         std::printf("Bug report: no session: %s\n", error.c_str());
         return NotSent(refusal.empty() ? IncidentOutcome::kUnreachable : IncidentOutcomeOf(refusal));

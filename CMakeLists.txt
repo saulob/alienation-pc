@@ -91,8 +91,12 @@ set(ALN_RUNTIME_SOURCES
     src/runtime_file.c
     src/runtime_font.c
     src/runtime_kernel.c
+    src/runtime_matching2.cpp
     src/runtime_memory.c
     src/runtime_mutex.c
+    src/runtime_np.c
+    src/runtime_online.cpp
+    src/runtime_p2p.cpp
     src/runtime_pad.c
     src/runtime_rtc.c
     src/runtime_rwlock.c
@@ -367,6 +371,30 @@ if (WIN32)
 else()
     target_link_libraries(aln-runtime-overlay-tests PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
 endif()
+
+# Focused tests of the save data commit and profile isolation, and of the local NP identity layer (tools/test.ps1);
+# not part of the default build.
+add_executable(aln-savedata-tests EXCLUDE_FROM_ALL tests/savedata_tests.c src/runtime_savedata.c src/runtime_file.c
+    $<$<BOOL:${WIN32}>:src/compat_win.c>)
+target_include_directories(aln-savedata-tests PRIVATE src)
+target_compile_definitions(aln-savedata-tests PRIVATE ALN_SAVEDATA_TEST_ROOT="${CMAKE_BINARY_DIR}/savedata-tests")
+target_compile_options(aln-savedata-tests PRIVATE -Wall -Wextra -Werror)
+add_executable(aln-np-tests EXCLUDE_FROM_ALL tests/np_tests.c src/runtime_np.c)
+target_include_directories(aln-np-tests PRIVATE src)
+target_compile_options(aln-np-tests PRIVATE -Wall -Wextra -Werror)
+if (WIN32)
+    target_link_libraries(aln-savedata-tests PRIVATE bcrypt -pthread)
+    target_link_libraries(aln-np-tests PRIVATE -pthread)
+else()
+    target_link_libraries(aln-savedata-tests PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
+    target_link_libraries(aln-np-tests PRIVATE Threads::Threads)
+endif()
+# The classic Matching2 and DGRAM_P2P entry points against a loopback development lobby (tools/test.ps1 starts one).
+add_executable(aln-online-hle-tests EXCLUDE_FROM_ALL tests/online_hle_tests.cpp src/runtime_matching2.cpp src/runtime_p2p.cpp)
+target_include_directories(aln-online-hle-tests PRIVATE src)
+set_target_properties(aln-online-hle-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_compile_options(aln-online-hle-tests PRIVATE -Wall -Wextra)
+target_link_libraries(aln-online-hle-tests PRIVATE aln_net)
 
 if (NOT WIN32)
     # Focused tests of the memory and fiber layers (tools/build.sh --test); not part of the default build.

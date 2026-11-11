@@ -29,6 +29,10 @@ socket_t OpenTestSocket(uint16_t port, int& error) {
 
 uint16_t connection_test_port(const OnlineConfig& config) { return config.udp_port ? config.udp_port : kGameUdpPort; }
 
+const char* ConnectionStatusText(ConnectionReport::Mark mark) {
+    return mark == ConnectionReport::Mark::kOk ? "Ready" : mark == ConnectionReport::Mark::kNote ? "Limited" : "Not ready";
+}
+
 ConnectionReport summarize_connection(const ConnectionFacts& f) {
     using Mark = ConnectionReport::Mark;
     using Router = ConnectionFacts::Router;
@@ -36,56 +40,75 @@ ConnectionReport summarize_connection(const ConnectionFacts& f) {
     auto line = [&r](Mark mark, std::string label, std::string text) {
         r.lines.push_back({mark, std::move(label), std::move(text)});
     };
+    const std::string port = std::to_string(f.udp_port);
+    const std::string where = f.udp_port ? " on UDP port " + port : "";
 
     if (!f.identity_ok) {
-        line(Mark::kProblem, "Online service", "Your online identity could not be created.");
+        line(Mark::kProblem, "Lobby", "Your online identity could not be created.");
     } else if (f.lobby_ok) {
-        line(Mark::kOk, "Online service",
+        line(Mark::kOk, "Lobby",
              f.lobby_latency_ms >= 0 ? "Connected \xC2\xB7 " + std::to_string(f.lobby_latency_ms) + " ms" : "Connected.");
     } else {
-        line(Mark::kProblem, "Online service", "Cannot reach the online service. Check your internet connection.");
+        line(Mark::kProblem, "Lobby", "Cannot reach the online service. Check your internet connection.");
+    }
+
+    const bool symmetric = f.udp_ok && f.second_answer && !f.same_mapping && !f.public_address;
+    if (!f.port_open) {
+        line(Mark::kProblem, "Public",
+             "Cannot open UDP port " + port + ". Another program may already be using it, or network security may be blocking it.");
+    } else if (f.stun_off) {
+        line(Mark::kNote, "Public", "Not checked: no STUN server is set.");
+    } else if (!f.udp_ok) {
+        line(Mark::kProblem, "Public", "No STUN server answered: your network or firewall may block UDP" + where + ".");
+    } else if (symmetric) {
+        line(Mark::kNote, "Public", "Found, but your router gives each player another public port (symmetric NAT).");
+    } else if (f.public_address) {
+        line(Mark::kOk, "Public", "Found: this PC has a public address.");
+    } else {
+        line(Mark::kOk, "Public", f.second_answer ? "Found: your router keeps one public port for every player."
+                                                  : "Found (only one STUN server answered).");
     }
 
     const bool direct = f.udp_ok && (f.public_address || !f.second_answer || f.same_mapping);
     const bool router_opened = f.router == Router::kMapped;
-    const std::string port = std::to_string(f.udp_port);
-    const std::string on_port = f.udp_port ? " on UDP port " + port + "." : ".";
-    const std::string where = f.udp_port ? " on UDP port " + port : "";
-    const std::string verified_in_match = ". Direct peer connectivity will be verified when joining a match";
     if (!f.port_open) {
-        line(Mark::kProblem, "Direct connections",
-             "Cannot open UDP port " + port +
-                 ". Another program may already be using it, or network security may be blocking it.");
-    } else if (f.stun_off) {
-        line(Mark::kNote, "Direct connections", "Not checked.");
-    } else if (!f.udp_ok) {
-        line(Mark::kProblem, "Direct connections", "May be blocked by your network or firewall" + on_port);
-    } else if (direct) {
-        const char* text = f.second_answer || f.public_address ? "UDP endpoint available" : "UDP endpoint probably available";
-        line(Mark::kOk, "Direct connections", text + where + verified_in_match);
-    } else if (router_opened) {
-        line(Mark::kOk, "Direct connections", "UDP endpoint available through your router" + where + verified_in_match);
+        line(Mark::kProblem, "Direct", "Needs the UDP port.");
+    } else if (f.stun_off && !router_opened) {
+        line(Mark::kNote, "Direct", "Not checked.");
+    } else if (direct || router_opened) {
+        line(Mark::kOk, "Direct",
+             "Other players can probably connect to you directly" + where + ". Each connection is verified when joining a room.");
     } else {
-        line(Mark::kProblem, "Direct connections",
-             "Your router may stop some players from connecting to you" + on_port);
-        line(Mark::kProblem, "Router configuration",
-             f.router == Router::kMappedBehindNat
-                 ? "Another router is in front of yours (often your provider's), so it cannot be opened automatically."
-                 : "Automatic setup is not available on your router.");
+        line(Mark::kNote, "Direct", "Some players may not be able to connect to you directly" + where + ".");
+    }
+
+    if (f.upnp_off) {
+        line(Mark::kNote, "Router", "Automatic setup (UPnP) is turned off.");
+    } else if (!f.port_open) {
+        line(Mark::kProblem, "Router", "Not tried: the UDP port is not open.");
+    } else if (router_opened) {
+        line(Mark::kOk, "Router", "UPnP opened UDP port " + port + " on your router.");
+    } else if (f.router == Router::kMappedBehindNat) {
+        line(Mark::kNote, "Router",
+             "Another router is in front of yours (often your provider's), so it cannot be opened automatically.");
+    } else {
+        line(Mark::kNote, "Router", "Automatic setup (UPnP) is not available on your router. It is not required.");
     }
 
     const bool relay = f.identity_ok && f.lobby_ok && f.relay_ok && f.port_open;
     if (relay) {
-        for (ConnectionReport::Line& entry : r.lines) {
-            if (entry.mark == Mark::kProblem && (entry.label == "Direct connections" || entry.label == "Router configuration")) {
-                entry.mark = Mark::kNote;
-            }
-        }
-        line(Mark::kOk, "Relay", "Available. A match that cannot connect directly connects through the online service");
+        line(Mark::kOk, "Relay", "Available: two players who cannot connect directly play through the online service.");
+    } else if (!f.identity_ok || !f.lobby_ok) {
+        line(Mark::kProblem, "Relay", "Needs the online service.");
+    } else if (!f.relay_ok) {
+        line(Mark::kProblem, "Relay", "Not offered by the online service.");
+    } else {
+        line(Mark::kProblem, "Relay", "Needs the UDP port.");
     }
+
     r.details.push_back(relay ? "relay: advertised by the online service" : f.relay_ok ? "relay: needs the UDP port"
                                                                                        : "relay: not offered by the online service");
-    if (f.udp_ok && f.second_answer && !f.same_mapping && !f.public_address) {
+    if (symmetric) {
         r.details.push_back("NAT: another public port per destination (symmetric NAT)");
     } else if (f.udp_ok && !f.second_answer) {
         r.details.push_back("NAT: type unknown, only one STUN server answered");
@@ -192,6 +215,7 @@ ConnectionReport run_connection_test(const OnlineConfig& config, const Identity&
             details.push_back("UPnP: not available: " + u.detail);
         }
     } else {
+        facts.upnp_off = true;
         details.push_back("UPnP: turned off by ALN_UPNP");
     }
     if (s != kNoSocket) close_socket(s);

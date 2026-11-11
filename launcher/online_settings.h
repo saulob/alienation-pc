@@ -1,4 +1,4 @@
-// The Online page's settings in alienation.ini, read the same way by the launcher and the game (the game side is not implemented yet).
+// The Online page's settings in alienation.ini, read the same way by the launcher and the game.
 #pragma once
 
 #include <filesystem>
@@ -13,9 +13,6 @@ class SettingsStore;
 namespace aln {
 
 class LauncherSettings;
-
-// Online play for Alienation is not implemented: the Online page stays a dormant foundation, nothing connects.
-inline constexpr bool kOnlinePlayAvailable = false;
 
 inline constexpr char kOnlineEnabledKey[] = "online_enabled";
 inline constexpr char kOnlineNameKey[] = "online_name";

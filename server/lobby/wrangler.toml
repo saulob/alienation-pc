@@ -1,0 +1,16 @@
+name = "alienation-lobby"
+main = "src/worker.js"
+compatibility_date = "2025-09-01"
+
+[[durable_objects.bindings]]
+name = "LOBBY"
+class_name = "LobbyObject"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["LobbyObject"]
+
+[[ratelimits]]
+name = "WS_UPGRADE_LIMITER"
+namespace_id = "2701"
+simple = { limit = 30, period = 60 }

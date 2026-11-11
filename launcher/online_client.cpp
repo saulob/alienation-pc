@@ -41,7 +41,8 @@ void Erase(std::vector<OnlinePlayer>& players, const std::string& account) {
 
 } // namespace
 
-void OnlineClient::Update(bool on, const net::OnlineConfig& config, const std::string& game, double now) {
+void OnlineClient::Update(bool on, const net::OnlineConfig& config, const std::string& game, const std::string& build,
+                          double now) {
     if (!on) {
         if (link_ || state_.link != Link::kOff) {
             Stop();
@@ -51,18 +52,21 @@ void OnlineClient::Update(bool on, const net::OnlineConfig& config, const std::s
         }
         return;
     }
-    const std::string name = net::online_name(config.name);
+    if (!identity_.ok()) identity_ = net::load_identity(user_dir_);
+    // The game's own online id: a launcher session must never rename the account to something the game does not use.
+    const std::string name = net::online_id(config.name, identity_.account);
     if (name != wanted_name_) {
         wanted_name_ = name;
         name_since_ = now;
     }
     const bool first = state_.link == Link::kOff;
     const bool settled = first || now - name_since_ >= kNameSettleSeconds;
-    if (link_ && (config.lobby != url_ || game != game_ || (name != name_ && settled))) {
+    if (link_ && (config.lobby != url_ || game != game_ || build != build_ || (name != name_ && settled))) {
         Stop();
         state_.link = Link::kConnecting;
         retry_at_ = 0;
     }
+    build_ = build;
     if (!link_ && settled && now >= retry_at_) {
         Start(config, game, name, now);
     }
@@ -74,13 +78,24 @@ void OnlineClient::Update(bool on, const net::OnlineConfig& config, const std::s
         Fetch(now);
     }
     SyncLobby(config.lobby_visible, now);
+    SyncRooms(now);
+}
+
+void OnlineClient::SyncRooms(double now) {
+    const bool watched = now - lobby_watched_at_ < kLobbyWatchSeconds;
+    if (state_.link != Link::kUp || build_.empty() || !watched || rooms_busy_ || now < rooms_at_) return;
+    rooms_busy_ = true;
+    rooms_at_ = now + kRoomsSeconds;
+    net::Json body = net::Json::Object();
+    if (!rooms_rev_.empty()) body.set("rev", rooms_rev_);
+    Send("rooms.list", std::move(body), Purpose::kRooms);
 }
 
 void OnlineClient::Start(const net::OnlineConfig& config, const std::string& game, const std::string& name, double now) {
     url_ = config.lobby;
     game_ = game;
     name_ = name;
-    const net::Identity identity = net::load_identity(user_dir_);
+    const net::Identity identity = identity_;
     if (!identity.ok()) {
         std::printf("Online: no online identity (%s)\n", identity.error.c_str());
         state_.link = Link::kUnreachable;
@@ -89,7 +104,9 @@ void OnlineClient::Start(const net::OnlineConfig& config, const std::string& gam
     }
     net::LobbyLink::Options options;
     options.url = url_;
-    options.hello = [identity, name, game] { return net::hello_body(identity, name, game, true); };
+    options.hello = [identity, name, game, build = build_] {
+        return net::hello_body(identity, name, game, true, false, false, build);
+    };
     link_ = std::make_unique<net::LobbyLink>(std::move(options));
     link_->start();
     state_.link = Link::kConnecting;
@@ -103,6 +120,11 @@ void OnlineClient::Stop() {
     lobby_told_ = lobby_listed_ = false;
     lobby_refresh_.Reset();
     lobby_rev_.clear();
+    rooms_busy_ = false;
+    rooms_at_ = 0;
+    rooms_rev_.clear();
+    state_.rooms.clear();
+    state_.rooms_fetched = false;
 }
 
 void OnlineClient::Fetch(double now) {
@@ -235,6 +257,21 @@ void OnlineClient::Answer(Purpose purpose, const net::LobbyMessage& message, dou
     case Purpose::kLobbyAdd:
     case Purpose::kLobbyChange:
         LobbyAnswer(purpose, message, now);
+        break;
+    case Purpose::kRooms:
+        rooms_busy_ = false;
+        if (ok) {
+            if (!message.body["unchanged"].as_bool()) {
+                state_.rooms = ReadPublicRooms(message.body["rooms"]);
+                rooms_rev_ = message.body["rev"].as_string();
+            }
+            state_.rooms_total = size_t(message.body["total"].as_int());
+            state_.rooms_incompatible = size_t(message.body["incompatible"].as_int());
+            state_.rooms_fetched = true;
+            state_.rooms_problem.clear();
+        } else if (message.code != net::kLinkLost) {
+            state_.rooms_problem = "Could not read the public rooms.";
+        }
         break;
     }
 }

@@ -1,5 +1,6 @@
 #include "net/identity.h"
 
+#include <cstdio>
 #include <fstream>
 #include <sstream>
 #include <system_error>
@@ -98,6 +99,14 @@ std::string online_name(const std::string& wanted, const std::string& fallback) 
     }
     while (!out.empty() && out.back() == '_') out.pop_back();
     return out.empty() ? fallback : out;
+}
+
+std::string online_id(const std::string& wanted, uint64_t account) {
+    const std::string name = online_name(wanted, "");
+    if (!name.empty() && name != "Player") return name;
+    char id[17];
+    std::snprintf(id, sizeof(id), "Player-%06llx", static_cast<unsigned long long>(account & 0xffffff));
+    return id;
 }
 
 } // namespace aln::net

@@ -45,9 +45,10 @@ struct Identity;
 
 // The hello request: protocol, game key (net::kOnlineGame), identity, name, and the online protocol, port version and
 // platform (net/online_version.h). `presence` false (the connection test) keeps the session from showing the player online;
-// `lobby_visible` lists the session in the public Lobby from its first moment, so a reconnect stays listed.
+// `lobby_visible` lists the session in the public Lobby from its first moment, so a reconnect stays listed. `build`
+// ("CUSA00062-1.00") is the game build whose rooms this session may see and join; empty for a session without rooms.
 Json hello_body(const Identity& identity, const std::string& name, const std::string& game, bool presence,
-                bool relay = false, bool lobby_visible = false);
+                bool relay = false, bool lobby_visible = false, const std::string& build = std::string());
 
 // What the lobby's hello answer says about its relay; an older lobby says nothing.
 struct RelayCapability {

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <map>
@@ -7,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "net/identity.h"
 #include "net/lobby_link.h"
 #include "net/online_config.h"
 #include "online_view.h"
@@ -30,6 +32,10 @@ public:
         bool lobby_fetched = false;
         double lobby_updated_at = 0; // on the clock passed to Update, when lobby_fetched
         std::string lobby_problem;
+        std::vector<PublicRoom> rooms;
+        size_t rooms_total = 0, rooms_incompatible = 0;
+        bool rooms_fetched = false;
+        std::string rooms_problem;
     };
 
     static constexpr double kNameSettleSeconds = 1.5;
@@ -37,14 +43,17 @@ public:
     // Declines and renames by others send no event.
     static constexpr double kRefreshSeconds = 30.0;
     static constexpr double kLobbyWatchSeconds = 1.0;
+    // The public rooms are read while the Lobby tab is on screen; the lobby allows one read every 5 s.
+    static constexpr double kRoomsSeconds = 15.0;
 
     explicit OnlineClient(std::filesystem::path user_dir) : user_dir_(std::move(user_dir)) {}
     ~OnlineClient() {
         if (link_) link_->stop();
     }
 
-    // Every launcher frame. Off stops the link; on keeps one, started again for another lobby, build or online name.
-    void Update(bool on, const net::OnlineConfig& config, const std::string& game, double now);
+    // Every frame. Off stops the link; on keeps one, started again for another lobby, game build or online name.
+    // `build` ("CUSA00062-1.00", empty when no game is installed) selects the public rooms the Lobby tab shows.
+    void Update(bool on, const net::OnlineConfig& config, const std::string& game, const std::string& build, double now);
 
     // The lists change at once; the lobby's answer and a fresh read follow.
     void AddFriend(const std::string& code);
@@ -56,6 +65,7 @@ public:
     void DeclineFromLobby(const std::string& player);
     // The Refresh lobby button; a read already running, or one that just ran, answers for it.
     void RefreshLobby(double now);
+    void RefreshRooms(double now) { rooms_at_ = std::min(rooms_at_, now); }
     bool LobbyRefreshing() const { return lobby_refresh_.active(); }
     // Every frame the list is on screen: nothing reads it otherwise.
     void WatchLobby(double now) { lobby_watched_at_ = now; }
@@ -63,9 +73,10 @@ public:
     const State& state() const { return state_; }
 
 private:
-    enum class Purpose { kFriends, kRequests, kAdd, kChange, kLobbyPublish, kLobbyList, kLobbyAdd, kLobbyChange };
+    enum class Purpose { kFriends, kRequests, kAdd, kChange, kLobbyPublish, kLobbyList, kLobbyAdd, kLobbyChange, kRooms };
 
     void Start(const net::OnlineConfig& config, const std::string& game, const std::string& name, double now);
+    void SyncRooms(double now);
     void Stop();
     void Fetch(double now);
     void SyncLobby(bool visible, double now);
@@ -77,7 +88,11 @@ private:
 
     std::filesystem::path user_dir_;
     std::unique_ptr<net::LobbyLink> link_;
-    std::string url_, game_, name_;
+    std::string url_, game_, name_, build_;
+    net::Identity identity_;
+    bool rooms_busy_ = false;
+    double rooms_at_ = 0;
+    std::string rooms_rev_;
     std::string wanted_name_;
     double name_since_ = 0;
     double retry_at_ = 0;

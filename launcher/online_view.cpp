@@ -30,7 +30,7 @@ std::vector<OnlineSection> OnlinePageSections(bool on, OnlineTab tab, size_t fri
     switch (tab) {
     case OnlineTab::kSettings:
         for (const OnlineSection section : {OnlineSection::kOnlineName, OnlineSection::kFriendCode,
-                                            OnlineSection::kConnectionTest, OnlineSection::kPingDisplay}) {
+                                            OnlineSection::kConnectionTest}) {
             sections.push_back(section);
         }
         break;
@@ -41,6 +41,7 @@ std::vector<OnlineSection> OnlinePageSections(bool on, OnlineTab tab, size_t fri
         sections.push_back(OnlineSection::kFriends);
         break;
     case OnlineTab::kLobby:
+        sections.push_back(OnlineSection::kPublicRooms);
         sections.push_back(OnlineSection::kLobbyVisibility);
         if (lobby_visible) {
             sections.push_back(OnlineSection::kLobbyPlayers);
@@ -51,9 +52,6 @@ std::vector<OnlineSection> OnlinePageSections(bool on, OnlineTab tab, size_t fri
 }
 
 OnlinePlaySwitch ResolveOnlinePlay(bool saved) {
-    if (!kOnlinePlayAvailable) {
-        return {false, true};
-    }
     const char* forced = std::getenv("ALN_ONLINE");
     if (!forced || !*forced) {
         return {saved, false};
@@ -84,7 +82,7 @@ std::vector<OnlinePlayer> ReadOnlinePlayers(const net::Json& rows) {
         const std::string& shown = row["display_name"].as_string();
         OnlinePlayer player{row["account"].as_string(), shown.empty() ? row["name"].as_string() : shown, row["online"].as_bool(),
                             row["room"].as_u64() != 0, row["platform"].as_string(), row["version"].as_string(),
-                            int(row["online_protocol"].as_int())};
+                            int(row["online_protocol"].as_int()), row["build"].as_string(), row["joinable"].as_bool()};
         if (player.name.empty()) {
             player.name = net::kDefaultOnlineName;
         }
@@ -94,10 +92,11 @@ std::vector<OnlinePlayer> ReadOnlinePlayers(const net::Json& rows) {
 }
 
 const char* FriendPresence(const OnlinePlayer& player) {
-    return player.in_room ? "Online, in a room" : player.online ? "Online" : "Offline";
+    if (player.in_room) return player.joinable ? "Online, in a joinable room" : "Online, in a room";
+    return player.online ? "Online" : "Offline";
 }
 
-FriendStatus FriendStatusOf(const OnlinePlayer& player) {
+FriendStatus FriendStatusOf(const OnlinePlayer& player, const std::string& local_build) {
     FriendStatus status{FriendPresence(player)};
     if (!player.online) {
         return status;
@@ -108,8 +107,28 @@ FriendStatus FriendStatusOf(const OnlinePlayer& player) {
     if (!player.version.empty()) {
         status.text += " \xC2\xB7 v" + player.version;
     }
-    status.incompatible = player.in_room && !net::online_compatible(player.online_protocol);
+    const bool other_build = !player.build.empty() && !local_build.empty() && player.build != local_build;
+    status.incompatible = player.in_room && (!net::online_compatible(player.online_protocol) || other_build);
     return status;
+}
+
+std::vector<PublicRoom> ReadPublicRooms(const net::Json& rows) {
+    std::vector<PublicRoom> rooms;
+    for (const net::Json& row : rows.items()) {
+        PublicRoom room{row["host"].as_string(), int(row["players"].as_int()), int(row["slots"].as_int()),
+                        row["joinable"].as_bool(), row["version"].as_string(), int(row["minutes"].as_int())};
+        if (room.host.empty() || room.players < 1 || room.slots < room.players) continue;
+        rooms.push_back(std::move(room));
+    }
+    return rooms;
+}
+
+std::string PublicRoomStatus(const PublicRoom& room) {
+    std::string text = std::to_string(room.players) + "/" + std::to_string(room.slots) + " players \xC2\xB7 ";
+    text += room.joinable ? "Joinable" : "Full";
+    if (!room.version.empty()) text += " \xC2\xB7 v" + room.version;
+    text += " \xC2\xB7 " + (room.minutes < 1 ? std::string("just opened") : std::to_string(room.minutes) + " min");
+    return text;
 }
 
 std::string FriendRequestText(const OnlinePlayer& sender) {

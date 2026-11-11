@@ -3,7 +3,11 @@
  *   <user>/savedata/<user id>/<title id>/<dir name>.sce_sys/ param.bin, icon0.png
  *   <user>/savedata/<user id>/<title id>.memory/memory.dat  SaveDataMemory
  * A mounted directory appears to the guest as /savedata0../savedata15.
- * Metadata lives beside the directory so the guest's own files are untouched. */
+ * Metadata lives beside the directory so the guest's own files are untouched.
+ *
+ * As on the console, a writable mount is committed when it is unmounted: the guest works on <dir>.aln-work, and the
+ * unmount swaps it in. <dir>.aln-commit marks a work copy as complete, so an interrupted swap finishes at the next
+ * mount, and a work copy without it (the game stopped before unmounting) is dropped. */
 #define _GNU_SOURCE
 #include "runtime.h"
 #include <stdio.h>
@@ -13,9 +17,12 @@
 #include <time.h>
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#ifndef _WIN32
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <ftw.h>
 #endif
 
@@ -34,6 +41,10 @@
 #define MODE_COPY_ICON 16
 #define MODE_CREATE2 32
 #define SLOTS 16
+#define WORK_SUFFIX ".aln-work"
+#define OLD_SUFFIX ".aln-old"
+#define COMMIT_SUFFIX ".aln-commit"
+#define TEMP_SUFFIX ".aln-tmp"
 
 typedef struct { char data[10]; char pad[6]; } TitleId;
 typedef struct { char data[32]; } DirName;
@@ -65,13 +76,16 @@ _Static_assert(sizeof(SearchCond)==64 && sizeof(SearchResult)==56,"dir name sear
 static pthread_mutex_t lock=PTHREAD_MUTEX_INITIALIZER;
 static int initialized;
 static char title_id[16]="UNKNOWN";
-static struct { int used; char host[700], meta[700]; uint64_t blocks; } slots[SLOTS];
+static struct { int used, writable; char host[700], work[720], meta[700], name[33]; uint64_t blocks; } slots[SLOTS];
 static char memory_path[720];
 static uint64_t memory_size;
-static size_t mounts_done, memory_writes;
+static size_t mounts_done, commits_done, memory_writes;
 
 void runtime_savedata_configure(const char *title) {
     if (title && *title) snprintf(title_id,sizeof(title_id),"%s",title);
+    const char *user=runtime_file_user_dir(), *name=user;
+    for (const char *p=user;*p;++p) if ((*p=='/' || *p=='\\') && p[1]) name=p+1;
+    printf("Save: profile %s, title %s\n",name,title_id);
 }
 
 static int make_dirs(const char *path) {
@@ -89,10 +103,153 @@ static int valid_name(const char *name, size_t max) {
     for (size_t i=0;i<n;++i) if (name[i]=='/' || name[i]=='\\' || (name[i]=='.' && (i==0 || name[i-1]=='.'))) return 0;
     return 1;
 }
+static int is_dir(const char *path) { struct stat st; return !stat(path,&st) && S_ISDIR(st.st_mode); }
+static int is_file(const char *path) { struct stat st; return !stat(path,&st) && S_ISREG(st.st_mode); }
+static int ends_with(const char *s, const char *suffix) {
+    size_t n=strlen(s), k=strlen(suffix);
+    return n>=k && !strcmp(s+n-k,suffix);
+}
+static int internal_name(const char *name) {
+    return ends_with(name,WORK_SUFFIX) || ends_with(name,OLD_SUFFIX) || ends_with(name,COMMIT_SUFFIX) ||
+           ends_with(name,TEMP_SUFFIX);
+}
+#ifdef _WIN32
+static void remove_tree(const char *path) { compat_remove_tree(path); }
+static int replace_file(const char *from, const char *to) {
+    return MoveFileExA(from,to,MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH) ? 0 : -1;
+}
+static void sync_dir(const char *path) { (void)path; } /* MOVEFILE_WRITE_THROUGH flushes the rename */
+#else
+static int remove_entry(const char *path, const struct stat *st, int flag, struct FTW *ftw) {
+    (void)st; (void)flag; (void)ftw; return remove(path);
+}
+static void remove_tree(const char *path) { nftw(path,remove_entry,16,FTW_DEPTH|FTW_PHYS); }
+static int replace_file(const char *from, const char *to) { return rename(from,to); }
+static void sync_dir(const char *path) {
+    int fd=open(path,O_RDONLY);
+    if (fd>=0) { fsync(fd); close(fd); }
+}
+#endif
+static void parent_of(const char *path, char *out, size_t size) {
+    snprintf(out,size,"%s",path);
+    char *slash=strrchr(out,'/');
+    if (slash && slash!=out) *slash=0;
+}
+static int sync_file(const char *path) {
+    int fd=open(path,O_RDWR);
+    if (fd<0) return errno==EACCES ? 0 : -1; /* a read-only file was copied, not written */
+    int r=fsync(fd);
+    close(fd);
+    return r;
+}
+/* Temporary file, flushed to disk, then renamed over `path`: a reader sees the old file or the new one. */
+static int write_file_atomic(const char *path, const void *data, size_t size) {
+    char temp[760], dir[760];
+    snprintf(temp,sizeof(temp),"%s" TEMP_SUFFIX,path);
+    FILE *f=fopen(temp,"wb");
+    if (!f) return -1;
+    int ok=fwrite(data,1,size,f)==size && !fflush(f) && !fsync(fileno(f));
+    ok&=!fclose(f);
+    if (!ok || replace_file(temp,path)) { remove(temp); return -1; }
+    parent_of(path,dir,sizeof(dir));
+    sync_dir(dir);
+    return 0;
+}
+static int copy_file(const char *from, const char *to) {
+    FILE *in=fopen(from,"rb");
+    if (!in) return -1;
+    FILE *out=fopen(to,"wb");
+    if (!out) { fclose(in); return -1; }
+    char buffer[65536];
+    size_t n;
+    int ok=1;
+    while (ok && (n=fread(buffer,1,sizeof(buffer),in))>0) ok=fwrite(buffer,1,n,out)==n;
+    ok&=!ferror(in);
+    fclose(in);
+    ok&=!fflush(out) && !fsync(fileno(out));
+    ok&=!fclose(out);
+    return ok ? 0 : -1;
+}
+static int copy_tree(const char *from, const char *to) {
+    if (make_dirs(to)) return -1;
+    DIR *d=opendir(from);
+    if (!d) return -1;
+    int r=0;
+    for (struct dirent *e;!r && (e=readdir(d));) {
+        if (!strcmp(e->d_name,".") || !strcmp(e->d_name,"..")) continue;
+        char a[1100], b[1100];
+        snprintf(a,sizeof(a),"%s/%s",from,e->d_name);
+        snprintf(b,sizeof(b),"%s/%s",to,e->d_name);
+        r=is_dir(a) ? copy_tree(a,b) : copy_file(a,b);
+    }
+    closedir(d);
+    return r;
+}
+static int sync_tree(const char *path) {
+    DIR *d=opendir(path);
+    if (!d) return -1;
+    int r=0;
+    for (struct dirent *e;!r && (e=readdir(d));) {
+        if (!strcmp(e->d_name,".") || !strcmp(e->d_name,"..")) continue;
+        char child[1100];
+        snprintf(child,sizeof(child),"%s/%s",path,e->d_name);
+        r=is_dir(child) ? sync_tree(child) : sync_file(child);
+    }
+    closedir(d);
+    sync_dir(path);
+    return r;
+}
+static void sibling(const char *host, const char *suffix, char *out, size_t size) { snprintf(out,size,"%s%s",host,suffix); }
+static const char *leaf(const char *path) { const char *slash=strrchr(path,'/'); return slash ? slash+1 : path; }
+
+/* Finishes a committed swap or drops an uncommitted work copy left by a stopped process. -1: a committed swap is
+ * still pending (folder in use) and the save must not be used yet. */
+static int recover(const char *host) {
+    char work[720], old[720], marker[720];
+    sibling(host,WORK_SUFFIX,work,sizeof(work));
+    sibling(host,OLD_SUFFIX,old,sizeof(old));
+    sibling(host,COMMIT_SUFFIX,marker,sizeof(marker));
+    if (is_file(marker)) {
+        if (is_dir(work)) {
+            if (is_dir(host)) {
+                if (is_dir(old)) remove_tree(old);
+                if (rename(host,old)) return -1;
+            }
+            if (rename(work,host)) { if (!is_dir(host) && is_dir(old)) rename(old,host); return -1; }
+            printf("Save: finished the interrupted save of '%s'\n",leaf(host));
+        }
+        remove(marker);
+        if (is_dir(old)) remove_tree(old);
+        return 0;
+    }
+    if (is_dir(work)) {
+        remove_tree(work);
+        printf("Save: dropped unsaved changes of '%s' (the game stopped before saving)\n",leaf(host));
+    }
+    if (is_dir(old)) { if (is_dir(host)) remove_tree(old); else rename(old,host); }
+    return 0;
+}
+/* The work copy is flushed, marked complete, then renamed in place of the save. 0: done; 1: complete but not swapped
+ * in yet (the next mount finishes it); -1: nothing saved, the previous save stays. */
+static int commit(const char *host, const char *work) {
+    char old[720], marker[720], dir[720];
+    sibling(host,OLD_SUFFIX,old,sizeof(old));
+    sibling(host,COMMIT_SUFFIX,marker,sizeof(marker));
+    parent_of(host,dir,sizeof(dir));
+    if (sync_tree(work) || write_file_atomic(marker,"",0)) { remove(marker); remove_tree(work); return -1; }
+    if (is_dir(old)) remove_tree(old);
+    if (is_dir(host) && rename(host,old)) return 1;
+    if (rename(work,host)) { rename(old,host); return 1; }
+    sync_dir(dir);
+    remove(marker);
+    remove_tree(old);
+    return 0;
+}
+
 static void write_param(const char *meta, const Param *p) {
     char path[700]; snprintf(path,sizeof(path),"%s/param.bin",meta);
-    FILE *f=fopen(path,"wb");
-    if (f) { Param copy=*p; copy.mtime=time(NULL); fwrite(&copy,sizeof(copy),1,f); fclose(f); }
+    Param copy=*p; copy.mtime=time(NULL);
+    if (write_file_atomic(path,&copy,sizeof(copy))) printf("Save: cannot write %s\n",path);
 }
 static int read_param(const char *meta, Param *p) {
     char path[700]; snprintf(path,sizeof(path),"%s/param.bin",meta);
@@ -104,14 +261,6 @@ static int read_param(const char *meta, Param *p) {
     if (!stat(path,&st)) p->mtime=st.st_mtime;
     return n==1 ? 0 : -1;
 }
-#ifdef _WIN32
-static void remove_tree(const char *path) { compat_remove_tree(path); }
-#else
-static int remove_entry(const char *path, const struct stat *st, int flag, struct FTW *ftw) {
-    (void)st; (void)flag; (void)ftw; return remove(path);
-}
-static void remove_tree(const char *path) { nftw(path,remove_entry,16,FTW_DEPTH|FTW_PHYS); }
-#endif
 
 /* A save's param (title, subtitle, date) for the save dialog; 0 when it exists. */
 int runtime_savedata_param(int32_t user, const char *dir, void *param) {
@@ -137,15 +286,13 @@ static ABI int32_t save_terminate(void) {
 static int32_t mount(int32_t user, const char *title, const DirName *dir, uint64_t blocks, uint32_t mode, MountResult *result) {
     if (!initialized) return ERR_NOT_INITIALIZED;
     if (user<0) return ERR_INVALID_USER;
-    if (!dir || !result || !valid_name(dir->data,sizeof(dir->data))) return ERR_PARAMETER;
-    char base[600], host[640], meta[680];
+    if (!dir || !result || !valid_name(dir->data,sizeof(dir->data)) || internal_name(dir->data)) return ERR_PARAMETER;
+    char base[600], host[640], meta[680], work[720];
     root(user,title,base,sizeof(base));
     snprintf(host,sizeof(host),"%s/%s",base,dir->data);
     snprintf(meta,sizeof(meta),"%s/%s.sce_sys",base,dir->data);
-    struct stat st;
-    int exists=!stat(host,&st) && S_ISDIR(st.st_mode);
-    if ((mode & MODE_CREATE) && exists) return ERR_EXISTS;
-    if (!(mode & (MODE_CREATE|MODE_CREATE2)) && !exists) return ERR_NOT_FOUND;
+    sibling(host,WORK_SUFFIX,work,sizeof(work));
+    const int writable=!(mode & MODE_RDONLY);
     pthread_mutex_lock(&lock);
     int slot=-1;
     for (int i=0;i<SLOTS;++i) {
@@ -153,22 +300,45 @@ static int32_t mount(int32_t user, const char *title, const DirName *dir, uint64
         if (!slots[i].used && slot<0) slot=i;
     }
     if (slot<0) { pthread_mutex_unlock(&lock); return ERR_MOUNT_FULL; }
+    if (recover(host)) {
+        pthread_mutex_unlock(&lock);
+        printf("Save: '%s' is still being swapped in (folder in use)\n",dir->data);
+        return ERR_INTERNAL;
+    }
+    const int exists=is_dir(host);
+    if ((mode & MODE_CREATE) && exists) { pthread_mutex_unlock(&lock); return ERR_EXISTS; }
+    if (!(mode & (MODE_CREATE|MODE_CREATE2)) && !exists) { pthread_mutex_unlock(&lock); return ERR_NOT_FOUND; }
     if (!exists && (make_dirs(host) || make_dirs(meta))) { pthread_mutex_unlock(&lock); return ERR_INTERNAL; }
     if (!exists) { Param empty={0}; write_param(meta,&empty); }
+    if (writable && copy_tree(host,work)) {
+        remove_tree(work);
+        pthread_mutex_unlock(&lock);
+        printf("Save: cannot prepare '%s' for writing\n",dir->data);
+        return ERR_INTERNAL;
+    }
     slots[slot].used=1;
+    slots[slot].writable=writable;
     slots[slot].blocks=blocks;
     snprintf(slots[slot].host,sizeof(slots[slot].host),"%s",host);
+    snprintf(slots[slot].work,sizeof(slots[slot].work),"%s",writable ? work : host);
     snprintf(slots[slot].meta,sizeof(slots[slot].meta),"%s",meta);
+    snprintf(slots[slot].name,sizeof(slots[slot].name),"%s",dir->data);
     memset(result,0,sizeof(*result));
     char point[32];
     snprintf(point,sizeof(point),"/savedata%d",slot&15);
     memcpy(result->point.data,point,strlen(point)+1);
     result->status=exists ? 0 : 1; /* CREATED */
-    runtime_file_mount(result->point.data,host);
+    if (runtime_file_mount(result->point.data,slots[slot].work)) {
+        slots[slot].used=0;
+        if (writable) remove_tree(work);
+        pthread_mutex_unlock(&lock);
+        printf("Save: cannot map '%s' (path too long or too many mounts)\n",dir->data);
+        return ERR_INTERNAL;
+    }
     ++mounts_done;
     pthread_mutex_unlock(&lock);
     printf("Runtime: save data '%s' mounted at %s (%s%s)\n",dir->data,result->point.data,
-           exists ? "existing" : "created",(mode & MODE_RDONLY) ? ", read-only" : "");
+           exists ? "existing" : "created",writable ? "" : ", read-only");
     return 0;
 }
 static int32_t mount_logged(int32_t user, const char *title, const DirName *dir, uint64_t blocks, uint32_t mode, MountResult *result) {
@@ -196,11 +366,25 @@ static int slot_of(const MountPoint *point) {
 static ABI int32_t save_umount(const MountPoint *point) {
     if (!initialized) return ERR_NOT_INITIALIZED;
     pthread_mutex_lock(&lock);
-    int slot=slot_of(point);
-    if (slot>=0) { runtime_file_unmount(point->data); slots[slot].used=0; }
+    const int slot=slot_of(point);
+    int writable=0, committed=0;
+    char name[33]="";
+    if (slot>=0) {
+        runtime_file_unmount(point->data);
+        writable=slots[slot].writable;
+        if (writable) committed=commit(slots[slot].host,slots[slot].work);
+        if (writable && committed>=0) ++commits_done;
+        snprintf(name,sizeof(name),"%s",slots[slot].name);
+        slots[slot].used=0;
+    }
     pthread_mutex_unlock(&lock);
-    if (slot>=0) printf("Runtime: save data unmounted from %s\n",point->data);
-    return slot>=0 ? 0 : ERR_NOT_FOUND;
+    if (slot<0) return ERR_NOT_FOUND;
+    printf("Runtime: save data unmounted from %s\n",point->data);
+    if (!writable) return 0;
+    if (committed==0) printf("Save: '%s' written\n",name);
+    else if (committed>0) printf("Save: '%s' written; its folder is swapped in at the next mount\n",name);
+    else printf("Save: '%s' could not be written; the previous save is kept\n",name);
+    return committed<0 ? ERR_INTERNAL : 0;
 }
 #define BLOCK_SIZE 32768
 static uint64_t used_blocks(const char *dir) {
@@ -221,7 +405,7 @@ static ABI int32_t save_get_mount_info(const MountPoint *point, SearchInfo *info
     pthread_mutex_lock(&lock);
     int slot=slot_of(point);
     if (slot<0) { pthread_mutex_unlock(&lock); return ERR_NOT_MOUNTED; }
-    uint64_t used=used_blocks(slots[slot].host), total=slots[slot].blocks>used ? slots[slot].blocks : used;
+    uint64_t used=used_blocks(slots[slot].work), total=slots[slot].blocks>used ? slots[slot].blocks : used;
     pthread_mutex_unlock(&lock);
     memset(info,0,sizeof(*info));
     info->blocks=total; info->free_blocks=total-used;
@@ -257,24 +441,28 @@ static ABI int32_t save_icon(const MountPoint *point, const Icon *icon) {
     int32_t r=ERR_NOT_MOUNTED;
     if (slot>=0) {
         char path[700]; snprintf(path,sizeof(path),"%s/icon0.png",slots[slot].meta);
-        FILE *f=fopen(path,"wb");
-        r=f && fwrite(icon->buffer,1,icon->data_size,f)==icon->data_size ? 0 : ERR_INTERNAL;
-        if (f) fclose(f);
+        r=write_file_atomic(path,icon->buffer,icon->data_size) ? ERR_INTERNAL : 0;
     }
     pthread_mutex_unlock(&lock);
     return r;
 }
 static ABI int32_t save_delete(const Delete *d) {
     if (!initialized) return ERR_NOT_INITIALIZED;
-    if (!d || !d->dir || !valid_name(d->dir->data,sizeof(d->dir->data))) return ERR_PARAMETER;
-    char base[600], host[640], meta[680];
+    if (!d || !d->dir || !valid_name(d->dir->data,sizeof(d->dir->data)) || internal_name(d->dir->data)) return ERR_PARAMETER;
+    char base[600], host[640], meta[680], leftover[720];
     root(d->user,d->title ? d->title->data : NULL,base,sizeof(base));
     snprintf(host,sizeof(host),"%s/%s",base,d->dir->data);
     snprintf(meta,sizeof(meta),"%s/%s.sce_sys",base,d->dir->data);
-    struct stat st;
-    if (stat(host,&st)) return ERR_NOT_FOUND;
+    pthread_mutex_lock(&lock);
+    for (int i=0;i<SLOTS;++i)
+        if (slots[i].used && !strcmp(slots[i].host,host)) { pthread_mutex_unlock(&lock); return ERR_BAD_MOUNTED; }
+    if (recover(host)) { pthread_mutex_unlock(&lock); return ERR_INTERNAL; }
+    if (!is_dir(host)) { pthread_mutex_unlock(&lock); return ERR_NOT_FOUND; }
     remove_tree(host);
     remove_tree(meta);
+    sibling(host,WORK_SUFFIX,leftover,sizeof(leftover));
+    if (is_dir(leftover)) remove_tree(leftover);
+    pthread_mutex_unlock(&lock);
     printf("Runtime: save data '%s' deleted\n",d->dir->data);
     return 0;
 }
@@ -302,7 +490,7 @@ static ABI int32_t save_search(const SearchCond *cond, SearchResult *result) {
     DIR *d=opendir(base);
     for (struct dirent *e; d && (e=readdir(d));) {
         size_t n=strlen(e->d_name);
-        if (e->d_name[0]=='.' || n>=32 || (n>8 && !strcmp(e->d_name+n-8,".sce_sys"))) continue;
+        if (e->d_name[0]=='.' || n>=32 || ends_with(e->d_name,".sce_sys") || internal_name(e->d_name)) continue;
         if (cond->dir && cond->dir->data[0] && !like(e->d_name,cond->dir->data)) continue;
         if (count==capacity) { capacity=capacity ? capacity*2 : 16; entries=realloc(entries,capacity*sizeof(*entries)); }
         snprintf(entries[count].name,32,"%s",e->d_name);
@@ -377,4 +565,6 @@ static const RuntimeExport exports[]={
     {"sceSaveDataSetSaveDataMemory",memory_set},
 };
 uintptr_t runtime_savedata_resolve(const char *name) { return RUNTIME_LOOKUP(exports,name); }
-void runtime_savedata_report(void) { printf("Runtime: save data mounts=%zu, memory writes=%zu\n",mounts_done,memory_writes); }
+void runtime_savedata_report(void) {
+    printf("Runtime: save data mounts=%zu, commits=%zu, memory writes=%zu\n",mounts_done,commits_done,memory_writes);
+}

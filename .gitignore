@@ -54,3 +54,6 @@ eboot.bin
 /.claude/
 /AGENTS.md
 /.opencode/
+# Lobby Worker: Wrangler cache and Node packages (nothing is installed by the repository)
+/server/lobby/.wrangler/
+/server/lobby/node_modules/

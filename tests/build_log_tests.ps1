@@ -16,6 +16,11 @@ function Check([bool]$Passed, [string]$Name) {
     }
 }
 
+function Get-LogFiles([string]$Directory, [string]$Filter) {
+    if (-not (Test-Path -LiteralPath $Directory -PathType Container)) { return @() }
+    @(Get-ChildItem -LiteralPath $Directory -Filter $Filter | Sort-Object Name)
+}
+
 $shell = (Get-Process -Id $PID).Path
 $work = Join-Path ([IO.Path]::GetTempPath()) "aln-build-log-tests-$PID"
 New-Item -ItemType Directory -Force -Path $work | Out-Null
@@ -138,6 +143,8 @@ Stop-Tool 'simulated early failure'
     if ($bash -and (Test-Path -LiteralPath $bash)) {
         $block = [regex]::Match($build, '(?s)# BEGIN build log.*?# END build log').Value
         $body = "echo out-line`necho 'x.c:1: error: boom' >&2`nexit 5`n"
+        $savedPath = $env:PATH
+        $env:PATH = "$(Join-Path $msys 'usr\bin');$env:PATH"
         foreach ($mode in 0, 1) {
             $unix = $work.Replace('\', '/') + "/sh$mode"
             New-Item -ItemType Directory -Force -Path $unix | Out-Null
@@ -148,19 +155,20 @@ Stop-Tool 'simulated early failure'
             $shExit1 = $LASTEXITCODE
             & $bash "$unix.sh" *> $null
             if ($mode -eq 0) {
-                $shLogs = @(Get-ChildItem -LiteralPath (Join-Path $work 'sh0\build\logs\build') -Filter 'build_*.log' | Sort-Object Name)
+                $shLogs = Get-LogFiles (Join-Path $work 'sh0\build\logs\build') 'build_*.log'
                 Check ($shExit1 -eq 5) "build.sh keeps the failing exit code (got $shExit1)"
                 Check ($shLogs.Count -eq 2 -and $shLogs[0].Name -eq 'build_001.log' -and $shLogs[1].Name -eq 'build_002.log') 'build.sh numbers its build-only logs and keeps the earlier one'
-                $shText = Get-Content -LiteralPath $shLogs[0].FullName -Raw
+                $shText = if ($shLogs.Count) { Get-Content -LiteralPath $shLogs[0].FullName -Raw } else { '' }
                 Check ($shText -match 'out-line' -and $shText -match 'error: boom' -and $shText -match 'Exit code: 5') 'build.sh log holds stdout, stderr and the exit code'
             }
             else {
-                $shLogs = @(Get-ChildItem -LiteralPath (Join-Path $work 'sh1\build\logs') -Filter 'alienation_*.log' | Sort-Object Name)
+                $shLogs = Get-LogFiles (Join-Path $work 'sh1\build\logs') 'alienation_*.log'
                 Check ($shLogs.Count -eq 2 -and $shLogs[0].Name -eq 'alienation_001.log' -and
                        (Get-Content -LiteralPath $shLogs[0].FullName -TotalCount 1) -eq '[build]' -and
                        -not (Test-Path (Join-Path $work 'sh1\build\logs\build'))) 'build.sh --run starts the session log alienation_NNN.log with its [build] section'
             }
         }
+        $env:PATH = $savedPath
     }
     else { Write-Host 'skipped: build.sh log block run (MSYS2 bash not found)' }
 }

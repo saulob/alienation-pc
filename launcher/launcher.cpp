@@ -933,7 +933,8 @@ private:
     std::filesystem::path UserDir() const { return PathFromUtf8(config_.user_dir ? config_.user_dir : "user"); }
 
     void PollOnline() {
-        online_page_->Tick(settings_, ImGui::GetTime());
+        online_page_->Tick(settings_, build_ && files_ == GameFileState::kValid ? BuildKey(*build_) : std::string(),
+                           ImGui::GetTime());
     }
 
     void PageOnline(trg::Ui& ui) { online_page_->Draw(ui); }

@@ -12,17 +12,16 @@ namespace aln::net {
 // The UDP port the game binds for its peer-to-peer socket; when it is taken (a second instance on this PC), the system
 // picks a free one.
 inline constexpr uint16_t kGameUdpPort = 3658;
-// Online play is not implemented for this game yet: no lobby, STUN server or UPnP mapping is used unless a developer
-// override (ALN_LOBBY, ALN_STUN, ALN_UPNP) names one.
-inline constexpr char kDefaultStunServers[] = "";
-inline constexpr char kDefaultLobbyUrl[] = "";
+inline constexpr char kDefaultStunServers[] = "stun.cloudflare.com:3478,stun.l.google.com:19302";
+// The production lobby (server/lobby); only the developer override ALN_LOBBY replaces it.
+inline constexpr char kDefaultLobbyUrl[] = "wss://alienation-lobby.saulobenigno.workers.dev";
 inline constexpr char kDefaultOnlineName[] = "Player";
 
 struct OnlineConfig {
     bool enabled = false;
     std::string lobby = kDefaultLobbyUrl;
     std::string name = kDefaultOnlineName; // as typed; net::online_name makes it the in-game id
-    bool upnp = false;
+    bool upnp = true;
     uint16_t udp_port = 0;       // 0: the game's port, or any free one
     std::string stun = kDefaultStunServers; // "" or "off": no STUN
     uint32_t bind_ip = 0; // never configurable: a test binds loopback so it needs no firewall rule

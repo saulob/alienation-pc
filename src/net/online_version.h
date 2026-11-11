@@ -10,8 +10,8 @@ namespace aln::net {
 // whatever their port version; a client that sends none (older builds) counts as 0 and is never compatible.
 inline constexpr int kOnlineProtocolVersion = 1;
 
-// The lobby's game key, the same for every supported game build: the region or version of the game never keeps
-// players apart, only kOnlineProtocolVersion does.
+// The lobby's game key. Players meet only with the same online protocol and the same game build (hello `build`): the
+// game's lockstep simulation needs both peers to run the same executable.
 inline constexpr char kOnlineGame[] = "Alienation";
 
 bool online_compatible(int remote_protocol);

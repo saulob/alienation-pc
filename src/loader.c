@@ -625,6 +625,7 @@ int main(int argc, char **argv) {
         printf("Game: build pinned by ALN_GAME_BUILD\n");
     }
     log_game_identity(app0,known_build ? &game_build : NULL);
+    printf("ALN: game build %s\n",known_build ? game_build.label : "not a supported build");
     render_resolution=&aln_resolutions[aln_render_resolution(settings_file,paths.image_dir)];
     aspect_ratio=&aln_aspect_ratios[aln_aspect_ratio(settings_file,paths.image_dir)];
     render_target=aln_render_target(render_resolution,aspect_ratio);
@@ -655,6 +656,7 @@ int main(int argc, char **argv) {
             runtime_savedata_configure(id);
         trophy_runtime_configure(app0, user_dir ? user_dir : "user");
     }
+    if (!check_imports) runtime_online_configure(settings_file, user_dir ? user_dir : "user", known_build ? build_key : NULL);
     alngpu_register_kernel();
 #ifdef _WIN32
     SYSTEM_INFO system_info; GetSystemInfo(&system_info); page_size = system_info.dwPageSize;

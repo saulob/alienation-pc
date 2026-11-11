@@ -23,7 +23,8 @@ public:
     explicit OnlinePage(std::filesystem::path user_dir) : user_dir_(user_dir), client_(std::move(user_dir)) {}
     ~OnlinePage();
 
-    void Tick(LauncherSettings& settings, double now);
+    // `build` is the installed game build ("CUSA00062-1.00"), empty when none is.
+    void Tick(LauncherSettings& settings, const std::string& build, double now);
     size_t PendingRequests() const { return client_.state().incoming.size(); }
     // Online play is on and no Connection test has finished on the game's UDP port, or one is running.
     bool PlayNeedsTest(const trg::SettingsStore& settings) const;
@@ -53,6 +54,7 @@ private:
     void DrawConnectionTest(trg::Ui& ui);
     bool DrawRequiredTestRow(trg::Ui& ui, const ConnectionTestLook& look, const char* button, bool focus);
     void DrawFriends(trg::Ui& ui);
+    void DrawPublicRooms(trg::Ui& ui);
     void DrawLobbyVisibility(trg::Ui& ui);
     void DrawLobbyPlayers(trg::Ui& ui);
     void DrawLobbyHeader(trg::Ui& ui, const OnlineClient::State& state);
@@ -60,6 +62,7 @@ private:
     void DrawLobbyPlayer(trg::Ui& ui, const LobbyPlayer& player);
 
     std::filesystem::path user_dir_;
+    std::string build_;
     OnlineClient client_;
     OnlineTab tab_ = OnlineTab::kSettings;
     bool was_on_ = false;

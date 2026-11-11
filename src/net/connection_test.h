@@ -24,6 +24,7 @@ struct ConnectionFacts {
     bool second_answer = false;   // a second STUN server answered
     bool same_mapping = false;    // and saw the same public port
     Router router = Router::kNone;
+    bool upnp_off = false;        // ALN_UPNP=0
 };
 
 struct ConnectionReport {
@@ -33,7 +34,7 @@ struct ConnectionReport {
         std::string label;
         std::string text;
     };
-    std::vector<Line> lines;  // plain language, no addresses; when ready only what makes it ready
+    std::vector<Line> lines;  // Lobby, Public, Direct, Router and Relay, in plain language, no addresses
     bool ready = false;
     std::string verdict;
     std::string friend_code;           // from the lobby, when it answered
@@ -41,6 +42,8 @@ struct ConnectionReport {
 };
 
 ConnectionReport summarize_connection(const ConnectionFacts& facts);
+// "Ready", "Limited" or "Not ready".
+const char* ConnectionStatusText(ConnectionReport::Mark mark);
 
 // The launcher's test opens the port the game will bind: the configured one, else the game's.
 uint16_t connection_test_port(const OnlineConfig& config);

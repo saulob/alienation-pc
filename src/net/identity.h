@@ -26,4 +26,8 @@ Identity load_identity(const std::filesystem::path& user_dir, bool create = true
 // become '_'. `fallback` is used when nothing is left.
 std::string online_name(const std::string& wanted, const std::string& fallback = "Player");
 
+// The in-game online id (SceNpId) and the name the lobby shows: the Online name, or for the default one "Player-" and six
+// hex digits of the account. The game tells room members apart by this id, so two profiles must never share it.
+std::string online_id(const std::string& wanted, uint64_t account);
+
 } // namespace aln::net

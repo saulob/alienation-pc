@@ -16,8 +16,8 @@ enum class OnlineSection {
     kOnlineName,
     kFriendCode,
     kConnectionTest,
-    kPingDisplay,
     kFriends,
+    kPublicRooms,
     kLobbyVisibility,
     kLobbyPlayers
 };
@@ -77,6 +77,8 @@ struct OnlinePlayer {
     std::string platform;
     std::string version;
     int online_protocol = 0;
+    std::string build;     // the game build of the friend's room ("CUSA00062-1.00")
+    bool joinable = false; // the room is public, has a free seat and matches this PC's build
 };
 
 // The rows of friends.list "friends" or friends.requests "incoming"/"outgoing".
@@ -84,12 +86,26 @@ std::vector<OnlinePlayer> ReadOnlinePlayers(const net::Json& rows);
 const char* FriendPresence(const OnlinePlayer& player);
 
 // The line under a friend's name: "Online, in a room · Windows · v0.8.0", and whether to add "Incompatible" (a room of
-// another online protocol).
+// another online protocol or another game build than `local_build`).
 struct FriendStatus {
     std::string text;
     bool incompatible = false;
 };
-FriendStatus FriendStatusOf(const OnlinePlayer& player);
+FriendStatus FriendStatusOf(const OnlinePlayer& player, const std::string& local_build);
+
+// A public room of this PC's game build, as rooms.list shows it: never an address or a way to join from the launcher;
+// the game's own Online menu finds and joins it.
+struct PublicRoom {
+    std::string host;
+    int players = 0;
+    int slots = 0;
+    bool joinable = false;
+    std::string version; // the host's port version; empty when it did not say
+    int minutes = 0;     // since the room opened
+};
+std::vector<PublicRoom> ReadPublicRooms(const net::Json& rows);
+// "2/4 players · Joinable · v0.1.0 · 5 min"
+std::string PublicRoomStatus(const PublicRoom& room);
 std::string FriendRequestText(const OnlinePlayer& sender);
 
 // What the lobby says this player is to the one reading the list.

@@ -32,6 +32,8 @@ $tests = [ordered]@{
     'aln-crash-guard-tests'        = 'crash reporting (isolated crashing child processes)'
     'aln-controller-prompts-tests' = 'controller prompt style, patch identity and glyph table'
     'aln-runtime-overlay-tests'    = 'guest file overlay tests'
+    'aln-savedata-tests'           = 'save data commit, recovery and profile isolation'
+    'aln-np-tests'                 = 'local NP identity, account checks and network state'
     'aln-tiling-tests'             = 'GPU tiling tests'
     'aln-gds-lane-offset-tests'    = 'GPU GDS lane offset tests'
     'aln-gpu-crash-trace-tests'    = 'GPU crash trace and geometry output tests'
@@ -76,11 +78,56 @@ else {
     if ($LASTEXITCODE -ne 0) { $failed.Add("verify_prompts.py (exit code $LASTEXITCODE)") }
 }
 
-Write-Step 'script tests (build script and log contract, ANGLE dependency; no build, no network)'
+Write-Step 'script tests (build script and log contract, ANGLE dependency, online instance script; no build, no network)'
 $hostExe = (Get-Process -Id $PID).Path
-foreach ($scriptTest in 'build_script_tests.ps1', 'build_log_tests.ps1', 'angle_dependency_tests.ps1') {
+foreach ($scriptTest in 'build_script_tests.ps1', 'build_log_tests.ps1', 'angle_dependency_tests.ps1', 'online_instance_tests.ps1') {
     & $hostExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $script:RepoRoot "tests\$scriptTest")
     if ($LASTEXITCODE -ne 0) { $failed.Add("$scriptTest (exit code $LASTEXITCODE)") }
+}
+
+Write-Step 'online backend tests (node --test: lobby protocol, rooms, builds, friends, relay, limits, dashboard; loopback only)'
+$node = Get-Command node -ErrorAction SilentlyContinue
+$nodeOk = $node -and ([version]((& $node.Source --version).TrimStart('v')) -ge [version]'22.13.0')
+if (-not $nodeOk) { $failed.Add('online backend tests (Node.js 22.13 or later not found)') }
+else {
+    Push-Location (Join-Path $script:RepoRoot 'server\lobby')
+    try { & $node.Source --no-warnings --test 'test/*.test.js' } finally { Pop-Location }
+    if ($LASTEXITCODE -ne 0) { $failed.Add("online backend tests (exit code $LASTEXITCODE)") }
+}
+
+Write-Step 'online HLE tests (classic Matching2 and the DGRAM_P2P socket against a loopback development lobby)'
+& ninja -C $buildDir aln-online-hle-tests
+if ($LASTEXITCODE -ne 0) { $failed.Add('aln-online-hle-tests (build failed)') }
+elseif (-not $nodeOk) { $failed.Add('aln-online-hle-tests (Node.js 22.13 or later not found)') }
+else {
+    # The development lobby in memory on a free loopback port, in a folder this script owns; it never reaches the
+    # production service.
+    $lobbyDir = Join-Path ([IO.Path]::GetTempPath()) "aln-test-lobby-$PID"
+    $lobbyProcess = $null
+    try {
+        New-Item -ItemType Directory -Force -Path $lobbyDir | Out-Null
+        $probe = [System.Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+        $probe.Start(); $port = $probe.LocalEndpoint.Port; $probe.Stop()
+        $server = Join-Path $script:RepoRoot 'server\lobby\local\server.js'
+        $lobbyProcess = Start-Process -FilePath $node.Source -WindowStyle Hidden -PassThru `
+            -RedirectStandardOutput (Join-Path $lobbyDir 'out.log') -RedirectStandardError (Join-Path $lobbyDir 'err.log') `
+            -ArgumentList @('--no-warnings', "`"$server`"", '--host', '127.0.0.1', '--port', $port)
+        $ready = $false
+        for ($i = 0; $i -lt 80 -and -not $ready -and -not $lobbyProcess.HasExited; $i++) {
+            Start-Sleep -Milliseconds 250
+            try { $ready = "$((Invoke-RestMethod -Uri "http://127.0.0.1:$port/" -TimeoutSec 2).service)" -like 'alienation-lobby*' } catch { }
+        }
+        if (-not $ready) { $failed.Add("aln-online-hle-tests (the development lobby did not start: $(Get-Content -Raw -LiteralPath (Join-Path $lobbyDir 'err.log') -ErrorAction SilentlyContinue))") }
+        else {
+            $env:ALN_TEST_LOBBY = "ws://127.0.0.1:$port/"
+            & (Join-Path $buildDir 'bin\aln-online-hle-tests.exe')
+            if ($LASTEXITCODE -ne 0) { $failed.Add("aln-online-hle-tests (exit code $LASTEXITCODE)") }
+        }
+    } finally {
+        $env:ALN_TEST_LOBBY = $null
+        if ($lobbyProcess -and -not $lobbyProcess.HasExited) { $lobbyProcess.Kill(); $lobbyProcess.WaitForExit(5000) | Out-Null }
+        if (Test-Path -LiteralPath $lobbyDir) { Remove-Item -LiteralPath $lobbyDir -Recurse -Force -ErrorAction SilentlyContinue }
+    }
 }
 
 if ($failed.Count) {

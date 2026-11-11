@@ -17,13 +17,14 @@ namespace aln {
 namespace {
 
 const char* kOnlineHelp =
-    "Lets the game's own Online menu create and join rooms. Players meet in the lobby; the game itself runs directly "
-    "between your PCs.";
+    "Lets the game's own Online menu create, find and join rooms. Players meet in the online service; the game itself "
+    "runs directly between your PCs, or through the service's relay when they cannot reach each other.";
+const char* kOfflineHelp = "The game runs offline: the launcher and the game make no online connections.";
+const char* kRoomsHelp = "Public rooms of your game version. Join them from the game's own Online menu.";
 const char* kNameHelp = "What other players see: up to 16 letters, digits, - or _.";
 const char* kFriendCodeHelp = "Share this code so another player can add you.";
 const char* kTestHelp = "Checks that you can reach the online service and that other players can reach you. Takes a few "
                         "seconds.";
-const char* kPingHelp = "Shows the round trip to the other players in game. F3 switches it while playing.";
 const char* kUnreachable = "Cannot reach the online service right now. Run the Connection test for details.";
 const char* kLobbyHiddenHelp =
     "Enable this option to let other Alienation players see your Online name and send you a friend request.";
@@ -80,8 +81,8 @@ bool AcceptButton(trg::Ui& ui, const char* id) {
 }
 
 // The name, then the status line in the row's help style with "Incompatible" in the attention colour.
-void FriendRow(trg::Ui& ui, const OnlinePlayer& player) {
-    const FriendStatus status = FriendStatusOf(player);
+void FriendRow(trg::Ui& ui, const OnlinePlayer& player, const std::string& local_build) {
+    const FriendStatus status = FriendStatusOf(player, local_build);
     ui.RowLeft(player.name.c_str());
     ImGui::PushFont(nullptr, trg::layout::kTextHelp);
     std::string status_text = status.text;
@@ -106,10 +107,8 @@ OnlinePage::~OnlinePage() {
     if (worker_.joinable()) worker_.join();
 }
 
-void OnlinePage::Tick(LauncherSettings& settings, double now) {
-    if (!kOnlinePlayAvailable) {
-        return;
-    }
+void OnlinePage::Tick(LauncherSettings& settings, const std::string& build, double now) {
+    build_ = build;
     const net::OnlineConfig config = ConfigOf(settings);
     const bool on = config.enabled;
     if (on != was_on_) {
@@ -119,13 +118,10 @@ void OnlinePage::Tick(LauncherSettings& settings, double now) {
     }
     ForgetConnectionTestWhenOff(settings, on);
     RecordFinishedTest(settings, on);
-    client_.Update(on, config, net::kOnlineGame, now);
+    client_.Update(on, config, net::kOnlineGame, build, now);
 }
 
 bool OnlinePage::PlayNeedsTest(const trg::SettingsStore& settings) const {
-    if (!kOnlinePlayAvailable) {
-        return false;
-    }
     const net::OnlineConfig config = ConfigOf(settings);
     return ConnectionTestNeeded(settings, config.enabled, testing_, net::connection_test_port(config));
 }
@@ -139,7 +135,7 @@ void OnlinePage::RunTest(trg::Ui& ui) {
         net::ConnectionReport report;
         try {
             const net::Identity identity = net::load_identity(user_dir);
-            report = net::run_connection_test(config, identity, net::online_name(config.name), game, port);
+            report = net::run_connection_test(config, identity, net::online_id(config.name, identity.account), game, port);
         } catch (const std::exception& e) {
             std::printf("Connection test: stopped: %s\n", e.what());
             testing_ = false;
@@ -174,13 +170,6 @@ void OnlinePage::ClearTest() {
 }
 
 void OnlinePage::Draw(trg::Ui& ui) {
-    if (!kOnlinePlayAvailable) {
-        ui.Info("Online play", "Off");
-        ui.Help("Online play for Alienation is not available yet. The game runs offline: the launcher and the game make no "
-                "lobby, friend or matchmaking connections.");
-        ui.EndRows();
-        return;
-    }
     const OnlinePlaySwitch online = ResolveOnlinePlay(ui.settings().GetBool(kOnlineEnabledKey, false));
     const OnlineClient::State& state = client_.state();
     const bool lobby_visible = ui.settings().GetBool(kLobbyVisibleKey, false);
@@ -193,8 +182,8 @@ void OnlinePage::Draw(trg::Ui& ui) {
         case OnlineSection::kOnlineName: ui.InputText("Online name", kNameHelp, kOnlineNameKey, net::kDefaultOnlineName); break;
         case OnlineSection::kFriendCode: DrawFriendCode(ui); break;
         case OnlineSection::kConnectionTest: DrawConnectionTest(ui); break;
-        case OnlineSection::kPingDisplay: ui.Toggle("Ping display", kPingHelp, kPingDisplayKey, false, "Off", "On"); break;
         case OnlineSection::kFriends: DrawFriends(ui); break;
+        case OnlineSection::kPublicRooms: DrawPublicRooms(ui); break;
         case OnlineSection::kLobbyVisibility: DrawLobbyVisibility(ui); break;
         case OnlineSection::kLobbyPlayers: DrawLobbyPlayers(ui); break;
         }
@@ -204,7 +193,7 @@ void OnlinePage::Draw(trg::Ui& ui) {
 
 void OnlinePage::DrawOnlinePlay(trg::Ui& ui, const OnlinePlaySwitch& online) {
     if (!online.locked) {
-        ui.Toggle("Online play", kOnlineHelp, kOnlineEnabledKey, false);
+        ui.Toggle("Online play", online.on ? kOnlineHelp : kOfflineHelp, kOnlineEnabledKey, false);
         return;
     }
     ui.Info("Online play", online.on ? "On" : "Off");
@@ -355,17 +344,61 @@ void OnlinePage::DrawConnectionTest(trg::Ui& ui) {
     if (!result.done || testing) return;
     ui.EndRows();
     ui.Heading(Tr(result.report.verdict.c_str()));
+    // One row per area: its name, its status in the status colour, then what was measured.
+    const float label_width = ImGui::CalcTextSize(Tr("Router")).x * 1.6f;
+    const float status_width = ImGui::CalcTextSize(Tr("Not ready")).x + ImGui::GetStyle().ItemSpacing.x * 2.0f;
     for (const auto& line : result.report.lines) {
         using Mark = net::ConnectionReport::Mark;
-        const ImVec4 color = line.mark == Mark::kOk ? ui.theme().good_dot : line.mark == Mark::kNote ? ui.theme().dim
+        const ImVec4 color = line.mark == Mark::kOk ? ui.theme().good_dot : line.mark == Mark::kNote ? ui.theme().accent
                                                                                                      : ui.theme().warn_dot;
-        ImGui::PushStyleColor(ImGuiCol_Text, color);
-        ImGui::TextUnformatted(line.mark == Mark::kOk ? "OK" : line.mark == Mark::kNote ? "--" : "!!");
-        ImGui::PopStyleColor();
-        ImGui::SameLine();
-        ImGui::TextWrapped("%s: %s", Tr(line.label.c_str()), TrValue(line.text).c_str());
+        const float left = ImGui::GetCursorPosX();
+        ImGui::PushFont(ui.fonts().semibold, 0.0f);
+        ImGui::TextUnformatted(Tr(line.label.c_str()));
+        ImGui::PopFont();
+        ImGui::SameLine(left + label_width);
+        ImGui::TextColored(color, "%s", Tr(net::ConnectionStatusText(line.mark)));
+        ImGui::SameLine(left + label_width + status_width);
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextColored(ui.theme().dim, "%s", TrValue(line.text).c_str());
+        ImGui::PopTextWrapPos();
     }
     ui.Spacer();
+}
+
+void OnlinePage::DrawPublicRooms(trg::Ui& ui) {
+    client_.WatchLobby(ImGui::GetTime());
+    const OnlineClient::State& state = client_.state();
+    std::string title = std::string(Tr("Public rooms"));
+    if (state.rooms_fetched) title += " (" + std::to_string(state.rooms_total) + ")";
+    ui.Heading(title.c_str());
+    ui.Help(kRoomsHelp);
+    if (build_.empty()) {
+        ui.Help("Install the game to see its public rooms.");
+    } else if (state.link == OnlineClient::Link::kUnreachable) {
+        ui.Help(kUnreachable);
+    } else if (!state.rooms_problem.empty()) {
+        ui.Help(TrValue(state.rooms_problem).c_str());
+    } else if (!state.rooms_fetched) {
+        ui.Help("Connecting...");
+    } else if (state.rooms.empty()) {
+        ui.Help("No public rooms are open right now.");
+    }
+    for (const PublicRoom& room : state.rooms) {
+        ui.RowLeft(room.host.c_str());
+        ImGui::PushFont(nullptr, trg::layout::kTextHelp);
+        ImGui::TextColored(room.joinable ? ui.theme().good_dot : ui.theme().dim, "%s", TrValue(PublicRoomStatus(room)).c_str());
+        ImGui::PopFont();
+        ui.RowControl();
+    }
+    ui.EndRows();
+    if (state.rooms_fetched && state.rooms_total > state.rooms.size()) {
+        ui.Help(TrValue(std::to_string(state.rooms_total - state.rooms.size()) + " more rooms are not shown.").c_str());
+    }
+    if (state.rooms_fetched && state.rooms_incompatible) {
+        ui.Help(TrValue(std::to_string(state.rooms_incompatible) +
+                        " rooms of another game version or region are hidden: players only meet on the same game build.")
+                    .c_str());
+    }
 }
 
 void OnlinePage::DrawFriends(trg::Ui& ui) {
@@ -392,14 +425,14 @@ void OnlinePage::DrawFriends(trg::Ui& ui) {
         ImGui::PopID();
     }
     for (const OnlinePlayer& f : state.friends) {
-        FriendRow(ui, f);
+        FriendRow(ui, f, build_);
         ImGui::PushID(("f" + f.account).c_str());
         if (ImGui::Button(Tr("Remove"), ImVec2(-FLT_MIN, 0))) client_.Remove(f.account);
         ImGui::PopID();
     }
     if (state.fetched && state.friends.empty() && state.incoming.empty() && state.outgoing.empty()) {
         ui.EndRows();
-        ui.Help("No friends yet. A friend in a room appears in the game's Join Friends Room list.");
+        ui.Help("No friends yet. Share your friend code, or add a friend's code above.");
     }
     ui.EndRows();
 }
@@ -467,6 +500,7 @@ void OnlinePage::DrawLobbyHeader(trg::Ui& ui, const OnlineClient::State& state) 
     ImGui::BeginDisabled(refreshing || state.link != OnlineClient::Link::kUp);
     if (ImGui::Button((std::string(refreshing ? busy : idle) + "###refresh_lobby").c_str(), ImVec2(button_width, 0))) {
         client_.RefreshLobby(ImGui::GetTime());
+        client_.RefreshRooms(ImGui::GetTime());
     }
     ImGui::EndDisabled();
 }
