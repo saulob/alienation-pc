@@ -50,9 +50,9 @@ if ($errors.Count -gt 0) {
 }
 $commands = @($testAst.FindAll({ param($node) $node -is [Management.Automation.Language.CommandAst] }, $true))
 $sync = @($commands | Where-Object { $_.GetCommandName() -eq 'Sync-GpuDependencies' })
-$ninja = @($commands | Where-Object { $_.GetCommandName() -eq 'ninja' })
-if ($sync.Count -ne 1 -or $ninja.Count -eq 0 -or $sync[0].Extent.StartOffset -gt $ninja[0].Extent.StartOffset) {
-    Write-Host 'FAIL: test.ps1 must call Sync-GpuDependencies once, before ninja'
+$build = @($commands | Where-Object { $_.GetCommandName() -eq 'Build-TestTargets' })
+if ($sync.Count -ne 1 -or $build.Count -ne 1 -or $sync[0].Extent.StartOffset -gt $build[0].Extent.StartOffset) {
+    Write-Host 'FAIL: test.ps1 must call Sync-GpuDependencies once, before Build-TestTargets'
     $failures++
 }
 

@@ -631,7 +631,7 @@ private:
         case PageId::kControls:
             return {name, "Controller and keyboard.", [this](trg::Ui& ui) { PageControls(ui); }, nullptr, nullptr};
         case PageId::kOnline:
-            return {name, "Online play is not available for Alienation yet.",
+            return {name, "Online co-op over the Internet: connection status, friends, invitations and public rooms.",
                     [this](trg::Ui& ui) { PageOnline(ui); }, nullptr,
                     [this] { return online_page_ ? static_cast<int>(online_page_->PendingRequests()) : 0; }};
         case PageId::kTrophies:
@@ -974,6 +974,7 @@ private:
             ui.Info("Asian Menu Buttons", "Not available for this game build: its menus always confirm with Cross.");
         }
         ui.Info("Controller", "Automatic: PlayStation and Xbox controllers work without setup.");
+        ui.Info("Local co-op", LocalCoopText());
         ui.Info("Keyboard", "Always on, together with the controller.");
         if (ui.ConfirmRow("Keyboard defaults", "Puts the keyboard controls and the port hotkeys back to their defaults.",
                           "Reset to defaults", "Put every key back to its default?", "Reset")) {
@@ -991,6 +992,15 @@ private:
                 KeyRow(ui, static_cast<AlnKeyAction>(action));
             }
         }
+    }
+
+    // Local co-op came with the 1.06 update (DUPLEX runs as 1.06); docs/GAME_BUILDS.md has the evidence.
+    const char* LocalCoopText() const {
+        if (!build_) return "Up to 4 controllers in CUSA00062 1.06: press OPTIONS on another controller to join.";
+        if (BuildKey(*build_) == "CUSA00062-1.06") {
+            return "Up to 4 controllers: press OPTIONS on another controller to join. Local co-op plays offline.";
+        }
+        return "Not in this game version: local co-op came with the CUSA00062 1.06 update.";
     }
 
     std::string AsianMenuButtonsHelp() const {
@@ -1020,6 +1030,17 @@ private:
     void PollOnline() {
         online_page_->Tick(settings_, build_ && files_ == GameFileState::kValid ? BuildKey(*build_) : std::string(),
                            ImGui::GetTime());
+        const std::optional<std::string> squad = online_page_->TakePlayRequest();
+        if (!squad) return;
+        if (online_page_->PlayNeedsTest(settings_)) {
+            online_page_->PointToConnectionTest();
+            launcher_->SetStatus(Tr("Run the Connection test, then press PLAY: the game joins ") + *squad +
+                                     Tr("'s squad if it starts within 10 minutes."),
+                                 10.0);
+            return;
+        }
+        launcher_->SetStatus(Tr("Starting the game to join ") + *squad + Tr("'s squad..."), 6.0);
+        RequestPlay();
     }
 
     void PageOnline(trg::Ui& ui) { online_page_->Draw(ui); }

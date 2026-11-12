@@ -86,7 +86,8 @@ def check_guest_patches():
     source, builds = cpp_builds()
     tables = {name: table_keys(name) for name in ('src/skip_intro.c', 'src/exit_game.c', 'launcher/exit_game_script.c',
                                                   'launcher/controller_prompts_data.c',
-                                                  'launcher/controller_prompts_glyphs_data.c', 'launcher/menu_buttons.c')}
+                                                  'launcher/controller_prompts_glyphs_data.c', 'launcher/menu_buttons.c',
+                                                  'src/online_status.c')}
     prompts, glyphs = read('launcher/controller_prompts_data.c'), read('launcher/controller_prompts_glyphs_data.c')
     for key in keys():
         resolution_name, frame_rate = builds[key]
@@ -105,6 +106,7 @@ def check_guest_patches():
             'Xbox prompts': prompts.count(f'{{"{key}",') == 9 and atlases is not None and
                             glyphs.count(f'{{"{key}",') == int(atlases.group(1)),
             'Asian Menu Buttons': key in tables['launcher/menu_buttons.c'],
+            'Online status': key in tables['src/online_status.c'],
         }
         for feature, present in evidence.items():
             state = parity.PARITY[key][feature][0]
@@ -131,6 +133,7 @@ def check_semantic_evidence():
     builds = re.search(r'builds\[\] = \{(.*?)\};', menu_test)
     check(registered('aln-exit-game-menu-tests'), 'the Exit Game menu test is not run by tools/test.ps1')
     check(registered('prompt_language_tests.py'), 'the prompt language test is not run by tools/test.ps1')
+    check(registered('aln-online-status-tests'), 'the online status test is not run by tools/test.ps1')
     for key in keys():
         check(builds is not None and f'"{key}"' in builds.group(1), f'{key}: the Exit Game menus are not executed')
         languages = prompt_language_tests.LANGUAGES.get(key, {})

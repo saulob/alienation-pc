@@ -8,7 +8,10 @@
 // only after the call returns, so callbacks are only ever made from pump() (sceNpCheckCallback, every frame) and never
 // with our lock held.
 #include <algorithm>
+#include <atomic>
 #include <cctype>
+#include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -24,6 +27,7 @@
 #include "net/lobby_link.h"
 #include "net/online_version.h"
 #include "net/relay_frame.h"
+#include "online_status.h"
 #include "runtime_online.h"
 
 #define ALN_SYSV __attribute__((sysv_abi))
@@ -121,8 +125,20 @@ struct Pending {
     bool random = false;
 };
 
+// A WebApi request waiting for the lobby's answer on its own thread.
+struct Waiter {
+    std::mutex mutex;
+    std::condition_variable done_cv;
+    bool done = false;
+    std::string code;
+    Json body;
+};
+
 struct State {
     bool initialized = false, context = false, start_wanted = false;
+    bool presence = false; // the link stays up for friends and invitations, not only while the context runs
+    uint64_t retry_ms = 0;
+    std::map<uint32_t, std::shared_ptr<Waiter>> waiters;
     ContextCallback context_cb = nullptr;
     void* context_arg = nullptr;
     RoomCallback room_cb = nullptr;
@@ -159,6 +175,12 @@ struct State {
 
 std::mutex g_mutex;
 State g;
+// The link as the network status box sees it; read without g_mutex from the game's script threads. A link that is
+// resuming stays ready, as Matching2 also hides it from the game.
+std::atomic<int> g_service{ONLINE_SERVICE_OFF};
+std::atomic<uint64_t> g_connecting_since{0};
+std::atomic<bool> g_context_started{false};
+std::atomic<int> g_reported_status{-1};
 
 uint64_t RtcTick(int64_t unix_ms) { return uint64_t(unix_ms) * 1000 + UINT64_C(62135596800000000); }
 
@@ -596,7 +618,25 @@ Json HelloBody() {
 }
 
 // ---- lobby messages ----
+void Finish(Waiter& w, const std::string& code, const Json& body) {
+    std::lock_guard<std::mutex> lock(w.mutex);
+    w.done = true;
+    w.code = code;
+    w.body = body;
+    w.done_cv.notify_all();
+}
+
+void FailWaiters(const std::string& code) {
+    for (auto& [seq, w] : g.waiters) Finish(*w, code, Json::Object());
+    g.waiters.clear();
+}
+
 void OnResponse(const net::LobbyMessage& m) {
+    if (auto w = g.waiters.find(m.seq); w != g.waiters.end()) {
+        Finish(*w->second, m.code, m.body);
+        g.waiters.erase(w);
+        return;
+    }
     auto it = g.pending.find(m.seq);
     if (it == g.pending.end()) return;
     const Pending p = it->second;
@@ -700,7 +740,11 @@ void MemberGone(uint16_t id) {
 
 void OnEvent(const net::LobbyMessage& m) {
     const Json& b = m.body;
-    if (m.event == "chat" || m.event.rfind("friend.", 0) == 0) return;
+    if (m.event.rfind("invite.", 0) == 0 || m.event.rfind("friend.", 0) == 0) {
+        sessions_event(m.event, b);
+        return;
+    }
+    if (m.event == "chat") return;
     if (m.event == "relay.closed") {
         std::printf("Matching2: the lobby stopped relaying for this connection (%s)\n", b["reason"].as_string().c_str());
         if (const std::shared_ptr<net::PeerSocket> socket = g.socket.lock()) socket->disable_relay();
@@ -756,6 +800,7 @@ void OnLink(const net::LobbyMessage& m) {
     if (m.kind == K::kUp) {
         NoteRelayCapability(m.body);
         g.up = true;
+        g_service = ONLINE_SERVICE_READY;
         NoteLobbyAddress(m.body["ip"].as_string());
         std::printf("Matching2: signed in to the lobby as %s (build %s, lobby %s); it sees %s\n", settings().online_id.c_str(),
                     settings().build.c_str(), m.body["backend"].as_string().empty() ? "?" : m.body["backend"].as_string().c_str(),
@@ -788,6 +833,7 @@ void OnLink(const net::LobbyMessage& m) {
         g.up = false;
         g.down = true;
         g.lost = false;
+        g_service = ONLINE_SERVICE_FAILED;
         // A context started again opens a new session, which must hear our endpoint again.
         g.udp_inflight = g.udp_acked = false;
         g.reported_port = 0;
@@ -797,6 +843,8 @@ void OnLink(const net::LobbyMessage& m) {
                     m.code == "wrong_game" || m.code == "proto" ? ": this lobby does not serve this version of the game" : "");
         for (auto& [seq, p] : g.pending) Complete(p, kErrServiceDown);
         g.pending.clear();
+        FailWaiters(net::kUnreachable);
+        g.retry_ms = net::now_ms() + 30000;
         RoomGone(kRoomDestroyed, kCauseConnection);
         // The game retries a context that starts over a few times, then reports the service unreachable.
         if (g.start_wanted) PushContextEvent(kCtxStartOver, kErrServiceDown);
@@ -868,6 +916,55 @@ void LinkMembers(uint64_t now) {
     }
 }
 
+// The lobby link (again after it went down). Caller holds g_mutex.
+bool StartLink() {
+    const Settings& s = settings();
+    if (s.config.lobby.empty()) {
+        g_service = ONLINE_SERVICE_FAILED;
+        return false;
+    }
+    g_connecting_since = net::now_ms();
+    g_service = ONLINE_SERVICE_CONNECTING;
+    FailWaiters(net::kUnreachable);
+    SetRelayEnds(nullptr, g.socket.lock());
+    g.link.reset();
+    g.down = g.up = g.lost = false;
+    g.udp_inflight = g.udp_acked = false;
+    g.reported_port = 0;
+    g.reported_ip = 0;
+    g.relay_capable = false;
+    net::LobbyLink::Options options;
+    options.url = s.config.lobby;
+    options.hello = HelloBody;
+    g.link = std::make_unique<net::LobbyLink>(std::move(options));
+    g.link->set_binary_sink(ReceiveRelayFrame);
+    SetRelayEnds(g.link.get(), g.socket.lock());
+    g.link->start();
+    std::printf("Online: connecting to %s\n", s.config.lobby.c_str());
+    return true;
+}
+
+void HandleLobbyMessages() {
+    if (!g.link) return;
+    net::LobbyMessage m;
+    while (g.link->poll(m)) {
+        if (m.kind == net::LobbyMessage::Kind::kResponse) OnResponse(m);
+        else if (m.kind == net::LobbyMessage::Kind::kEvent) OnEvent(m);
+        else OnLink(m);
+    }
+}
+
+std::mutex g_pumping;
+thread_local bool t_pumping = false;
+
+// Lobby answers for a thread that waits on one while no pump runs: game callbacks it queues still run only in pump().
+void Drain() {
+    std::unique_lock<std::mutex> serial(g_pumping, std::defer_lock);
+    if (!t_pumping && !serial.try_lock()) return;
+    std::lock_guard<std::mutex> lock(g_mutex);
+    HandleLobbyMessages();
+}
+
 // ---- entry points ----
 ALN_SYSV int32_t m2_initialize(const void* param) {
     (void)param;
@@ -904,31 +1001,17 @@ ALN_SYSV int32_t m2_context_start(uint16_t context, uint64_t timeout) {
     std::lock_guard<std::mutex> lock(g_mutex);
     if (!g.context) return kErrNotStarted;
     g.start_wanted = true;
+    g_context_started = true;
     if (g.link && !g.down) {
         if (g.up) PushContextEvent(kCtxStarted, 0);
         return 0;
     }
-    const Settings& s = settings();
-    if (s.config.lobby.empty()) {
+    if (!StartLink()) {
         std::printf("Matching2: no lobby server is set; online play is unavailable\n");
         PushContextEvent(kCtxStartOver, kErrServiceDown);
         return 0;
     }
-    SetRelayEnds(nullptr, g.socket.lock());
-    g.link.reset();
-    g.down = g.up = g.lost = false;
-    g.udp_inflight = g.udp_acked = false;
-    g.reported_port = 0;
-    g.reported_ip = 0;
-    g.relay_capable = false;
-    net::LobbyLink::Options options;
-    options.url = s.config.lobby;
-    options.hello = HelloBody;
-    g.link = std::make_unique<net::LobbyLink>(std::move(options));
-    g.link->set_binary_sink(ReceiveRelayFrame);
-    SetRelayEnds(g.link.get(), g.socket.lock());
-    g.link->start();
-    std::printf("Matching2: going online through %s\n", s.config.lobby.c_str());
+    std::printf("Matching2: going online\n");
     return 0;
 }
 
@@ -942,6 +1025,7 @@ ALN_SYSV int32_t m2_context_stop(uint16_t context) {
     }
     ClearRoom();
     g.start_wanted = false;
+    g_context_started = false;
     g.reported_port = 0;
     g.udp_acked = false;
     PushContextEvent(kCtxStopped, 0);
@@ -1247,28 +1331,87 @@ void matching2_configure() {
     }
 }
 
+void leave_for_exit() {
+    std::unique_lock<std::mutex> lock(g_mutex, std::try_to_lock);
+    if (!lock.owns_lock() || !g.link) return;
+    if (g.room && LinkUsable()) {
+        Json body = Json::Object();
+        body.set("room", net::u64_text(g.room));
+        g.link->request("room.leave", std::move(body), true);
+        ClearRoom();
+    }
+    if (g.link->drain(1000)) g.link->stop();
+    std::printf("Matching2: left the lobby for exit\n");
+}
+
 void pump() {
-    static std::mutex pumping;
-    std::unique_lock<std::mutex> serial(pumping, std::try_to_lock);
+    std::unique_lock<std::mutex> serial(g_pumping, std::try_to_lock);
     if (!serial.owns_lock()) return;
+    t_pumping = true;
     std::vector<std::function<void()>> calls;
     {
         std::lock_guard<std::mutex> lock(g_mutex);
-        if (g.link) {
-            net::LobbyMessage m;
-            while (g.link->poll(m)) {
-                if (m.kind == net::LobbyMessage::Kind::kResponse) OnResponse(m);
-                else if (m.kind == net::LobbyMessage::Kind::kEvent) OnEvent(m);
-                else OnLink(m);
-            }
-        }
+        HandleLobbyMessages();
         const uint64_t now = net::now_ms();
+        if (g.presence && (!g.link || g.down) && now >= g.retry_ms) {
+            g.retry_ms = now + 30000;
+            StartLink();
+        }
         ReportEndpoint(now);
         LinkMembers(now);
         calls.swap(g.calls);
     }
     for (auto& call : calls) call();
+    sessions_pump();
+    t_pumping = false;
 }
+
+void start_presence() {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g.presence = true;
+    if (!g.link || g.down) StartLink();
+}
+
+bool lobby_call(const std::string& op, Json body, Json* reply, std::string* code, int timeout_ms) {
+    auto waiter = std::make_shared<Waiter>();
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        if ((!g.link || g.down) && !StartLink()) {
+            if (code) *code = net::kUnreachable;
+            return false;
+        }
+        g.waiters[g.link->request(op, std::move(body))] = waiter;
+    }
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+    for (;;) {
+        {
+            std::unique_lock<std::mutex> lock(waiter->mutex);
+            if (waiter->done_cv.wait_for(lock, std::chrono::milliseconds(20), [&] { return waiter->done; })) break;
+        }
+        if (std::chrono::steady_clock::now() >= deadline) {
+            std::lock_guard<std::mutex> lock(g_mutex);
+            for (auto it = g.waiters.begin(); it != g.waiters.end(); ++it) {
+                if (it->second == waiter) {
+                    g.waiters.erase(it);
+                    break;
+                }
+            }
+            if (code) *code = "timeout";
+            return false;
+        }
+        Drain();
+    }
+    if (code) *code = waiter->code;
+    if (reply) *reply = waiter->body;
+    return waiter->code == "ok";
+}
+
+void lobby_send(const std::string& op, Json body) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (LinkUsable()) g.link->request(op, std::move(body));
+}
+
+std::string own_build() { return settings().build; }
 
 uintptr_t matching2_export(const std::string& symbol) {
     for (const Export& e : kExports)
@@ -1277,3 +1420,28 @@ uintptr_t matching2_export(const std::string& symbol) {
 }
 
 } // namespace aln::online
+
+extern "C" int runtime_np_signed_in(void);
+
+extern "C" int runtime_online_status(void) {
+    using namespace aln;
+    using namespace aln::online;
+    OnlineStatusInput in{};
+    in.enabled = settings().enabled;
+    in.service = g_service.load();
+    in.np_signed_in = runtime_np_signed_in();
+    in.matching2_started = g_context_started.load();
+    const uint64_t since = g_connecting_since.load(), now = net::now_ms();
+    in.connecting_ms = since && now > since ? now - since : 0;
+    const int status = online_status_classify(&in);
+    if (g_reported_status.exchange(status) != status) {
+        const char* why = status == ONLINE_STATUS_CONNECTED ? "lobby signed in, NP signed in, Matching2 started"
+                        : status == ONLINE_STATUS_OFF ? "Online Play is off"
+                        : in.service == ONLINE_SERVICE_FAILED ? "the lobby is unavailable; it is tried again"
+                        : status == ONLINE_STATUS_UNAVAILABLE ? "the lobby did not answer in time; still trying"
+                        : in.service != ONLINE_SERVICE_READY ? "the lobby link is connecting"
+                        : !in.np_signed_in ? "waiting for the NP sign-in" : "waiting for the game's Matching2 context";
+        std::printf("Online status: %s (%s)\n", online_status_name(status), why);
+    }
+    return status;
+}

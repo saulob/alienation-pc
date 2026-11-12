@@ -356,9 +356,9 @@ static ssize_t host_write(int h,const void *buffer,uint64_t size) { return write
 #define host_read read
 #define host_write write
 #endif
-/* Pages of the destination may be write-protected for GPU tracking: the kernel's copy then
+/* Pages of the destination may be write-protected for GPU tracking or not yet committed: the kernel's copy then
  * fails with EFAULT instead of faulting to our handler. A user-mode write to each page first
- * goes through the handler, which unprotects it (and records the upcoming write). */
+ * goes through the handler, which unprotects or commits it (and records the upcoming write). */
 static void touch_for_write(void *buffer,uint64_t size) {
     if (!size) return;
     uintptr_t p=(uintptr_t)buffer & ~(uintptr_t)4095, end=(uintptr_t)buffer+size;
@@ -366,6 +366,13 @@ static void touch_for_write(void *buffer,uint64_t size) {
         volatile unsigned char *b=(volatile unsigned char *)(p<(uintptr_t)buffer ? (uintptr_t)buffer : p);
         *b=*b;
     }
+}
+/* The kernel's copy from a not yet committed guest page (Windows, past the commit limit) fails instead of faulting: a
+ * user-mode read of each page commits it first. */
+static void touch_for_read(const void *buffer,uint64_t size) {
+    if (!size) return;
+    uintptr_t p=(uintptr_t)buffer & ~(uintptr_t)4095, end=(uintptr_t)buffer+size;
+    for (; p<end; p+=4096) (void)*(volatile const unsigned char *)(p<(uintptr_t)buffer ? (uintptr_t)buffer : p);
 }
 /* The host bytes, zeros past the host file's end, then the overlay's patches on top. */
 static int64_t overlay_pread(const File *f,void *buffer,uint64_t size,int64_t offset) {
@@ -450,6 +457,7 @@ static int64_t do_pread(int fd,void *buffer,uint64_t size,int64_t offset) {
 static int64_t do_write(int fd,const void *buffer,uint64_t size) {
     int h=host_fd(fd);
     if (h<0) return -EBADF;
+    touch_for_read(buffer,size);
     ssize_t n=host_write(h,buffer,size);
     if (n<0) return -errno;
     __atomic_add_fetch(&writes,1,__ATOMIC_RELAXED);
@@ -458,6 +466,7 @@ static int64_t do_write(int fd,const void *buffer,uint64_t size) {
 static int64_t do_pwrite(int fd,const void *buffer,uint64_t size,int64_t offset) {
     int h=host_fd(fd);
     if (h<0) return -EBADF;
+    touch_for_read(buffer,size);
     ssize_t n=pwrite(h,buffer,size,offset);
     return n<0 ? -errno : n;
 }

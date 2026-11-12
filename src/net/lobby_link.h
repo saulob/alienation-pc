@@ -95,6 +95,8 @@ public:
     void set_binary_sink(BinarySink sink);
     uint64_t binary_dropped() const;
     bool up() const;
+    // Waits until every queued request went out and was answered, up to `timeout_ms`; false on timeout.
+    bool drain(int timeout_ms);
     const std::string& url() const { return options_.url; }
 
 private:

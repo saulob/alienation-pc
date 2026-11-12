@@ -51,15 +51,46 @@ Working in the launcher:
   FSR 1 and RCAS, frame counter, render resolution (native to 4K) and aspect ratio (16:9, 16:10, 21:9, 32:9, 4:3, 5:4),
   and a 59.94 FPS engine target, in every supported build
 - Keyboard mapping, Xbox and PlayStation controllers, up to four local players' controllers
+- Online page: Online play switch, Online name, Friend Code, Connection status and Connection test, friends and friend
+  requests, squad invitations, Join a friend's squad, the public Lobby and public rooms with Join
 - Trophies page, bug report page, update check against this repository, GitHub Sponsors link
 
 In game:
 
 - Exit Game as the last row of the Options menu (after Credits) and of the Select Campaign menu, in the game's language
+- Online co-op (two to four players) through the game's own squad menus: Create Squad, Join Squad, Friends only, Invite
+  only and Invite friends
+- Local co-op on CUSA00062 1.06 and DUPLEX: up to four controllers, OPTIONS on another controller joins
 
-Not available yet:
+## Online Co-op
 
-- Online play: the Online page is present but disabled; the launcher makes no online connection
+Play the game's own online co-op over the Internet with up to four players, as on the PS4. No PlayStation Network account
+is needed.
+
+- The port's online service (a Cloudflare Worker, `server/lobby`) handles your online identity, Friend Codes and friends,
+  who is online, squads, invitations and finding squads. The game's own network code runs unchanged.
+- Gameplay goes **directly between the players' PCs**. Only when two players cannot connect directly does the service
+  relay that one connection, automatically.
+- Only the same game build plays together: CUSA00062 1.00, CUSA00062 1.06 (with DUPLEX) and CUSA04430 1.00 never meet.
+
+1. In the launcher, open **Online** and turn **Online play** On. With it Off the game runs fully offline.
+2. Choose your **Online name**; your **Friend Code** stays the same when you rename.
+3. Run the **Connection test** once (PLAY waits for it while Online play is On). **Connection status** shows Lobby,
+   Public, Direct, Router and Relay; Ready with the relay available still plays when a direct connection cannot.
+4. Add friends with their Friend Code on the **Friends** tab; they accept your request.
+5. In game, create a squad and use **Invite friends**, or join one. A friend's invitation appears in game (**Join squad**
+   / **Decline**) and in the launcher (**Accept and play**). **Join** on a friend's squad or on a public room starts the
+   game and enters that squad.
+
+Online play has been tested headlessly (protocol, rooms of two to four players, invitations, relay); real games together
+are being tested by hand. See [docs/ONLINE.md](docs/ONLINE.md) and its known limits.
+
+## Local Co-op
+
+CUSA00062 1.06 (and DUPLEX) has local co-op for up to four players: connect up to four controllers and press OPTIONS on
+another controller to join ("Join Local Co-op"). Each player gets their own class, gear and save. The first gamepad (or
+the keyboard) is player 1; further gamepads become players 2 to 4 in the order they connect. Local co-op is offline:
+the game itself leaves online play when a local player joins. CUSA00062 1.00 and CUSA04430 1.00 have no local co-op.
 
 ## Building (Windows)
 
@@ -75,7 +106,14 @@ incremental; `-Clean` rebuilds from scratch. Every build run writes one new, nev
 output, warnings, errors and the exit code: `build\logs\build\build_NNN.log`, or with `-Run` the session log
 `build\logs\alienation_NNN.log`, whose `[build]` section the game's `[run]` lines then continue.
 
-`tools\test.ps1` builds and runs the focused headless tests and the static script tests (`tests\*.ps1`).
+`tools\test.ps1` is the one focused validation command: it builds the test targets (incrementally) and runs every
+headless suite in sections (build and parity, core runtime, memory, graphics patches, controller and UI, game patches,
+save data, local multiplayer, online multiplayer, backend, packaging and install, final static checks), prints PASS or
+FAIL for each with the real output of a failing one, and ends with the totals; the exit code is non-zero if anything
+failed or a dependency is missing. It needs the project `.venv` (`tools\setup.ps1 -InstallPython`), Node.js 22.13 or
+later and the prepared games in `game\prepared`; `-Packages <folder>` also checks your real `.pkg` files (read only),
+`-List` lists the suites and `-Detail` shows passing output. No game, launcher window, controller, audio or production
+service is used; real gameplay is still tested by hand. `tools/build.sh --test` runs the portable subset on Linux.
 
 ## Layout
 

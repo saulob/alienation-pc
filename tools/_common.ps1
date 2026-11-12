@@ -151,6 +151,9 @@ function Invoke-Script([string]$Name, [string[]]$Arguments = @()) {
     return $LASTEXITCODE
 }
 
+# Import name and pip name of every package the project environment provides.
+$script:PythonPackages = [ordered]@{ cryptography = 'cryptography'; PIL = 'pillow'; numpy = 'numpy' }
+
 function Test-PythonModule([string]$Module) {
     $python = Get-Python
     if (-not $python) { return $false }

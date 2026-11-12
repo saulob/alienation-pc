@@ -3,8 +3,10 @@
 #include <atomic>
 #include <filesystem>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
+#include <utility>
 
 #include "net/connection_test.h"
 #include "online_client.h"
@@ -25,7 +27,10 @@ public:
 
     // `build` is the installed game build ("CUSA00062-1.00"), empty when none is.
     void Tick(LauncherSettings& settings, const std::string& build, double now);
-    size_t PendingRequests() const { return client_.state().incoming.size(); }
+    // Friend requests and squad invitations waiting for an answer.
+    size_t PendingRequests() const { return client_.state().incoming.size() + client_.state().invitations.size(); }
+    // An accepted invitation or a Join left the pending join for the game: start it. The name is whose squad it is.
+    std::optional<std::string> TakePlayRequest() { return std::exchange(play_request_, std::nullopt); }
     // Online play is on and no Connection test has finished on the game's UDP port, or one is running.
     bool PlayNeedsTest(const trg::SettingsStore& settings) const;
     // PLAY was pressed while it waits for the test: the next Draw opens its tab, scrolls to the section, brightens it for
@@ -50,8 +55,13 @@ private:
     void DrawOnlinePlay(trg::Ui& ui, const OnlinePlaySwitch& online);
     void DrawTabs(trg::Ui& ui, size_t friend_requests);
     void DrawFriendRequests(trg::Ui& ui);
+    void DrawInvitations(trg::Ui& ui);
+    void StartJoin(const OnlineClient::PendingJoin& join);
     void DrawFriendCode(trg::Ui& ui);
     void DrawConnectionTest(trg::Ui& ui);
+    ConnectionStatus Status() const;
+    void DrawStatusLine(trg::Ui& ui);
+    void DrawStatusRows(trg::Ui& ui, const ConnectionStatus& status);
     bool DrawRequiredTestRow(trg::Ui& ui, const ConnectionTestLook& look, const char* button, bool focus);
     void DrawFriends(trg::Ui& ui);
     void DrawPublicRooms(trg::Ui& ui);
@@ -63,6 +73,11 @@ private:
 
     std::filesystem::path user_dir_;
     std::string build_;
+    bool online_on_ = false;
+    std::string last_test_text_;
+    bool has_last_test_ = false;
+    net::ConnectionFacts last_test_;
+    int64_t last_test_at_ = 0;
     OnlineClient client_;
     OnlineTab tab_ = OnlineTab::kSettings;
     bool was_on_ = false;
@@ -75,6 +90,7 @@ private:
     char add_code_[16] = {};
     int updated_minutes_ = -1;
     std::string updated_text_;
+    std::optional<std::string> play_request_;
 };
 
 } // namespace aln

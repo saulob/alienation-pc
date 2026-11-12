@@ -19,6 +19,7 @@
 #include <errno.h>
 #ifdef _WIN32
 #include <windows.h>
+#include <psapi.h>
 #include "runtime_log.h"
 #else
 #include <fcntl.h>
@@ -200,13 +201,39 @@ static int host_prot(int prot) {
  * it are unmapped, placeholders coalesced and split, and the parts of views outside the
  * range mapped again with the page protections they had (GPU page tracking included). */
 typedef struct { uintptr_t start, end; uint64_t phys; int mapped; } HostRegion;
-typedef struct { uintptr_t start, end; DWORD protect; } ProtRun;
+typedef struct { uintptr_t start, end; DWORD protect, state; } ProtRun;
 static HostRegion *regions; static size_t region_count, region_capacity;
 static HANDLE section;
+/* Serializes committing section pages with every VirtualProtect of guest views (taken inside the region lock). */
+static SRWLOCK commit_lock=SRWLOCK_INIT;
+/* Set once Windows refused a mapping's commit: from then on a view may hold pages committed on first use. */
+static int deferred_commit;
+static void report_commit_failure(uint64_t phys, uint64_t size, DWORD error, const char *outcome) {
+    PERFORMANCE_INFORMATION info;
+    memset(&info,0,sizeof(info)); info.cb=sizeof(info);
+    const int known=K32GetPerformanceInfo(&info,sizeof(info));
+    fprintf(stderr,"Runtime: cannot commit guest memory range (+0x%" PRIx64 ", %" PRIu64 " bytes), error %lu",phys,size,error);
+    if (known) fprintf(stderr," (Windows commit %" PRIu64 " of %" PRIu64 " MiB)",(uint64_t)info.CommitTotal*info.PageSize>>20,
+                       (uint64_t)info.CommitLimit*info.PageSize>>20);
+    fprintf(stderr,"%s\n",outcome);
+}
 static int host_commit(uint64_t phys, uint64_t size) {
     if (VirtualAlloc(backing_base+phys,(SIZE_T)size,MEM_COMMIT,PAGE_READWRITE)) return 0;
-    fprintf(stderr,"Runtime: cannot commit guest memory range (+0x%" PRIx64 ", %" PRIu64 " bytes), error %lu\n",phys,size,GetLastError());
+    report_commit_failure(phys,size,GetLastError(),"");
     return -1;
+}
+/* A mapping commits its physical range, as Dragon's Crown Pro does. When Windows' commit limit refuses it, the range
+ * is committed page by page as it is first used (runtime_memory_commit_fault) instead of failing the guest. */
+static int commit_mapping(uint64_t phys, uint64_t size) {
+    if (VirtualAlloc(backing_base+phys,(SIZE_T)size,MEM_COMMIT,PAGE_READWRITE)) return 0;
+    const DWORD error=GetLastError();
+    if (error!=ERROR_COMMITMENT_LIMIT) {
+        report_commit_failure(phys,size,error,"");
+        return -1;
+    }
+    report_commit_failure(phys,size,error,"; its pages are committed as they are first used");
+    __atomic_store_n(&deferred_commit,1,__ATOMIC_RELEASE);
+    return 0;
 }
 static DWORD win_prot(int prot) {
     if (prot & PROT_EXEC) return (prot & PROT_WRITE) ? PAGE_EXECUTE_READWRITE : (prot & PROT_READ) ? PAGE_EXECUTE_READ : PAGE_EXECUTE;
@@ -243,10 +270,28 @@ void runtime_memory_reserve(void) {
         win_fail("reserving the PS4 address range (link with --disable-high-entropy-va)",USER_MIN,USER_MAX-USER_MIN);
     region_insert(0,(HostRegion){USER_MIN,USER_MAX,0,0});
 }
+/* A section page committed through any view shows in every view with that view's maximum protection; VirtualProtect
+ * refuses ranges holding reserved pages, so only committed ones get `protect`. */
+static int protect_committed(uintptr_t start, uintptr_t end, DWORD protect) {
+    for (uintptr_t at=start; at<end;) {
+        MEMORY_BASIC_INFORMATION m;
+        if (!VirtualQuery((void *)at,&m,sizeof(m))) return -1;
+        uintptr_t next=(uintptr_t)m.BaseAddress+m.RegionSize;
+        if (next>end) next=end;
+        DWORD old;
+        if (m.State==MEM_COMMIT && m.Protect!=protect && !VirtualProtect((void *)at,next-at,protect,&old)) return -1;
+        at=next;
+    }
+    return 0;
+}
 static void view_map(const HostRegion *r, DWORD protect) {
     DWORD initial=PAGE_EXECUTE_READWRITE, old; /* the view's maximum protection: a later guest mprotect may add execute */
     if (!MapViewOfFile3(section,GetCurrentProcess(),(void *)r->start,r->phys,r->end-r->start,MEM_REPLACE_PLACEHOLDER,initial,NULL,0))
         win_fail("MapViewOfFile3",r->start,r->end-r->start);
+    if (__atomic_load_n(&deferred_commit,__ATOMIC_ACQUIRE)) {
+        if (protect_committed(r->start,r->end,protect)) win_fail("VirtualProtect",r->start,r->end-r->start);
+        return;
+    }
     if (!VirtualAlloc((void *)r->start,r->end-r->start,MEM_COMMIT,initial))
         win_fail("committing guest view",r->start,r->end-r->start);
     if (initial!=protect && !VirtualProtect((void *)r->start,r->end-r->start,protect,&old))
@@ -259,7 +304,7 @@ static size_t save_protections(uintptr_t start, uintptr_t end, ProtRun **runs, s
         uintptr_t next=(uintptr_t)m.BaseAddress+m.RegionSize;
         if (next>end) next=end;
         if (count==*capacity) { *capacity=*capacity ? *capacity*2 : 16; *runs=realloc(*runs,*capacity*sizeof(**runs)); }
-        (*runs)[count++]=(ProtRun){at,next,m.Protect};
+        (*runs)[count++]=(ProtRun){at,next,m.Protect,m.State};
         at=next;
     }
     return count;
@@ -307,13 +352,14 @@ static size_t carve_host(uintptr_t a, uintptr_t b) {
     }
     for (size_t i=0;i<nruns;++i) {
         DWORD old;
-        if (runs[i].protect!=PAGE_READWRITE && !VirtualProtect((void *)runs[i].start,runs[i].end-runs[i].start,runs[i].protect,&old))
+        if (runs[i].state==MEM_COMMIT && runs[i].protect!=PAGE_READWRITE &&
+            !VirtualProtect((void *)runs[i].start,runs[i].end-runs[i].start,runs[i].protect,&old))
             win_fail("restoring page protection",runs[i].start,runs[i].end-runs[i].start);
     }
     /* The neighbours were mapped writable until the loop above: guest writes to GPU-tracked pages in
      * that window raised no fault, so the GPU caches must treat those pages as written. */
     for (size_t i=0;i<nruns;++i) {
-        if (runs[i].protect!=PAGE_READONLY && runs[i].protect!=PAGE_NOACCESS) continue;
+        if (runs[i].state!=MEM_COMMIT || (runs[i].protect!=PAGE_READONLY && runs[i].protect!=PAGE_NOACCESS)) continue;
         queue_hook(HOOK_INVALIDATE,runs[i].start,runs[i].end-runs[i].start);
     }
     (void)left_runs;
@@ -321,7 +367,7 @@ static size_t carve_host(uintptr_t a, uintptr_t b) {
     return at;
 }
 static int host_map(uintptr_t address, uint64_t size, int prot, int reserved, uint64_t phys) {
-    if (!reserved && host_commit(phys,size)) return -1; /* before carving: a failure keeps the live mappings */
+    if (!reserved && commit_mapping(phys,size)) return -1; /* before carving: a failure keeps the live mappings */
     size_t i=carve_host(address,address+size);
     if (reserved) return 0;
     regions[i].phys=phys; regions[i].mapped=1;
@@ -332,12 +378,94 @@ static int host_unmap(uintptr_t address, uint64_t size) { carve_host(address,add
 static int host_protect(uintptr_t address, uint64_t size, int prot) {
     DWORD protect=win_prot(prot), old;
     uintptr_t end=address+size;
-    for (size_t i=region_index(address); i<region_count && regions[i].start<end; ++i) {
+    int result=0;
+    AcquireSRWLockExclusive(&commit_lock);
+    for (size_t i=region_index(address); i<region_count && regions[i].start<end && !result; ++i) {
         if (!regions[i].mapped) continue;
         uintptr_t a=regions[i].start>address ? regions[i].start : address, b=regions[i].end<end ? regions[i].end : end;
-        if (!VirtualProtect((void *)a,b-a,protect,&old)) return -1;
+        if (!VirtualProtect((void *)a,b-a,protect,&old))
+            result=__atomic_load_n(&deferred_commit,__ATOMIC_ACQUIRE) ? protect_committed(a,b,protect) : -1;
+    }
+    ReleaseSRWLockExclusive(&commit_lock);
+    return result;
+}
+static size_t vma_index(uintptr_t a);
+/* Gives the views of the newly committed section range [pa,pb) their guest protection. Caller holds commit_lock. */
+static void protect_aliases(uint64_t pa, uint64_t pb) {
+    for (size_t r=0; r<region_count; ++r) {
+        const HostRegion *h=&regions[r];
+        const uint64_t hp=h->phys+(h->end-h->start);
+        if (!h->mapped || h->phys>=pb || hp<=pa) continue;
+        const uintptr_t a=h->start+(uintptr_t)((pa>h->phys ? pa : h->phys)-h->phys);
+        const uintptr_t b=h->start+(uintptr_t)((pb<hp ? pb : hp)-h->phys);
+        for (size_t v=vma_index(a); v<vma_count && vmas[v].start<b; ++v) {
+            const uintptr_t x=vmas[v].start>a ? vmas[v].start : a, y=vmas[v].end<b ? vmas[v].end : b;
+            DWORD old;
+            if (!VirtualProtect((void *)x,y-x,win_prot(host_prot(vmas[v].prot)),&old)) win_fail("protecting guest memory",x,y-x);
+        }
+    }
+}
+/* Commits the reserved pages of the section range [phys,phys+size). Caller holds commit_lock. */
+static int commit_phys(uint64_t phys, uint64_t size) {
+    for (uint64_t at=phys, end=phys+size; at<end;) {
+        MEMORY_BASIC_INFORMATION m;
+        if (!VirtualQuery(backing_base+at,&m,sizeof(m))) return -1;
+        uint64_t next=(uint64_t)((unsigned char *)m.BaseAddress+m.RegionSize-backing_base);
+        if (next>end) next=end;
+        if (m.State==MEM_RESERVE) {
+            if (host_commit(at,next-at)) return -1;
+            protect_aliases(at,next);
+        }
+        at=next;
     }
     return 0;
+}
+/* The guest pages of [address,address+size) that are still uncommitted, committed with their guest protection. */
+static int commit_guest(uintptr_t address, uint64_t size) {
+    const uintptr_t end=address+size;
+    int result=0;
+    AcquireSRWLockExclusive(&commit_lock);
+    for (size_t i=region_index(address); i<region_count && regions[i].start<end && !result; ++i) {
+        if (!regions[i].mapped) continue;
+        const uintptr_t a=regions[i].start>address ? regions[i].start : address, b=regions[i].end<end ? regions[i].end : end;
+        result=commit_phys(regions[i].phys+(a-regions[i].start),b-a);
+    }
+    ReleaseSRWLockExclusive(&commit_lock);
+    return result;
+}
+static int allows(DWORD protect, int access) {
+    switch (protect & 0xff) {
+    case PAGE_EXECUTE_READWRITE: case PAGE_EXECUTE_WRITECOPY: return 1;
+    case PAGE_READWRITE: case PAGE_WRITECOPY: return access!=8;
+    case PAGE_EXECUTE_READ: return access!=1;
+    case PAGE_READONLY: return access==0;
+    case PAGE_EXECUTE: return access==8;
+    default: return 0;
+    }
+}
+int runtime_memory_commit_fault(uintptr_t address, int access) {
+    if (!backing_base || !__atomic_load_n(&deferred_commit,__ATOMIC_ACQUIRE)) return 0;
+    const uintptr_t backing=(uintptr_t)backing_base, backing_end=backing+POOL_SIZE+FLEX_SPAN;
+    const int in_backing=address>=backing && address<backing_end;
+    if (!in_backing && (address<USER_MIN || address>=USER_MAX)) return 0;
+    MEMORY_BASIC_INFORMATION m;
+    if (!VirtualQuery((void *)address,&m,sizeof(m))) return 0;
+    /* Another thread committed the page between this fault and here: the access can simply be retried. */
+    if (m.State==MEM_COMMIT) return allows(m.Protect,access);
+    if (m.State!=MEM_RESERVE) return 0;
+    const uintptr_t page=address&~(uintptr_t)(PAGE-1);
+    int handled=0;
+    read_lock();
+    if (in_backing) {
+        AcquireSRWLockExclusive(&commit_lock);
+        handled=!commit_phys(page-backing,PAGE);
+        ReleaseSRWLockExclusive(&commit_lock);
+    } else {
+        const size_t i=region_index(address);
+        if (i<region_count && regions[i].mapped && regions[i].start<=address) handled=!commit_guest(page,PAGE);
+    }
+    read_unlock();
+    return handled;
 }
 /* Released pages read as zero when reused, like the memfd's punched holes. Only committed pages hold data:
  * touching reserved ones would fault or commit them. */
@@ -1116,6 +1244,10 @@ void runtime_memory_gpu_protect(uintptr_t address, uint64_t size, int read, int 
         uintptr_t b=vmas[i].end<address+size ? vmas[i].end : address+size;
         int guest=host_prot(vmas[i].prot);
         int want=(read ? PROT_READ : 0)|(write ? PROT_WRITE|PROT_READ : 0)|(guest & PROT_EXEC);
+#ifdef _WIN32
+        /* A tracked page must be committed: one committed later would be committed writable by its first guest write. */
+        if ((!read || !write) && __atomic_load_n(&deferred_commit,__ATOMIC_ACQUIRE) && commit_guest(a,b-a)) continue;
+#endif
         host_protect(a,b-a,guest & want);
     }
     read_unlock();

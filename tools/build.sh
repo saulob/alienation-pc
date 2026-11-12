@@ -4,7 +4,7 @@
 #
 #   tools/build.sh            build build/cmake/linux/bin/alienation
 #   tools/build.sh --clean    delete build/cmake/linux first
-#   tools/build.sh --test     also build and run the focused tests
+#   tools/build.sh --test     also build and run the portable focused tests (the Linux counterpart of tools/test.ps1)
 #   tools/build.sh --run [args...]   start the loader that was just built (arguments after --run go to it)
 #
 # Missing tools or libraries are listed; packaging/linux/ci-deps.sh installs them on Ubuntu 20.04 (the release baseline).
@@ -150,17 +150,58 @@ if ! grep -qs "CMAKE_BUILD_TYPE:STRING=$config" "$build_dir/CMakeCache.txt" || [
 fi
 step 'Building'
 targets=(alienation)
-tests=(aln-image-format-tests aln-resolution-patch-tests aln-runtime-tests aln-runtime-overlay-tests aln-savedata-tests aln-np-tests aln-online-hle-tests aln-controller-prompts-tests aln-exit-game-tests aln-exit-game-menu-tests aln-text-fix-tests aln-menu-buttons-tests aln-module-history-tests aln-rtc-tests aln-ime-keyboard-tests aln-json2-tests aln-thread-cancel-tests aln-tiling-tests aln-renderer-selection-tests aln-opengl-backend-tests aln-opengl-perf-tests aln-cursor-tests aln-window-tests aln-sdl-compat-tests aln-present-tests aln-trophy-tests aln-incident-tests aln-game-install-tests aln-update-tests)
-((test)) && targets+=("${tests[@]}")
+tests=(aln-image-format-tests aln-resolution-patch-tests aln-runtime-tests aln-runtime-overlay-tests aln-savedata-tests aln-np-tests aln-online-status-tests aln-online-view-tests aln-local-pad-tests aln-controller-prompts-tests aln-exit-game-tests aln-exit-game-menu-tests aln-text-fix-tests aln-menu-buttons-tests aln-skip-intro-tests aln-module-history-tests aln-rtc-tests aln-ime-keyboard-tests aln-json2-tests aln-thread-cancel-tests aln-avplayer-thread-tests aln-tiling-tests aln-gds-lane-offset-tests aln-gpu-crash-trace-tests aln-gpu-recording-tests aln-renderer-selection-tests aln-opengl-backend-tests aln-opengl-perf-tests aln-cursor-tests aln-window-tests aln-sdl-compat-tests aln-present-tests aln-trophy-tests aln-incident-tests aln-game-install-tests aln-update-tests)
+# Run with a loopback development lobby below. The Windows-only suites (memory, log, crash guard, update helper) are not built here.
+lobby_tests=(aln-online-hle-tests)
+((test)) && targets+=("${tests[@]}" "${lobby_tests[@]}")
 ninja -C "$build_dir" "${targets[@]}"
 loader=$build_dir/bin/alienation
 [[ -x $loader ]] || die "Missing $loader"
 
+# The portable Python suites of tools/test.ps1; they need the project .venv (cryptography, pillow, numpy).
+python_tests=(tests/game_profile_tests.py tests/feature_parity_tests.py tests/patch_site_tests.py tests/display_aspect_tests.py tests/controller_prompts_static_tests.py tests/prompt_language_tests.py tools/prompts/verify_prompts.py)
 if ((test)); then
     for t in "${tests[@]}"; do
         step "Running $t"
         "$build_dir/bin/$t"
     done
+
+    venv_python=$root/.venv/bin/python
+    [[ -x $venv_python ]] || die 'The project Python environment is missing: python3 -m venv .venv && .venv/bin/pip install cryptography pillow numpy'
+    "$venv_python" -I -c 'import cryptography, PIL, numpy' ||
+        die 'The project .venv lacks cryptography, pillow or numpy: .venv/bin/pip install cryptography pillow numpy'
+    for t in "${python_tests[@]}"; do
+        step "Running $t"
+        "$venv_python" -I "$root/$t"
+    done
+
+    command -v node >/dev/null || die 'Node.js 22.13 or later is needed for the lobby tests (see docs/ONLINE.md)'
+    node -e 'process.exit(process.versions.node.split(".").map(Number).reduce((a, n, i) => a || (n - [22, 13, 0][i]), 0) >= 0 ? 0 : 1)' ||
+        die 'Node.js is older than 22.13'
+    step 'Running the lobby backend tests'
+    (cd "$root/server/lobby" && node --no-warnings --test 'test/*.test.js')
+
+    # The development lobby in memory on a free loopback port; it never reaches the production service.
+    port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])' 2>/dev/null ||
+        "$venv_python" -I -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+    node --no-warnings "$root/server/lobby/local/server.js" --host 127.0.0.1 --port "$port" > /dev/null 2>&1 &
+    lobby_pid=$!
+    for _ in $(seq 1 40); do
+        curl -fs "http://127.0.0.1:$port/" > /dev/null 2>&1 && break
+        sleep 0.25
+    done
+    curl -fs "http://127.0.0.1:$port/" > /dev/null || { kill "$lobby_pid" 2>/dev/null || true; die 'The development lobby did not start'; }
+    lobby_code=0
+    for t in "${lobby_tests[@]}"; do
+        step "Running $t (loopback lobby)"
+        ALN_TEST_LOBBY="ws://127.0.0.1:$port/" "$build_dir/bin/$t" || lobby_code=$?
+    done
+    kill "$lobby_pid" 2>/dev/null || true
+    ((lobby_code == 0)) || exit "$lobby_code"
+
+    step 'Running git diff --check'
+    git -C "$root" diff --check
+    git -C "$root" diff --cached --check
 fi
 
 image_current() {

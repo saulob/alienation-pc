@@ -20,6 +20,8 @@ inline constexpr char kOnlineUdpPortKey[] = "online_udp_port";
 inline constexpr char kOnlineStunKey[] = "online_stun";
 // The UDP port of the last Connection test finished with Online play on; 0: none since Online play was turned on.
 inline constexpr char kConnectionTestPortKey[] = "online_connection_test_port";
+// What that test measured (net::encode_connection_facts), so the Online page shows it after a restart.
+inline constexpr char kConnectionTestResultKey[] = "online_connection_test_result";
 // Whether an in-game Ping panel starts shown; a display preference, reset like the others.
 inline constexpr char kPingDisplayKey[] = "show_ping";
 // Opt-in to the public Lobby; Reset turns it off with the display preferences.
@@ -38,7 +40,7 @@ net::OnlineConfig OnlineConfigOf(const trg::SettingsStore& settings);
 // result. Another port (online_udp_port or ALN_UDP_PORT) asks for a new test.
 bool ConnectionTestNeeded(const trg::SettingsStore& settings, bool online_on, bool testing, uint16_t port);
 // Saved at once: closing the launcher without Save keeps it.
-bool RecordConnectionTest(LauncherSettings& settings, uint16_t port);
+bool RecordConnectionTest(LauncherSettings& settings, uint16_t port, const std::string& result);
 // Online play off forgets the test (pending until Save), so turning it on again asks for a new one.
 void ForgetConnectionTestWhenOff(trg::SettingsStore& settings, bool online_on);
 

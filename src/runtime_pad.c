@@ -554,8 +554,27 @@ static ABI int32_t pad_vibration(int32_t handle, const uint8_t *param) {
 static ABI int32_t pad_ok_handle(int32_t handle) { return open_slot(handle)>=0 ? 0 : ERR_INVALID_HANDLE; }
 static ABI int32_t pad_ok_handle_flag(int32_t handle, uint8_t flag) { (void)flag; return pad_ok_handle(handle); }
 
+/* ScePadLightBarParam {r, g, b, reserved}: shown on gamepads that have a light (the game colours each local player). */
+static void set_light(int slot, uint8_t r, uint8_t g, uint8_t b) {
+    pthread_mutex_lock(&lock);
+    refresh_gamepads();
+    if (slots[slot].gamepad) SDL_SetGamepadLED(slots[slot].gamepad, r, g, b);
+    pthread_mutex_unlock(&lock);
+}
 static ABI int32_t pad_light_bar(int32_t handle, const uint8_t *rgb) {
-    (void)rgb; return pad_ok_handle(handle);
+    const int slot=open_slot(handle);
+    if (slot<0) return ERR_INVALID_HANDLE;
+    if (!rgb) return ERR_INVALID_ARG;
+    set_light(slot,rgb[0],rgb[1],rgb[2]);
+    return 0;
+}
+/* The PS4's colour for each user: blue, red, green, pink. */
+static ABI int32_t pad_reset_light_bar(int32_t handle) {
+    static const uint8_t colors[MAX_PADS][3]={{0,0,255},{255,0,0},{0,255,0},{255,0,255}};
+    const int slot=open_slot(handle);
+    if (slot<0) return ERR_INVALID_HANDLE;
+    set_light(slot,colors[slot][0],colors[slot][1],colors[slot][2]);
+    return 0;
 }
 /* scePadGetHandle: the handle scePadOpen returned for this user's standard port. */
 static ABI int32_t pad_get_handle(int32_t user, int32_t type, int32_t index) {
@@ -569,7 +588,7 @@ static ABI int32_t pad_get_handle(int32_t user, int32_t type, int32_t index) {
 }
 static const RuntimeExport exports[]={
     {"scePadGetHandle",pad_get_handle},
-    {"scePadSetLightBar",pad_light_bar}, {"scePadResetLightBar",pad_ok_handle},
+    {"scePadSetLightBar",pad_light_bar}, {"scePadResetLightBar",pad_reset_light_bar},
     {"scePadInit",pad_init}, {"scePadOpen",pad_open}, {"scePadClose",pad_close},
     {"scePadReadState",pad_read_state}, {"scePadRead",pad_read},
     {"scePadGetControllerInformation",pad_info}, {"scePadSetVibration",pad_vibration},

@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <ctime>
 #include <exception>
+#include <fstream>
 
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -17,10 +19,11 @@ namespace aln {
 namespace {
 
 const char* kOnlineHelp =
-    "Lets the game's own Online menu create, find and join rooms. Players meet in the online service; the game itself "
-    "runs directly between your PCs, or through the service's relay when they cannot reach each other.";
+    "Lets the game's own squad menus create, find and join squads, and friends invite each other. Players meet in the "
+    "online service; the game itself runs directly between your PCs, or through the service's relay when they cannot "
+    "reach each other.";
 const char* kOfflineHelp = "The game runs offline: the launcher and the game make no online connections.";
-const char* kRoomsHelp = "Public rooms of your game version. Join them from the game's own Online menu.";
+const char* kRoomsHelp = "Public squads of your game version. Join starts the game and enters the squad.";
 const char* kNameHelp = "What other players see: up to 16 letters, digits, - or _.";
 const char* kFriendCodeHelp = "Share this code so another player can add you.";
 const char* kTestHelp = "Checks that you can reach the online service and that other players can reach you. Takes a few "
@@ -33,6 +36,17 @@ const char* kLobbyEmpty = "No players are currently visible in the Lobby.";
 constexpr float kLobbyListMinHeight = 180.0f;
 
 bool OnWindows() { return net::host_platform() == "Windows"; }
+
+ImVec4 StateColor(const trg::Theme& t, ConnectionState state) {
+    switch (state) {
+    case ConnectionState::kConnected: return t.good_dot;
+    case ConnectionState::kLimited:
+    case ConnectionState::kConnecting: return t.accent;
+    case ConnectionState::kNotReady: return t.warn_dot;
+    case ConnectionState::kOffline: break;
+    }
+    return t.dim;
+}
 
 ImVec4 Mix(const ImVec4& a, const ImVec4& b, float t) {
     return ImVec4(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t, a.w + (b.w - a.w) * t);
@@ -118,7 +132,34 @@ void OnlinePage::Tick(LauncherSettings& settings, const std::string& build, doub
     }
     ForgetConnectionTestWhenOff(settings, on);
     RecordFinishedTest(settings, on);
+    online_on_ = on;
+    if (const std::string text = settings.Get(kConnectionTestResultKey, ""); text != last_test_text_) {
+        last_test_text_ = text;
+        has_last_test_ = net::decode_connection_facts(text, last_test_, last_test_at_);
+    }
     client_.Update(on, config, net::kOnlineGame, build, now);
+    if (const std::optional<OnlineClient::PendingJoin> join = client_.TakeJoin()) StartJoin(*join);
+}
+
+// The game reads the pending join at start and enters the squad through the session, as when a PS4 game is started
+// from an invitation.
+void OnlinePage::StartJoin(const OnlineClient::PendingJoin& join) {
+    std::error_code ec;
+    std::filesystem::create_directories(user_dir_, ec);
+    std::ofstream out(user_dir_ / net::kPendingJoinFile, std::ios::binary | std::ios::trunc);
+    out << PendingJoinText(join.session, join.invitation, int64_t(std::time(nullptr)));
+    out.close();
+    if (!out) {
+        std::printf("Online: could not save the Join for the game\n");
+        return;
+    }
+    std::printf("Online: %s %s's squad; starting the game\n", join.invitation.empty() ? "Join" : "invitation accepted, joining",
+                join.who.c_str());
+    play_request_ = join.who;
+}
+
+ConnectionStatus OnlinePage::Status() const {
+    return ConnectionStatusOf(online_on_, client_.state().link, has_last_test_ ? &last_test_ : nullptr, testing_);
 }
 
 bool OnlinePage::PlayNeedsTest(const trg::SettingsStore& settings) const {
@@ -153,13 +194,15 @@ void OnlinePage::RunTest(trg::Ui& ui) {
 
 void OnlinePage::RecordFinishedTest(LauncherSettings& settings, bool online_on) {
     uint16_t port = 0;
+    std::string result;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!test_.done || test_.recorded) return;
         test_.recorded = true;
         port = test_.port;
+        result = net::encode_connection_facts(test_.report.facts, int64_t(std::time(nullptr)));
     }
-    if (online_on && !RecordConnectionTest(settings, port)) {
+    if (online_on && !RecordConnectionTest(settings, port, result)) {
         std::printf("Connection test: could not save that it finished\n");
     }
 }
@@ -174,10 +217,13 @@ void OnlinePage::Draw(trg::Ui& ui) {
     const OnlineClient::State& state = client_.state();
     const bool lobby_visible = ui.settings().GetBool(kLobbyVisibleKey, false);
     KeepClearOfScrollbar(std::floor(trg::layout::kContentPadding * ui.scale()));
-    for (const OnlineSection section : OnlinePageSections(online.on, tab_, state.incoming.size(), lobby_visible)) {
+    for (const OnlineSection section :
+         OnlinePageSections(online.on, tab_, state.incoming.size(), lobby_visible, state.invitations.size())) {
         switch (section) {
         case OnlineSection::kOnlinePlay: DrawOnlinePlay(ui, online); break;
-        case OnlineSection::kTabs: DrawTabs(ui, state.incoming.size()); break;
+        case OnlineSection::kTabs: DrawTabs(ui, state.incoming.size() + state.invitations.size()); break;
+        case OnlineSection::kInvitations: DrawInvitations(ui); break;
+        case OnlineSection::kStatusLine: DrawStatusLine(ui); break;
         case OnlineSection::kFriendRequests: DrawFriendRequests(ui); break;
         case OnlineSection::kOnlineName: ui.InputText("Online name", kNameHelp, kOnlineNameKey, net::kDefaultOnlineName); break;
         case OnlineSection::kFriendCode: DrawFriendCode(ui); break;
@@ -250,6 +296,7 @@ void OnlinePage::DrawFriendRequests(trg::Ui& ui) {
     const std::vector<OnlinePlayer> incoming = client_.state().incoming;
     const trg::Theme& t = ui.theme();
     const float s = ui.scale();
+    ui.Heading(FriendSectionTitle(Tr("Incoming requests"), incoming.size()).c_str());
     ui.Spacer(4);
     for (const OnlinePlayer& sender : incoming) {
         ImGui::PushID(("request" + sender.account).c_str());
@@ -264,6 +311,33 @@ void OnlinePage::DrawFriendRequests(trg::Ui& ui) {
         if (AcceptButton(ui, Tr("     Accept"))) client_.Accept(sender.account);
         ImGui::SameLine();
         if (ImGui::Button(Tr("Decline"))) client_.Decline(sender.account);
+        EndCard();
+        ImGui::PopID();
+        ui.Spacer(4);
+    }
+}
+
+void OnlinePage::DrawInvitations(trg::Ui& ui) {
+    const std::vector<SquadInvitation> invitations = client_.state().invitations;
+    const trg::Theme& t = ui.theme();
+    const float s = ui.scale();
+    ui.Spacer(4);
+    for (const SquadInvitation& invitation : invitations) {
+        ImGui::PushID(("invite" + invitation.invitation).c_str());
+        BeginCard(ImVec4(t.panel.x, t.panel.y, t.panel.z, 0.96f), ImVec4(t.accent.x, t.accent.y, t.accent.z, 0.55f), 1.0f);
+        ImGui::PushFont(ui.fonts().semibold, 0.0f);
+        ImGui::TextUnformatted((invitation.name + Tr(" invited you to their squad")).c_str());
+        ImGui::PopFont();
+        ImGui::PushStyleColor(ImGuiCol_Text, t.dim);
+        ImGui::TextUnformatted(TrValue(SquadInvitationText(invitation, build_)).c_str());
+        ImGui::PopStyleColor();
+        ImGui::Dummy(ImVec2(0, 2.0f * s));
+        const bool can_accept = CanAcceptInvitation(invitation, build_);
+        ImGui::BeginDisabled(!can_accept);
+        if (AcceptButton(ui, Tr("     Accept and play"))) client_.AcceptInvitation(invitation.invitation);
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button(Tr("Decline"))) client_.DeclineInvitation(invitation.invitation);
         EndCard();
         ImGui::PopID();
         ui.Spacer(4);
@@ -336,33 +410,65 @@ void OnlinePage::DrawConnectionTest(trg::Ui& ui) {
         run = ui.ButtonRow("Connection test", kTestHelp, button);
     }
     if (run && !testing) RunTest(ui);
-    TestResult result;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        result = test_;
-    }
-    if (!result.done || testing) return;
     ui.EndRows();
-    ui.Heading(Tr(result.report.verdict.c_str()));
-    // One row per area: its name, its status in the status colour, then what was measured.
+    DrawStatusRows(ui, Status());
+    ui.Spacer();
+}
+
+void OnlinePage::DrawStatusLine(trg::Ui& ui) {
+    const ConnectionStatus status = Status();
+    const trg::Theme& t = ui.theme();
+    const float size = ImGui::GetFontSize();
+    const ImVec2 at = ImGui::GetCursorScreenPos();
+    ImGui::GetWindowDrawList()->AddCircleFilled(ImVec2(at.x + size * 0.3f, at.y + size * 0.55f), size * 0.3f,
+                                                ImGui::GetColorU32(StateColor(t, status.state)));
+    ImGui::Dummy(ImVec2(size * 0.6f, size));
+    ImGui::SameLine();
+    ImGui::PushFont(ui.fonts().semibold, 0.0f);
+    ImGui::TextColored(StateColor(t, status.state), "%s", Tr(ConnectionStateText(status.state)));
+    ImGui::PopFont();
+    ImGui::SameLine();
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextColored(t.dim, "%s", TrValue(status.headline).c_str());
+    ImGui::PopTextWrapPos();
+    ui.Spacer(4);
+}
+
+// One row per area: its name, its status in the status colour, then what was measured.
+void OnlinePage::DrawStatusRows(trg::Ui& ui, const ConnectionStatus& status) {
+    using Mark = net::ConnectionReport::Mark;
+    const trg::Theme& t = ui.theme();
+    const std::string title = std::string(Tr("Connection status")) + ": " + Tr(ConnectionStateText(status.state));
+    ui.Heading(title.c_str());
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextColored(StateColor(t, status.state), "%s", TrValue(status.headline).c_str());
+    ImGui::PopTextWrapPos();
+    if (status.tested) {
+        ImGui::PushFont(nullptr, trg::layout::kTextHelp);
+        ImGui::TextColored(t.dim, "%s", TrValue(TestedAgoText(int64_t(std::time(nullptr)) - last_test_at_)).c_str());
+        ImGui::PopFont();
+    }
+    ui.Spacer(4);
     const float label_width = ImGui::CalcTextSize(Tr("Router")).x * 1.6f;
-    const float status_width = ImGui::CalcTextSize(Tr("Not ready")).x + ImGui::GetStyle().ItemSpacing.x * 2.0f;
-    for (const auto& line : result.report.lines) {
-        using Mark = net::ConnectionReport::Mark;
-        const ImVec4 color = line.mark == Mark::kOk ? ui.theme().good_dot : line.mark == Mark::kNote ? ui.theme().accent
-                                                                                                     : ui.theme().warn_dot;
+    const float status_width = std::max(ImGui::CalcTextSize(Tr("Connecting")).x, ImGui::CalcTextSize(Tr("Not tested")).x) +
+                               ImGui::GetStyle().ItemSpacing.x * 2.0f;
+    for (const ConnectionStatusRow& row : status.rows) {
+        const bool measured = std::string(row.status) != "Not tested";
+        const ImVec4 color = !measured                ? t.dim
+                             : row.mark == Mark::kOk   ? t.good_dot
+                             : row.mark == Mark::kNote ? t.accent
+                                                       : t.warn_dot;
         const float left = ImGui::GetCursorPosX();
         ImGui::PushFont(ui.fonts().semibold, 0.0f);
-        ImGui::TextUnformatted(Tr(line.label.c_str()));
+        ImGui::TextUnformatted(Tr(row.label.c_str()));
         ImGui::PopFont();
         ImGui::SameLine(left + label_width);
-        ImGui::TextColored(color, "%s", Tr(net::ConnectionStatusText(line.mark)));
+        ImGui::TextColored(color, "%s", Tr(row.status));
         ImGui::SameLine(left + label_width + status_width);
         ImGui::PushTextWrapPos(0.0f);
-        ImGui::TextColored(ui.theme().dim, "%s", TrValue(line.text).c_str());
+        ImGui::TextColored(t.dim, "%s", TrValue(row.text).c_str());
         ImGui::PopTextWrapPos();
     }
-    ui.Spacer();
 }
 
 void OnlinePage::DrawPublicRooms(trg::Ui& ui) {
@@ -389,6 +495,11 @@ void OnlinePage::DrawPublicRooms(trg::Ui& ui) {
         ImGui::TextColored(room.joinable ? ui.theme().good_dot : ui.theme().dim, "%s", TrValue(PublicRoomStatus(room)).c_str());
         ImGui::PopFont();
         ui.RowControl();
+        ImGui::PushID(("room" + room.session + room.host).c_str());
+        ImGui::BeginDisabled(!room.joinable || room.session.empty());
+        if (ImGui::Button(Tr("Join"), ImVec2(-FLT_MIN, 0))) client_.Join(room.session, room.host);
+        ImGui::EndDisabled();
+        ImGui::PopID();
     }
     ui.EndRows();
     if (state.rooms_fetched && state.rooms_total > state.rooms.size()) {
@@ -418,21 +529,36 @@ void OnlinePage::DrawFriends(trg::Ui& ui) {
         client_.AddFriend(add_code_);
         add_code_[0] = 0;
     }
+    if (!state.outgoing.empty()) {
+        ui.EndRows();
+        ui.Heading(FriendSectionTitle(Tr("Outgoing requests"), state.outgoing.size()).c_str());
+    }
     for (const OnlinePlayer& r : state.outgoing) {
-        ui.Row(r.name.c_str(), "Your request is waiting for an answer.");
+        ui.Row(r.name.c_str(), "Not a friend yet: your request is waiting for an answer.");
         ImGui::PushID(("out" + r.account).c_str());
         if (ImGui::Button(Tr("Cancel request"), ImVec2(-FLT_MIN, 0))) client_.Decline(r.account);
         ImGui::PopID();
     }
+    ui.EndRows();
+    ui.Heading(FriendSectionTitle(Tr("Friends"), state.friends.size()).c_str());
     for (const OnlinePlayer& f : state.friends) {
         FriendRow(ui, f, build_);
         ImGui::PushID(("f" + f.account).c_str());
-        if (ImGui::Button(Tr("Remove"), ImVec2(-FLT_MIN, 0))) client_.Remove(f.account);
+        if (CanJoinFriend(f, build_)) {
+            const float gap = ImGui::GetStyle().ItemSpacing.x;
+            const float half = (ImGui::GetContentRegionAvail().x - gap) * 0.5f;
+            if (ui.AccentButton(Tr("Join"), ImVec2(half, 0))) client_.Join(f.session, f.name);
+            ImGui::SameLine(0.0f, gap);
+            if (ImGui::Button(Tr("Remove"), ImVec2(half, 0))) client_.Remove(f.account);
+        } else if (ImGui::Button(Tr("Remove"), ImVec2(-FLT_MIN, 0))) {
+            client_.Remove(f.account);
+        }
         ImGui::PopID();
     }
-    if (state.fetched && state.friends.empty() && state.incoming.empty() && state.outgoing.empty()) {
+    if (state.fetched && state.friends.empty()) {
         ui.EndRows();
         ui.Help("No friends yet. Share your friend code, or add a friend's code above.");
+        ui.Help(kFriendsOnlyByRequest);
     }
     ui.EndRows();
 }

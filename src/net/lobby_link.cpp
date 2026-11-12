@@ -125,6 +125,18 @@ bool LobbyLink::up() const {
     return greeted_;
 }
 
+bool LobbyLink::drain(int timeout_ms) {
+    const uint64_t deadline = now_ms() + uint64_t(timeout_ms);
+    for (;;) {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (outgoing_.empty() && in_flight_.empty()) return true;
+        }
+        if (now_ms() >= deadline) return false;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+}
+
 void LobbyLink::Push(LobbyMessage message) {
     std::lock_guard<std::mutex> lock(mutex_);
     inbox_.push_back(std::move(message));

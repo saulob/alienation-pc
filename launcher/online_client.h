@@ -5,7 +5,9 @@
 #include <filesystem>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "net/identity.h"
@@ -16,15 +18,17 @@
 namespace aln {
 
 // The launcher's lobby link while online play is on. It shows the player online to friends and keeps the friend code,
-// the friends and the requests current from the lobby's friend events. With OnlineConfig::lobby_visible it also lists the
-// player in the public Lobby and, while the Lobby tab is on screen, reads that list. Used from one thread.
+// the friends, the requests and the squad invitations current from the lobby's events. With OnlineConfig::lobby_visible
+// it also lists the player in the public Lobby and, while the Lobby tab is on screen, reads that list. Accepting an
+// invitation or a Join leaves a pending join for the game the launcher starts next. Used from one thread.
 class OnlineClient {
 public:
-    enum class Link { kOff, kConnecting, kUp, kUnreachable };
+    using Link = OnlineLink;
     struct State {
         Link link = Link::kOff;
         std::string friend_code;
         std::vector<OnlinePlayer> friends, incoming, outgoing;
+        std::vector<SquadInvitation> invitations;
         bool fetched = false;
         std::string notice;
         std::vector<LobbyPlayer> lobby;
@@ -60,6 +64,15 @@ public:
     void Accept(const std::string& account);
     void Decline(const std::string& account); // also withdraws an outgoing request
     void Remove(const std::string& account);
+    // A squad invitation: Accept asks the lobby for the session, then leaves the pending join; Decline only answers.
+    void AcceptInvitation(const std::string& invitation);
+    void DeclineInvitation(const std::string& invitation);
+    // A friend's squad or a public room, through its session.
+    void Join(const std::string& session, const std::string& who);
+    struct PendingJoin {
+        std::string session, invitation, who;
+    };
+    std::optional<PendingJoin> TakeJoin() { return std::exchange(join_, std::nullopt); }
     // Sends a friend request to a listed player, or accepts the one they sent.
     void RequestFromLobby(const std::string& player);
     void DeclineFromLobby(const std::string& player);
@@ -73,7 +86,10 @@ public:
     const State& state() const { return state_; }
 
 private:
-    enum class Purpose { kFriends, kRequests, kAdd, kChange, kLobbyPublish, kLobbyList, kLobbyAdd, kLobbyChange, kRooms };
+    enum class Purpose {
+        kFriends, kRequests, kAdd, kChange, kLobbyPublish, kLobbyList, kLobbyAdd, kLobbyChange, kRooms, kInvites,
+        kInviteAccept, kInviteDecline
+    };
 
     void Start(const net::OnlineConfig& config, const std::string& game, const std::string& name, double now);
     void SyncRooms(double now);
@@ -82,7 +98,7 @@ private:
     void SyncLobby(bool visible, double now);
     void ForgetLobby();
     void LobbyAnswer(Purpose purpose, const net::LobbyMessage& message, double now);
-    void Send(const std::string& op, net::Json body, Purpose purpose);
+    uint32_t Send(const std::string& op, net::Json body, Purpose purpose);
     void Handle(const net::LobbyMessage& message, double now);
     void Answer(Purpose purpose, const net::LobbyMessage& message, double now);
 
@@ -105,6 +121,8 @@ private:
     double lobby_retry_at_ = 0;
     double lobby_watched_at_ = -1e9;
     std::map<uint32_t, Purpose> pending_;
+    std::map<uint32_t, SquadInvitation> accepting_;
+    std::optional<PendingJoin> join_;
     State state_;
 };
 

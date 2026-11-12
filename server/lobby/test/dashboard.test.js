@@ -170,17 +170,18 @@ test('overview cards carry their explanations and show them on hover and keyboar
   const env = makeLobby();
   const page = await dashboard(env, 7);
   const helps = page.cards.map((c) => c.getAttribute('data-help'));
-  assert.equal(helps.length, 7);
+  assert.equal(helps.length, 8);
   assert.deepEqual(helps, [
     'Players connected to the online service right now, counted once per connected account',
     'Players currently occupying a seat in an online room',
     'Multiplayer rooms currently open',
+    'Rooms a search of the same game build can find and join now: public, with a free seat',
     'Highest number of players online at the same time today',
     'Online sessions started today, with reconnects inside the existing 10-minute deduplication window not counted again',
     'Multiplayer rooms created today',
     'Successful room joins today, not unique players, and the same player can contribute more than one join',
   ]);
-  assert.equal([...ADMIN_HTML.matchAll(/class="card" tabindex="0" data-help=/g)].length, 7);
+  assert.equal([...ADMIN_HTML.matchAll(/class="card" tabindex="0" data-help=/g)].length, 8);
   assert.ok(!/\son[a-z]+\s*=/i.test(ADMIN_HTML));
   assert.ok(ADMIN_HTML.includes('Joins today'));
   for (const [i, card] of page.cards.entries()) {
@@ -278,7 +279,7 @@ test('the health sections render from fixture data with period comparisons', asy
   const env = makeLobby();
   putDay(env, 0, { sessions: 12, peak_online: 6, rooms_created: 9, room_joins: 7, rooms_closed: 10, rooms_with_guest: 8, rooms_relayed: 3 });
   putDay(env, 40, { sessions: 6, peak_online: 3, rooms_with_guest: 4, rooms_relayed: 1 });
-  putDimensions(env, 0, 'activity', { room_leaves: 11, friend_requests: 5, friendships: 2 });
+  putDimensions(env, 0, 'activity', { room_leaves: 11, friend_requests: 5, friendships: 2, invites_sent: 4, invites_accepted: 3 });
   putDimensions(env, 0, 'reject', { lobby_game: 2, build: 1 });
   putDimensions(env, 0, 'abuse', { room_list_limited: 4, hello_reconnect_deduped: 3 });
   withSummary(env, { top: { backend: '1.2.3', proto: 4 }, live: { relay_capable: 3 } });
@@ -293,7 +294,8 @@ test('the health sections render from fixture data with period comparisons', asy
   const activity = cardsIn(page, 'activity');
   assert.deepEqual(activity['Room leaves'], ['11']);
   assert.deepEqual(activity['Rooms with a guest'], ['8 · 80%', 'Previous period 4 · +100%']);
-  assert.deepEqual(cardsIn(page, 'friend-cards'), { 'Friend requests': ['5'], 'New friendships': ['2'] });
+  assert.deepEqual(cardsIn(page, 'friend-cards'), { 'Friend requests': ['5'], 'New friendships': ['2'],
+    'Squad invitations sent': ['4'], 'Invitations accepted': ['3'] });
   assert.ok(page.get('abuse').textContent.includes('Room list reads refused: too many'));
   assert.ok(!/NaN|Infinity|undefined|\[object/.test(everyText(page)));
 });

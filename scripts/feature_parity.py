@@ -35,18 +35,21 @@ GUEST_PATCHES = {
     'Exit Game: Select Campaign': 'src/exit_game.c launcher/exit_game_script.c',
     'Xbox prompts': 'launcher/controller_prompts_data.c launcher/controller_prompts_glyphs_data.c',
     'Asian Menu Buttons': 'launcher/menu_buttons.c',
+    'Online status': 'src/online_status.c',
 }
 
 FEATURES = (
     'Boot', 'Save', 'Trophies', 'Audio', 'Controller support', 'PlayStation Original prompts', 'Xbox prompts',
     'Xbox prompts in every language', 'Asian Menu Buttons', 'Skip Intro', 'Exit Game: Options',
     'Exit Game: Select Campaign', '60 FPS', 'Render Resolution', 'Aspect Ratio', 'True Ultrawide', 'GPU heap scaling',
-    'SMAA', 'FSR', 'Texture filtering', 'Online', 'Matching2', 'P2P', 'Install Game', 'Install Update', 'Remove Update',
+    'SMAA', 'FSR', 'Texture filtering', 'Online', 'Online status', 'Matching2', 'P2P', 'Sessions and invitations',
+    'Local co-op',
+    'Install Game', 'Install Update', 'Remove Update',
     'Build diagnostics', 'Bug reports',
 )
 
 # Features whose note is shown even when SUPPORTED: the notes that differ between builds.
-NOTED = ('Save', 'Xbox prompts', 'Xbox prompts in every language', 'Asian Menu Buttons', 'Install Game',
+NOTED = ('Save', 'Xbox prompts', 'Xbox prompts in every language', 'Asian Menu Buttons', 'Local co-op', 'Install Game',
          'Install Update', 'Remove Update')
 
 _RUNTIME = 'runtime and renderer, no guest patch'
@@ -54,7 +57,11 @@ _EXIT_MENUS = 'tests/exit_game_menu_tests.c runs the real menu bytecode'
 _INSTALL = 'tests/game_install_tests.cpp'
 
 
-def _common(save, prompts, languages, menu_buttons, install_update, remove_update, online):
+_NO_LOCAL_COOP = ('the menus have no local co-op join, and the executable lacks engine natives the 1.06 co-op scripts call '
+                  '(the 1.06 update added both); tests/patch_site_tests.py')
+
+
+def _common(save, prompts, languages, menu_buttons, install_update, remove_update, online, local_coop):
     return {
         'Boot': (SUPPORTED, MANUAL, 'boot image of this build'),
         'Save': (SUPPORTED, MANUAL, save),
@@ -77,8 +84,11 @@ def _common(save, prompts, languages, menu_buttons, install_update, remove_updat
         'FSR': (SUPPORTED, MANUAL, _RUNTIME),
         'Texture filtering': (SUPPORTED, MANUAL, _RUNTIME),
         'Online': (SUPPORTED, MANUAL, online),
+        'Online status': (SUPPORTED, HEADLESS, 'Online Connecting/Connected/Unavailable/Off in the native box, 18 languages; tests/online_status_tests.c'),
         'Matching2': (SUPPORTED, MANUAL, online),
         'P2P': (SUPPORTED, MANUAL, online),
+        'Sessions and invitations': (SUPPORTED, MANUAL, 'NP sessions for every squad, invitations, Join'),
+        'Local co-op': local_coop,
         'Install Game': (SUPPORTED, HEADLESS, 'from its base package; ' + _INSTALL),
         'Install Update': install_update,
         'Remove Update': remove_update,
@@ -98,21 +108,23 @@ PARITY = {
         (UNAVAILABLE, STATIC, 'Cross always confirms: the menu scripts compare with Cross and ask no engine getter'),
         (SUPPORTED, HEADLESS, 'base of the 1.06 update; ' + _INSTALL),
         (UNAVAILABLE, HEADLESS, 'nothing to remove: the base; removing 1.06 returns here; ' + _INSTALL),
-        'lobby key CUSA00062-1.00'),
+        'lobby key CUSA00062-1.00', (UNAVAILABLE, STATIC, _NO_LOCAL_COOP)),
     'CUSA00062-1.06': _common(
         'user\\savedata\\CUSA00062, shared with 1.00', '7 textures, 2 scenes, 8 glyph atlases',
         _ASIAN + '; every font redrawn; tests/prompt_language_tests.py',
         (SUPPORTED, HEADLESS, _MENU_ON + '; native Off; tests/menu_buttons_tests.c'),
         (SUPPORTED, HEADLESS, 'laid over CUSA00062 1.00; ' + _INSTALL),
         (SUPPORTED, HEADLESS, 'official layers only; returns to 1.00; ' + _INSTALL),
-        'lobby key CUSA00062-1.06; never meets 1.00'),
+        'lobby key CUSA00062-1.06; never meets 1.00',
+        (SUPPORTED, MANUAL, '2 players confirmed in game, a save per user; 3-4 headless only; offline only; '
+                    'tests/local_pad_tests.c')),
     'CUSA04430-1.00': _common(
         'user\\savedata\\CUSA04430', '7 textures, 2 scenes, 8 glyph atlases',
         _ASIAN + '; every font redrawn; tests/prompt_language_tests.py',
         (SUPPORTED, HEADLESS, _MENU_ON + '; native On; tests/menu_buttons_tests.c'),
         (UNAVAILABLE, STATIC, 'no CUSA04430 update is known; the profile has no update build'),
         (UNAVAILABLE, STATIC, 'no CUSA04430 update is known'),
-        'lobby key CUSA04430-1.00'),
+        'lobby key CUSA04430-1.00', (UNAVAILABLE, STATIC, _NO_LOCAL_COOP)),
 }
 
 # Package forms that are not builds of their own: each runs as its build, with the build's executable as the proof.

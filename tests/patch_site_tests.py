@@ -12,6 +12,7 @@ import zlib
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / 'scripts'))
+import feature_parity  # noqa: E402
 import prepare_image  # noqa: E402
 from ps4_module import read_module  # noqa: E402
 
@@ -164,6 +165,52 @@ def check_menu_buttons(label, image, build, spans):
     check({rip(image, confirm + 3), rip(image, cancel + 3)} == {cross, circle}, f'{label}: Confirm and Cancel are the same')
 
 
+STATUS_HOOKS = (('auth_code', 8), ('lookup_language', 5), ('lookup_default', 5))
+# The network status box: its state names, the localization keys the box shows and the natives its script patch uses.
+STATUS_SCRIPT = (b'CONNECTED', b'LOGIN', b'GENERIC_ERROR', b'WAITING_PSN', b'NETWORK_OFFLINE', b'USER_OFFLINE', b'vec4',
+                 b'server_request_auth_code', b'layout_box_set_text_visible', b'layout_box_set_text_color',
+                 b'layout_box_set_visible', b'is_string', b'hide_type_from_compiler', b'Network_Status',
+                 b'menu__network__no_matching',
+                 b'menu__network__login_wait_prompt', b'menu__network__connected', b'menu__network__error_general',
+                 b'menu__network__platform_offline', b'menu__network__user_offline')
+
+
+def source_pattern(source, name):
+    body = re.search(r'static const short ' + name + r'\[\] = \{(.*?)\};', source, re.S).group(1)
+    return [None if token.strip() == 'ANY' else int(token, 16) for token in body.split(',') if token.strip()]
+
+
+def check_online_status(label, image, build, spans):
+    """The status hooks: server_request_auth_code's prologue and the two lookups of the helper str_local calls."""
+    source = (ROOT / 'src' / 'online_status.c').read_text(encoding='utf-8')
+    row = re.search(r'\{"' + re.escape(build) + r'", (0x[0-9a-f]+), (0x[0-9a-f]+), (0x[0-9a-f]+)\}', source)
+    check(row is not None, f'{label}: no online status site')
+    if not row:
+        return
+    site = dict(zip(('auth_code', 'lookup_language', 'lookup_default'), (int(v, 16) for v in row.groups())))
+    natives = registered_natives(image)
+    whole = bytes(image)
+    check(natives.get(site['auth_code']) == 'server_request_auth_code', f'{label}: {site["auth_code"]:#x} is not '
+          'server_request_auth_code')
+    for at, name in ((site['auth_code'], 'kAuthCode'), (site['lookup_language'] - 11, 'kLookup')):
+        pattern = source_pattern(source, name)
+        check(all(p is None or whole[at + i] == p for i, p in enumerate(pattern)), f'{label}: {name} differs at {at:#x}')
+    check(site['lookup_default'] == site['lookup_language'] + 15, f'{label}: the lookups are not one call apart')
+    str_local = next((at for at, name in natives.items() if name == 'str_local'), None)
+    localize = str_local and whole.find(bytes.fromhex('baffffffff4c89f7e8'), str_local, str_local + 0x60)
+    helper = rip(image, localize + 9) if localize and localize > 0 else None
+    check(helper is not None and helper < site['lookup_language'] < helper + 0x400,
+          f'{label}: the lookups are not in the helper str_local calls')
+    for key, length in STATUS_HOOKS:
+        spans.append((site[key], site[key] + length))
+
+
+def check_status_script(label, code):
+    """The status machine still speaks what the script patch and the box texts rely on."""
+    for text in STATUS_SCRIPT:
+        check(b'\0' + text + b'\0' in code, f'{label}: the status script has no {text.decode()}')
+
+
 def check_display_defaults(label, image, resolution):
     """The width and height sites sit in the display configuration constructor and are the image's only such stores."""
     height = next(site[0] for site in resolution if not site[5] and site[4])
@@ -202,6 +249,7 @@ def check_build(label, folder, source, skip_source, build, resolution_name, fram
     check_skip_intro(label, image, relocs, skip_source, build, spans)
     check_exit_game(label, image, build, spans)
     check_menu_buttons(label, image, build, spans)
+    check_online_status(label, image, build, spans)
     spans.sort()
     check(all(a[1] <= b[0] for a, b in zip(spans, spans[1:])), f'{label}: patch sites overlap')
     for at in HEAP_LITERALS:
@@ -218,6 +266,17 @@ def block_header(stream, offset):
 def payload_crc(stream, offset, payload_offset, zsize):
     stream.seek(offset + payload_offset)
     return zlib.crc32(stream.read(zsize)) & 0xFFFFFFFF
+
+
+def check_local_coop(label, build, stream, offset, zsize, dsize):
+    """Local co-op is what the build's own menus offer: the join message exists only where the parity table says so."""
+    stream.seek(offset + 0x28)
+    payload = stream.read(zsize)
+    code = payload if zsize == dsize else zlib.decompress(payload)
+    check_status_script(label, code)
+    offered = b'menu__missions__squad_join_local' in code and b'local_user_join' in code
+    check(offered == (feature_parity.PARITY[build]['Local co-op'][0] == feature_parity.SUPPORTED),
+          f'{label}: the menus {"offer" if offered else "do not offer"} local co-op, unlike the parity table')
 
 
 def check_stream(label, folder, build):
@@ -237,6 +296,7 @@ def check_stream(label, folder, build):
             check(block_header(stream, offset) == (offset // 64, zsize, dsize, units, offset // 64, 0x53544144),
                   f'{label}: the Stated bytecode block differs')
             check(payload_crc(stream, offset, 0x28, zsize) == crc, f'{label}: the Stated bytecode CRC differs')
+            check_local_coop(label, build, stream, offset, zsize, dsize)
             blocks.append((offset, units))
         data = (ROOT / 'launcher' / 'controller_prompts_data.c').read_text(encoding='utf-8')
         glyphs = (ROOT / 'launcher' / 'controller_prompts_glyphs_data.c').read_text(encoding='utf-8')

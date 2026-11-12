@@ -273,6 +273,53 @@ static void test_profiles_and_names(void) {
     CHECK(!strcmp(text, "fourth"));
 }
 
+/* Local co-op: every local user mounts the same directory name at once (the 1.06 game mounts 'savedata' for users 1
+ * and 2 at /savedata0 and /savedata1); each gets its own folder, work copy and commit. */
+static void test_local_players(void) {
+    use_profile(user_a);
+    MountResult r[4];
+    char text[64], expected[64];
+    for (int u = 0; u < 4; ++u) {
+        DirName dir; memset(&dir, 0, sizeof(dir)); snprintf(dir.data, sizeof(dir.data), "savedata");
+        Mount1 m; memset(&m, 0, sizeof(m));
+        m.user = u + 1; m.dir = &dir; m.blocks = 1024; m.mode = MODE_RDWR;
+        memset(&r[u], 0, sizeof(r[u]));
+        int32_t mounted = save_mount(&m, &r[u]);
+        if (mounted == ERR_NOT_FOUND) {
+            m.mode = MODE_RDWR | MODE_CREATE;
+            mounted = save_mount(&m, &r[u]);
+        }
+        CHECK(mounted == 0);
+        snprintf(expected, sizeof(expected), "/savedata%d", u);
+        CHECK(!strcmp(r[u].point.data, expected));
+        for (int v = 0; v < u; ++v) CHECK(strcmp(r[u].point.data, r[v].point.data));
+    }
+    for (int u = 0; u < 4; ++u) {
+        snprintf(expected, sizeof(expected), "local player %d", u + 1);
+        guest_write(r[u].point.data, expected);
+    }
+    static const int kOrder[4] = {1, 3, 0, 2};
+    for (int i = 0; i < 4; ++i) {
+        const int u = kOrder[i];
+        snprintf(expected, sizeof(expected), "local player %d", u + 1);
+        guest_read(r[u].point.data, text, sizeof(text));
+        CHECK(!strcmp(text, expected));
+        CHECK(save_umount(&r[u].point) == 0);
+    }
+    for (int u = 0; u < 4; ++u) {
+        char file[700], leaf[64];
+        snprintf(file, sizeof(file), "%s/savedata/%d/CUSA00062/savedata/savedata.dat", user_a, u + 1);
+        snprintf(expected, sizeof(expected), "local player %d", u + 1);
+        read_text(file, text, sizeof(text));
+        CHECK(!strcmp(text, expected));
+        for (int s = 0; s < 3; ++s) {
+            static const char *const kLeftovers[3] = {"aln-work", "aln-old", "aln-commit"};
+            snprintf(leaf, sizeof(leaf), "%s/savedata/%d/CUSA00062/savedata.%s", user_a, u + 1, kLeftovers[s]);
+            CHECK(!exists(leaf));
+        }
+    }
+}
+
 int main(void) {
     snprintf(root, sizeof(root), "%s", ALN_SAVEDATA_TEST_ROOT);
 #ifdef _WIN32
@@ -299,6 +346,7 @@ int main(void) {
     test_create_commit_overwrite();
     test_recovery();
     test_profiles_and_names();
+    test_local_players();
     printf("savedata tests: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

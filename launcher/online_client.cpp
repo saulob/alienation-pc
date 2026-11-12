@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <thread>
+#include <utility>
 
 #include "net/identity.h"
 
@@ -116,6 +117,7 @@ void OnlineClient::Stop() {
     // A link still connecting finishes its connect timeout before it stops: not on the UI thread.
     if (link_) std::thread([link = std::shared_ptr<net::LobbyLink>(std::move(link_))] { link->stop(); }).detach();
     pending_.clear();
+    accepting_.clear();
     fetching_ = fetch_again_ = false;
     lobby_told_ = lobby_listed_ = false;
     lobby_refresh_.Reset();
@@ -136,6 +138,7 @@ void OnlineClient::Fetch(double now) {
     fetching_ = true;
     Send("friends.list", net::Json::Object(), Purpose::kFriends);
     Send("friends.requests", net::Json::Object(), Purpose::kRequests);
+    Send("invite.list", net::Json::Object(), Purpose::kInvites);
 }
 
 void OnlineClient::ForgetLobby() {
@@ -164,15 +167,17 @@ void OnlineClient::SyncLobby(bool visible, double now) {
     Send("lobby.list", std::move(body), Purpose::kLobbyList);
 }
 
-void OnlineClient::Send(const std::string& op, net::Json body, Purpose purpose) {
+uint32_t OnlineClient::Send(const std::string& op, net::Json body, Purpose purpose) {
     if (!link_) {
         if (purpose == Purpose::kAdd || purpose == Purpose::kChange || purpose == Purpose::kLobbyAdd ||
-            purpose == Purpose::kLobbyChange) {
+            purpose == Purpose::kLobbyChange || purpose == Purpose::kInviteAccept) {
             state_.notice = Describe(net::kUnreachable);
         }
-        return;
+        return 0;
     }
-    pending_[link_->request(op, std::move(body))] = purpose;
+    const uint32_t seq = link_->request(op, std::move(body));
+    pending_[seq] = purpose;
+    return seq;
 }
 
 void OnlineClient::Handle(const net::LobbyMessage& message, double now) {
@@ -200,7 +205,10 @@ void OnlineClient::Handle(const net::LobbyMessage& message, double now) {
         retry_at_ = now + kRetrySeconds;
         break;
     case Kind::kEvent:
-        if (message.event.rfind("friend.", 0) == 0) Fetch(now);
+        if (message.event.rfind("friend.", 0) == 0 || message.event == "invite.received") Fetch(now);
+        if (message.event == "invite.received") {
+            std::printf("Friend: %s invited you to their squad\n", message.body["name"].as_string().c_str());
+        }
         if (message.event == "friend.request" || message.event == "friend.added" || message.event == "friend.removed") {
             lobby_refresh_.Soon(now);
         }
@@ -257,6 +265,26 @@ void OnlineClient::Answer(Purpose purpose, const net::LobbyMessage& message, dou
     case Purpose::kLobbyAdd:
     case Purpose::kLobbyChange:
         LobbyAnswer(purpose, message, now);
+        break;
+    case Purpose::kInvites:
+        if (ok) state_.invitations = ReadSquadInvitations(message.body["invitations"]);
+        break;
+    case Purpose::kInviteAccept: {
+        const auto it = accepting_.find(message.seq);
+        if (it == accepting_.end()) break;
+        const SquadInvitation invitation = it->second;
+        accepting_.erase(it);
+        if (!ok || !message.body["joinable"].as_bool()) {
+            state_.notice = ok ? invitation.name + "'s squad is full or closed." : "The invitation could not be accepted: it "
+                                                                                   "expired or the squad closed.";
+            Fetch(now);
+            break;
+        }
+        std::printf("Friend: invite accepted (from %s)\n", invitation.name.c_str());
+        join_ = PendingJoin{message.body["session"].as_string(), invitation.invitation, invitation.name};
+        break;
+    }
+    case Purpose::kInviteDecline:
         break;
     case Purpose::kRooms:
         rooms_busy_ = false;
@@ -360,6 +388,33 @@ void OnlineClient::DeclineFromLobby(const std::string& player) {
     net::Json body = net::Json::Object();
     body.set("player", player);
     Send("friends.decline", std::move(body), Purpose::kLobbyChange);
+}
+
+void OnlineClient::AcceptInvitation(const std::string& invitation) {
+    const auto it = std::find_if(state_.invitations.begin(), state_.invitations.end(),
+                                 [&](const SquadInvitation& i) { return i.invitation == invitation; });
+    if (it == state_.invitations.end()) return;
+    const SquadInvitation accepted = *it;
+    state_.invitations.erase(it);
+    state_.notice.clear();
+    net::Json body = net::Json::Object();
+    body.set("invitation", invitation);
+    body.set("accept", true);
+    if (const uint32_t seq = Send("invite.answer", std::move(body), Purpose::kInviteAccept)) accepting_[seq] = accepted;
+}
+
+void OnlineClient::DeclineInvitation(const std::string& invitation) {
+    state_.invitations.erase(std::remove_if(state_.invitations.begin(), state_.invitations.end(),
+                                            [&](const SquadInvitation& i) { return i.invitation == invitation; }),
+                             state_.invitations.end());
+    net::Json body = net::Json::Object();
+    body.set("invitation", invitation);
+    body.set("accept", false);
+    Send("invite.answer", std::move(body), Purpose::kInviteDecline);
+}
+
+void OnlineClient::Join(const std::string& session, const std::string& who) {
+    if (!session.empty()) join_ = PendingJoin{session, "", who};
 }
 
 void OnlineClient::RefreshLobby(double now) {

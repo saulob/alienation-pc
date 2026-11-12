@@ -11,7 +11,7 @@ import { sha256Hex, toHex } from './sha256.js';
 
 export const PROTOCOL = 1;
 // This service's own version, shown on the dashboard and in the hello answer; the protocol alone decides compatibility.
-export const BACKEND_VERSION = '1.0.0';
+export const BACKEND_VERSION = '1.1.0';
 // The only game this lobby serves; another game's client is refused at hello.
 export const GAME = 'Alienation';
 // A supported game build, "<title id>-<version>". Lockstep play needs the same executable, so only rooms of the same build
@@ -43,6 +43,13 @@ export const LIMITS = {
   platformChars: 16,
   lobbyPlayers: 100,
   roomList: 50,
+  // NP sessions (one per room) and invitations to them.
+  sessionDataBytes: 16,
+  sessionMaxUsers: 8,
+  invitesPerSend: 16,
+  invitesPending: 20,
+  inviteMs: 30 * 60 * 1000,
+  inviteMessageChars: 128,
   // Three missed keepalives (LobbyLink::Options::keepalive_ms) and a margin.
   lobbyStaleMs: 75000,
 };
@@ -78,6 +85,8 @@ const LOBBY_PLAYER = /^[0-9a-f]{32}$/;
 const LOBBY_REV = /^[0-9a-f]{16}$/;
 const LOBBY_VERSION = /^[0-9A-Za-z][0-9A-Za-z.+-]{0,15}$/;
 const LOBBY_RANK = { incoming: 0, pending: 1, friend: 2, none: 3 };
+const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const INVITATION_ID = /^[0-9a-f]{32}$/;
 const DEFAULT_NAME = 'Player';
 
 export class LobbyError extends Error {
@@ -108,6 +117,10 @@ const SCHEMA = [
      name TEXT NOT NULL, joined INTEGER NOT NULL, bin TEXT NOT NULL, conn TEXT, ip TEXT NOT NULL DEFAULT '',
      port INTEGER NOT NULL DEFAULT 0, lan TEXT NOT NULL DEFAULT '[]', grace_until INTEGER,
      held TEXT NOT NULL DEFAULT '[]', PRIMARY KEY (room, member))`,
+  `CREATE TABLE IF NOT EXISTS room_sessions (id TEXT PRIMARY KEY, room INTEGER NOT NULL, owner TEXT NOT NULL,
+     private INTEGER NOT NULL, max INTEGER NOT NULL, data TEXT NOT NULL, created INTEGER NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS invitations (id TEXT PRIMARY KEY, session TEXT NOT NULL, sender TEXT NOT NULL,
+     target TEXT NOT NULL, ms INTEGER NOT NULL, state TEXT NOT NULL)`,
 ];
 
 // Applied once each, in order; meta 'schema' counts the ones done.
@@ -290,6 +303,8 @@ export class Lobby {
     const rooms = this.host.sql.get('SELECT COUNT(*) AS n FROM rooms').n;
     this.host.sql.run('DELETE FROM members');
     this.host.sql.run('DELETE FROM rooms');
+    this.host.sql.run('DELETE FROM invitations');
+    this.host.sql.run('DELETE FROM room_sessions');
     return rooms;
   }
 
@@ -491,10 +506,20 @@ export class Lobby {
       for (const att of players.values()) counts.set(pick(att), (counts.get(pick(att)) ?? 0) + 1);
       return counts;
     };
+    const rooms = this.host.sql.all(`SELECT r.slots, r.flags, r.build, COUNT(m.member) AS members FROM rooms r
+      LEFT JOIN members m ON m.room = r.id GROUP BY r.id`);
+    const roomTally = (pick) => {
+      const counts = new Map();
+      for (const room of rooms) counts.set(pick(room), (counts.get(pick(room)) ?? 0) + 1);
+      return counts;
+    };
     return {
       online: players.size,
       in_rooms: this.host.sql.get('SELECT COUNT(DISTINCT account) AS n FROM members WHERE conn IS NOT NULL').n,
-      rooms: this.host.sql.get('SELECT COUNT(*) AS n FROM rooms').n,
+      rooms: rooms.length,
+      joinable_rooms: rooms.filter((r) => publicRoom(r) && r.members > 0 && r.members < r.slots).length,
+      room_players: roomTally((r) => `${r.members}/${r.slots}`),
+      room_build: roomTally((r) => (BUILD.test(r.build ?? '') ? r.build : 'None')),
       platform: tally((att) => platformCategory(att.platform)),
       version: tally((att) => versionCategory(att.version)),
       country: tally((att) => countryCode(att.country)),
@@ -699,6 +724,7 @@ export class Lobby {
       this.track(() => this.metrics.roomClosed({ peak: room.peak_members, lifetimeMs: this.host.now() - room.created,
         relayed: room.relayed === 1, platforms: room.platforms }));
       this.host.sql.run('DELETE FROM rooms WHERE id = ?', roomId);
+      this.dropSessions(roomId);
       this.relays.forgetRoom(roomId);
       return;
     }
@@ -753,6 +779,63 @@ export class Lobby {
     }
   }
 
+  // ---- NP sessions and invitations ----
+  // The game makes one session per room (POST /v1/sessions) right after creating it; joiners reach the room through it.
+  roomSession(roomId) {
+    return this.host.sql.get('SELECT * FROM room_sessions WHERE room = ? ORDER BY created DESC LIMIT 1', roomId) ?? null;
+  }
+
+  sessionRow(text) {
+    if (typeof text !== 'string' || !SESSION_ID.test(text)) fail('bad_request', 'session');
+    return this.host.sql.get('SELECT * FROM room_sessions WHERE id = ?', text) ?? null;
+  }
+
+  // A private session (friends-only or invite-only squad) is open to the players invited to it and to the owner's
+  // friends; the game's host still applies its own friends-only and invite-only checks to whoever joins.
+  mayJoinPrivate(account, session) {
+    if (session.owner === account || this.areFriends(account, session.owner)) return true;
+    return Boolean(this.host.sql.get(`SELECT 1 AS x FROM invitations WHERE session = ? AND target = ? AND state != 'declined'
+      AND ms >= ?`, session.id, account, this.host.now() - LIMITS.inviteMs));
+  }
+
+  // The room behind a session, as this client may enter it; fails with the reason the game's join reports.
+  sessionRoom(att, text) {
+    const session = this.sessionRow(text);
+    const room = session && this.roomRow(session.room);
+    if (!session || !room || room.game !== att.game || room.flags & FLAG_CLOSED) fail('not_found');
+    if (!compatible(att, room)) fail('incompatible', '', { build: room.build, online_protocol: room.online_protocol });
+    if (session.private && !this.mayJoinPrivate(att.account, session)) fail('forbidden');
+    return { session, room };
+  }
+
+  dropSessions(roomId) {
+    for (const { id } of this.host.sql.all('SELECT id FROM room_sessions WHERE room = ?', roomId)) {
+      this.host.sql.run('DELETE FROM invitations WHERE session = ?', id);
+    }
+    this.host.sql.run('DELETE FROM room_sessions WHERE room = ?', roomId);
+  }
+
+  newSessionId() {
+    const hex = this.randomHex(16);
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  }
+
+  // An invitation as its target sees it: who sent it, to which build, whether that room can still take a player.
+  invitationView(row, viewer) {
+    const session = this.host.sql.get('SELECT * FROM room_sessions WHERE id = ?', row.session);
+    const room = session && this.roomRow(session.room);
+    const sender = this.accountRow(row.sender);
+    const count = room ? this.memberRows(room.id).length : 0;
+    return { invitation: row.id, session: row.session, account: row.sender, name: sender?.name ?? '',
+      ...this.shownAs(row.sender, sender?.name ?? ''), build: room?.build ?? '', players: count, slots: room?.slots ?? 0,
+      minutes: Math.floor((this.host.now() - row.ms) / 60000),
+      joinable: Boolean(room && viewer.build && compatible(viewer, room) && count < room.slots && !(room.flags & FLAG_CLOSED)) };
+  }
+
+  expireInvitations() {
+    this.host.sql.run('DELETE FROM invitations WHERE ms < ?', this.host.now() - LIMITS.inviteMs);
+  }
+
   // ---- friends ----
   accountRow(account) {
     return this.host.sql.get('SELECT * FROM accounts WHERE account = ?', account) ?? null;
@@ -783,7 +866,13 @@ export class Lobby {
         view.room = String(room.id);
         view.code = room.code;
         const count = this.memberRows(room.id).length;
-        view.joinable = Boolean(viewer.build) && compatible(viewer, room) && publicRoom(room) && count < room.slots;
+        const open = Boolean(viewer.build) && compatible(viewer, room) && count < room.slots && !(room.flags & FLAG_CLOSED);
+        view.joinable = open && publicRoom(room);
+        const session = this.roomSession(room.id);
+        if (open && session && (!session.private || this.mayJoinPrivate(viewer.account, session))) {
+          view.session = session.id;
+          view.joinable = true;
+        }
       }
     }
     const withData = present.find((s) => s.att.pdata) ?? null;
@@ -1356,6 +1445,127 @@ const HANDLERS = {
     return {};
   },
 
+  // POST /v1/sessions: the session of the caller's own room, which only its owner creates. `data` is the game's 16-byte
+  // session data (room id, world, server, seats); a joiner reads it back to find the room.
+  'session.create'(att, msg) {
+    if (!att.room) fail('not_found', 'not in a room');
+    const room = this.roomRow(att.room) ?? fail('not_found');
+    this.requireOwner(att, room);
+    if (typeof msg.private !== 'boolean' || !isInt(msg.max, 1, LIMITS.sessionMaxUsers)) fail('bad_request', 'session');
+    const data = hexBytes(msg.data ?? '', LIMITS.sessionDataBytes);
+    if (data.length !== LIMITS.sessionDataBytes * 2) fail('bad_request', 'data');
+    this.limitWrite(att, 'state');
+    const existing = this.roomSession(room.id);
+    if (existing) {
+      this.host.sql.run('UPDATE room_sessions SET private = ?, max = ?, data = ?, owner = ? WHERE id = ?', msg.private ? 1 : 0,
+        msg.max, data, att.account, existing.id);
+      return { session: existing.id };
+    }
+    const id = this.newSessionId();
+    this.host.sql.run('INSERT INTO room_sessions (id, room, owner, private, max, data, created) VALUES (?, ?, ?, ?, ?, ?, ?)', id,
+      room.id, att.account, msg.private ? 1 : 0, msg.max, data, this.host.now());
+    this.tally('activity', 'sessions_created');
+    return { session: id };
+  },
+
+  // POST /v1/sessions/{id}/members: may this player enter the session's room? The seat itself is JoinRoom's.
+  'session.join'(att, msg) {
+    const { room } = this.sessionRoom(att, msg.session);
+    if (this.memberRows(room.id).length >= room.slots) this.joinFailed('full');
+    return {};
+  },
+
+  // GET /v1/sessions/{id}/sessionData.
+  'session.data'(att, msg) {
+    const { session } = this.sessionRoom(att, msg.session);
+    return { data: session.data };
+  },
+
+  // PUT /v1/sessions/{id} with a new privacy (the squad's invite-only setting changed).
+  'session.update'(att, msg) {
+    const session = this.sessionRow(msg.session) ?? fail('not_found');
+    const room = this.roomRow(session.room);
+    if (!room || att.room !== room.id) fail('not_found', 'not in that room');
+    this.requireOwner(att, room);
+    if (msg.private === undefined) return {};
+    if (typeof msg.private !== 'boolean') fail('bad_request', 'private');
+    if ((session.private === 1) !== msg.private) {
+      this.limitWrite(att, 'state');
+      this.host.sql.run('UPDATE room_sessions SET private = ? WHERE id = ?', msg.private ? 1 : 0, session.id);
+    }
+    return {};
+  },
+
+  // DELETE /v1/sessions/{id}: the owner ends it (no one can join through it any more); a member's leave changes nothing.
+  'session.leave'(att, msg) {
+    const session = this.sessionRow(msg.session);
+    if (session && session.owner === att.account) {
+      this.host.sql.run('DELETE FROM invitations WHERE session = ?', session.id);
+      this.host.sql.run('DELETE FROM room_sessions WHERE id = ?', session.id);
+    }
+    return {};
+  },
+
+  // The game's Invitation dialog (send): friends invited to the sender's session.
+  'invite.send'(att, msg) {
+    const session = this.sessionRow(msg.session) ?? fail('not_found');
+    const room = this.roomRow(session.room);
+    if (!room || att.room !== room.id) fail('not_found', 'not in that room');
+    const targets = msg.to;
+    if (!Array.isArray(targets) || targets.length < 1 || targets.length > LIMITS.invitesPerSend) fail('bad_request', 'to');
+    const message = msg.message === undefined ? '' : cleanText(msg.message, LIMITS.inviteMessageChars);
+    this.expireInvitations();
+    const sent = [];
+    for (const text of targets) {
+      const target = decimalId(text);
+      if (target === att.account || !this.areFriends(att.account, target)) fail('not_friends');
+      const pending = this.host.sql.get(`SELECT COUNT(*) AS n FROM invitations WHERE target = ? AND state = 'pending'`, target).n;
+      if (pending >= LIMITS.invitesPending) fail('limit', 'too many pending invitations');
+      this.limitWrite(att, 'friend');
+      this.host.sql.run(`DELETE FROM invitations WHERE session = ? AND target = ? AND state = 'pending'`, session.id, target);
+      const id = this.randomHex(16);
+      this.host.sql.run('INSERT INTO invitations (id, session, sender, target, ms, state) VALUES (?, ?, ?, ?, ?, ?)', id,
+        session.id, att.account, target, this.host.now(), 'pending');
+      sent.push(target);
+      const row = this.host.sql.get('SELECT * FROM invitations WHERE id = ?', id);
+      const event = { ev: 'invite.received', message, ...this.invitationView(row, {}) };
+      delete event.joinable;
+      this.later(() => this.notifyAccount(target, event));
+    }
+    this.tally('activity', 'invites_sent', sent.length);
+    return { sent: sent.length };
+  },
+
+  // Invitations waiting for this player's answer, newest first.
+  'invite.list'(att) {
+    this.expireInvitations();
+    const rows = this.host.sql.all(`SELECT * FROM invitations WHERE target = ? AND state = 'pending' ORDER BY ms DESC LIMIT ?`,
+      att.account, LIMITS.invitesPending);
+    return { invitations: rows.map((row) => this.invitationView(row, att)).filter((v) => v.build) };
+  },
+
+  // Accept or Decline. An accepted invitation answers with its session, which the game joins natively.
+  'invite.answer'(att, msg) {
+    if (typeof msg.invitation !== 'string' || !INVITATION_ID.test(msg.invitation)) fail('bad_request', 'invitation');
+    if (typeof msg.accept !== 'boolean') fail('bad_request', 'accept');
+    this.expireInvitations();
+    const row = this.host.sql.get('SELECT * FROM invitations WHERE id = ? AND target = ?', msg.invitation, att.account);
+    if (!row) fail('not_found');
+    const view = this.invitationView(row, att);
+    this.host.sql.run('UPDATE invitations SET state = ? WHERE id = ?', msg.accept ? 'accepted' : 'declined', row.id);
+    this.tally('activity', msg.accept ? 'invites_accepted' : 'invites_declined');
+    this.later(() => this.notifyAccount(row.sender, { ev: 'invite.answered', invitation: row.id, account: att.account,
+      name: att.name, accept: msg.accept }));
+    return msg.accept ? { session: row.session, joinable: view.joinable, build: view.build } : {};
+  },
+
+  // PUT /v1/users/{id}/invitations/{id} {"usedFlag":true}.
+  'invite.used'(att, msg) {
+    if (typeof msg.invitation !== 'string' || !INVITATION_ID.test(msg.invitation)) fail('bad_request', 'invitation');
+    this.host.sql.run(`UPDATE invitations SET state = 'used' WHERE id = ? AND target = ?`, msg.invitation, att.account);
+    return {};
+  },
+
   // Room chat: never stored, never held for a seat in its grace period.
   chat(att, msg) {
     if (!att.room) fail('not_found', 'not in a room');
@@ -1509,9 +1719,12 @@ const HANDLERS = {
       total++;
       if (rooms.length >= LIMITS.roomList) continue;
       const owner = members.find((m) => m.member === room.owner) ?? members[0];
+      const joinable = members.length < room.slots && !(room.flags & FLAG_CLOSED);
+      const session = joinable ? this.roomSession(room.id) : null;
       rooms.push({ host: this.displayName(owner.account, owner.name), players: members.length, slots: room.slots,
-        joinable: members.length < room.slots && !(room.flags & FLAG_CLOSED), ints: JSON.parse(room.ints),
-        version: LOBBY_VERSION.test(owner.version) ? owner.version : '', minutes: Math.floor((this.host.now() - room.created) / 60000) });
+        joinable, ints: JSON.parse(room.ints), version: LOBBY_VERSION.test(owner.version) ? owner.version : '',
+        minutes: Math.floor((this.host.now() - room.created) / 60000),
+        ...(session && !session.private && { session: session.id }) });
     }
     const rev = sha256Hex(JSON.stringify(rooms)).slice(0, 16);
     return rev === msg.rev ? { rev, total, incompatible, unchanged: true } : { rev, total, incompatible, rooms };

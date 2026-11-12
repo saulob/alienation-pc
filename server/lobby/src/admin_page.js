@@ -54,6 +54,7 @@ export const ADMIN_HTML = String.raw`<!doctype html>
       <div class="card" tabindex="0" data-help="Players connected to the online service right now, counted once per connected account"><span class="label">Online now</span><span id="c-online" class="value">–</span></div>
       <div class="card" tabindex="0" data-help="Players currently occupying a seat in an online room"><span class="label">In rooms</span><span id="c-in-rooms" class="value">–</span></div>
       <div class="card" tabindex="0" data-help="Multiplayer rooms currently open"><span class="label">Open rooms</span><span id="c-rooms" class="value">–</span></div>
+      <div class="card" tabindex="0" data-help="Rooms a search of the same game build can find and join now: public, with a free seat"><span class="label">Joinable rooms</span><span id="c-joinable" class="value">–</span></div>
       <div class="card" tabindex="0" data-help="Highest number of players online at the same time today"><span class="label">Peak today</span><span id="c-peak" class="value">–</span></div>
       <div class="card" tabindex="0" data-help="Online sessions started today, with reconnects inside the existing 10-minute deduplication window not counted again"><span class="label">Sessions today</span><span id="c-sessions" class="value">–</span></div>
       <div class="card" tabindex="0" data-help="Multiplayer rooms created today"><span class="label">Rooms today</span><span id="c-rooms-today" class="value">–</span></div>
@@ -71,6 +72,8 @@ export const ADMIN_HTML = String.raw`<!doctype html>
       <div class="grid">
         <div id="d-build"></div>
         <div id="d-protocol"></div>
+        <div id="d-room-players"></div>
+        <div id="d-room-build"></div>
       </div>
       <div id="rejects"></div>
     </div>
@@ -893,6 +896,12 @@ export const ADMIN_JS = String.raw`(function () {
     clear(protocols);
     rows(builds, 'Now · players per game build', live.build || []);
     rows(protocols, 'Now · players per online protocol', live.protocol || [], function (v) { return 'Protocol ' + v; });
+    var roomPlayers = $('d-room-players');
+    var roomBuilds = $('d-room-build');
+    clear(roomPlayers);
+    clear(roomBuilds);
+    rows(roomPlayers, 'Now · rooms by players / seats', live.room_players || []);
+    rows(roomBuilds, 'Now · rooms per game build', live.room_build || []);
   }
 
   function directChange(c) {
@@ -937,6 +946,8 @@ export const ADMIN_JS = String.raw`(function () {
     clear(node);
     node.appendChild(card('Friend requests', fmt(requests)));
     node.appendChild(card('New friendships', fmt(made)));
+    node.appendChild(card('Squad invitations sent', fmt(sum(items, ['invites_sent']))));
+    node.appendChild(card('Invitations accepted', fmt(sum(items, ['invites_accepted']))));
     $('friends-note').textContent = requests + made > 0 ? 'Last ' + history.days + ' days. Counts only, never who.'
       : 'No data yet: no friend requests in the last ' + history.days + ' days.';
   }
@@ -1250,6 +1261,7 @@ export const ADMIN_JS = String.raw`(function () {
     $('c-online').textContent = fmt(summary.live.online);
     $('c-in-rooms').textContent = fmt(summary.live.in_rooms);
     $('c-rooms').textContent = fmt(summary.live.rooms);
+    $('c-joinable').textContent = fmt(summary.live.joinable_rooms);
     $('c-peak').textContent = fmt(summary.today.peak_online);
     $('c-sessions').textContent = fmt(summary.today.sessions);
     $('c-rooms-today').textContent = fmt(summary.today.rooms_created);

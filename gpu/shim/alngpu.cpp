@@ -56,6 +56,8 @@ int aln_check_vulkan(char* cause, size_t cause_size, char* advice, size_t advice
 void runtime_log_flush(void);
 void runtime_log_mark_clean_exit(void);
 void runtime_log_finalize(void);
+// runtime_online.cpp
+void runtime_online_leave(void);
 // startup_phase.c
 void aln_startup_phase(const char* phase);
 const char* aln_startup_phase_current(void);
@@ -243,6 +245,7 @@ extern "C" int alngpu_init(const AlnGpuConfig* config) {
         aln_startup_phase("runtime window closed");
         std::printf("Window: closed, ending the process with exit code 0 in phase '%s'\n",
                     aln_startup_phase_current());
+        runtime_online_leave();
         runtime_log_mark_clean_exit();
         runtime_log_finalize();
         runtime_log_flush();

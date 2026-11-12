@@ -183,6 +183,7 @@ static ABI __attribute__((noreturn)) void guest_libc_exit(int status) {
     printf("Runtime: guest requested exit(%d)\n", status);
     runtime_finalize(NULL);
     runtime_report();
+    runtime_online_leave();
     if (status == 0) runtime_log_mark_clean_exit();
     runtime_log_finalize();
     runtime_exit(status);
@@ -246,6 +247,8 @@ uintptr_t runtime_resolve(const char *name, int is_data) {
     if (np) return np;
     uintptr_t online = runtime_online_resolve(name);
     if (online) return online;
+    uintptr_t users = runtime_users_resolve(name);
+    if (users) return users;
     uintptr_t services = runtime_services_resolve(name);
     if (services) return services;
     uintptr_t rtc = runtime_rtc_resolve(name);

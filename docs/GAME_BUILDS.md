@@ -92,8 +92,11 @@ No entry is final until the manual test matrix has passed in game.
 | FSR | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED |
 | Texture filtering | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED |
 | Online | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED |
+| Online status | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED |
 | Matching2 | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED |
 | P2P | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED |
+| Sessions and invitations | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED |
+| Local co-op | UNAVAILABLE · STATICALLY VERIFIED: the menus have no local co-op join, and the executable lacks engine natives the 1.06 co-op scripts call (the 1.06 update added both); tests/patch_site_tests.py | SUPPORTED · MANUAL TEST REQUIRED: 2 players confirmed in game, a save per user; 3-4 headless only; offline only; tests/local_pad_tests.c | SUPPORTED · MANUAL TEST REQUIRED: 2 players confirmed in game, a save per user; 3-4 headless only; offline only; tests/local_pad_tests.c | UNAVAILABLE · STATICALLY VERIFIED: the menus have no local co-op join, and the executable lacks engine natives the 1.06 co-op scripts call (the 1.06 update added both); tests/patch_site_tests.py |
 | Install Game | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED: from its base package; tests/game_install_tests.cpp | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED: from its base package; tests/game_install_tests.cpp | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED: as CUSA00062 1.06, executable checked; tests/game_install_tests.cpp | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED: from its base package; tests/game_install_tests.cpp |
 | Install Update | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED: base of the 1.06 update; tests/game_install_tests.cpp | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED: laid over CUSA00062 1.00; tests/game_install_tests.cpp | INTENTIONALLY DIFFERENT · HEADLESS SEMANTICALLY VERIFIED: refused before any change: it already contains 1.06; tests/game_install_tests.cpp | UNAVAILABLE · STATICALLY VERIFIED: no CUSA04430 update is known; the profile has no update build |
 | Remove Update | UNAVAILABLE · HEADLESS SEMANTICALLY VERIFIED: nothing to remove: the base; removing 1.06 returns here; tests/game_install_tests.cpp | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED: official layers only; returns to 1.00; tests/game_install_tests.cpp | UNAVAILABLE · HEADLESS SEMANTICALLY VERIFIED: no update layer: a complete package cannot become 1.00; tests/game_install_tests.cpp | UNAVAILABLE · STATICALLY VERIFIED: no CUSA04430 update is known |
@@ -278,7 +281,8 @@ is needed for this.
 ### 1.06 multiplayer reconnaissance
 
 Image offsets in 1.06 (`eboot.bin` mapped at 0). The menu text itself is in the zlib-compressed DATS blocks of
-`stream.dat`, not in the executable; "UNX Global Matrix" is the Stated string `menu__network__error_general`.
+`stream.dat`, not in the executable; "cannot connect to UNX Global Matrix" is the Stated string
+`menu__network__error_general` (the UNX game server login, docs/ONLINE.md).
 
 | Feature | 1.06 evidence | In 1.00 |
 |---|---|---|

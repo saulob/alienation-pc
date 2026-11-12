@@ -1,5 +1,5 @@
 /* System services for an offline console:
- *   - up to four local users (ids 1-4, one per controller slot), logged in but not signed in to PSN;
+ *   - local users (runtime_users.c) are logged in but not signed in to PSN;
  *   - network cable unplugged: NetCtl disconnected, sockets unavailable;
  *   - common dialogs complete immediately (no UI is drawn yet);
  *   - the whole package is installed (PlayGo reports every chunk local).
@@ -25,8 +25,6 @@
 
 #define USER_ID 1
 #define ORBIS_OK 0
-#define USER_INVALID_ARGUMENT ((int32_t)0x80960005)
-#define USER_NO_EVENT ((int32_t)0x80960007)
 #define SYSTEM_NO_EVENT ((int32_t)0x80A10004)
 #define SYSTEM_PARAMETER ((int32_t)0x80A10003)
 #define NET_CTL_NOT_CONNECTED ((int32_t)0x80412108)
@@ -47,71 +45,6 @@ static pthread_mutex_t lock=PTHREAD_MUTEX_INITIALIZER;
 static int next_id=1;
 static int new_id(void) { pthread_mutex_lock(&lock); int id=next_id++; pthread_mutex_unlock(&lock); return id; }
 static void note(const char *what) { printf("Runtime: %s\n",what); }
-
-/* ---- UserService ---- */
-#define MAX_USERS 4
-#define USER_EVENT_LOGIN 0
-static unsigned logged_in=1; /* bit N-1: player N; player 1 from the start */
-typedef struct { int32_t type, user; } UserEvent;
-static UserEvent user_events[MAX_USERS]={{USER_EVENT_LOGIN,USER_ID}}; /* a player logs in at most once */
-static int user_events_pending=1;
-static int32_t player_user(int player) { return USER_ID+player-1; }
-int runtime_user_player(int32_t user) {
-    if (user<USER_ID || user>=USER_ID+MAX_USERS) return 0;
-    const int player=user-USER_ID+1;
-    pthread_mutex_lock(&lock);
-    const int known=logged_in>>(player-1)&1;
-    pthread_mutex_unlock(&lock);
-    return known ? player : 0;
-}
-/* Called when a controller first takes slot `player`; the game opens that user's pad on the LOGIN event. */
-void runtime_user_login(int player) {
-    if (player<1 || player>MAX_USERS) return;
-    pthread_mutex_lock(&lock);
-    if (!(logged_in>>(player-1)&1)) {
-        logged_in|=1u<<(player-1);
-        user_events[user_events_pending++]=(UserEvent){USER_EVENT_LOGIN,player_user(player)};
-    }
-    pthread_mutex_unlock(&lock);
-}
-static ABI int32_t user_initialize(const void *params) { (void)params; note("UserService initialized (user 1 logged in)"); return 0; }
-static ABI int32_t user_terminate(void) { return 0; }
-/* The light bar colour of each logged-in player: blue, red, green, pink. */
-static ABI int32_t user_color(int32_t user, int32_t *color) {
-    const int player=runtime_user_player(user);
-    if (!color || !player) return USER_INVALID_ARGUMENT;
-    *color=player-1;
-    return 0;
-}
-static ABI int32_t user_initial(int32_t *id) { if (!id) return USER_INVALID_ARGUMENT; *id=USER_ID; return 0; }
-static ABI int32_t user_list(int32_t *ids) {
-    if (!ids) return USER_INVALID_ARGUMENT;
-    pthread_mutex_lock(&lock);
-    for (int i=0;i<MAX_USERS;++i) ids[i]=-1;
-    for (int player=1,n=0;player<=MAX_USERS;++player) if (logged_in>>(player-1)&1) ids[n++]=player_user(player);
-    pthread_mutex_unlock(&lock);
-    return 0;
-}
-static ABI int32_t user_name(int32_t id,char *name,uint64_t size) {
-    const int player=runtime_user_player(id);
-    if (!player || !name) return USER_INVALID_ARGUMENT;
-    char numbered[16];
-    snprintf(numbered,sizeof(numbered),"Player %d",player);
-    const char *value=player>1 ? numbered : getenv("ALN_USER_NAME") ? getenv("ALN_USER_NAME") : "Player";
-    if (strlen(value)+1>size) return (int32_t)0x8096000a; /* BUFFER_TOO_SHORT */
-    strcpy(name,value); return 0;
-}
-static ABI int32_t user_event(int32_t *event) {
-    if (!event) return USER_INVALID_ARGUMENT;
-    pthread_mutex_lock(&lock);
-    const int pending=user_events_pending;
-    if (pending) {
-        event[0]=user_events[0].type; event[1]=user_events[0].user;
-        memmove(user_events,user_events+1,(size_t)--user_events_pending*sizeof(*user_events));
-    }
-    pthread_mutex_unlock(&lock);
-    return pending ? 0 : USER_NO_EVENT;
-}
 
 /* ---- SystemService ---- */
 static int launcher_language=1;
@@ -135,12 +68,46 @@ static ABI int32_t system_param(int32_t id,int32_t *value) {
     }
     return 0;
 }
+/* Events the online layer queues (an accepted squad invitation, a Join): eventType @0, data @4. They wait until the
+ * game's user manager runs, which drops a session invitation addressed to a user it does not know yet. */
+#define SYSTEM_EVENT_BYTES 0xc0
+#define MAX_SYSTEM_EVENTS 4
+static unsigned char system_events[MAX_SYSTEM_EVENTS][SYSTEM_EVENT_BYTES];
+static int system_events_pending;
+int runtime_system_event_push(const void *event, size_t size) {
+    if (!event || size>SYSTEM_EVENT_BYTES) return 0;
+    pthread_mutex_lock(&lock);
+    const int queued=system_events_pending<MAX_SYSTEM_EVENTS;
+    if (queued) {
+        memset(system_events[system_events_pending],0,SYSTEM_EVENT_BYTES);
+        memcpy(system_events[system_events_pending++],event,size);
+    }
+    pthread_mutex_unlock(&lock);
+    return queued;
+}
 static ABI int32_t system_status(unsigned char *status) {
     if (!status) return SYSTEM_PARAMETER;
-    memset(status,0,12); /* event_num=0, no overlay, foreground, normal CPU mode */
+    memset(status,0,12); /* no overlay, foreground, normal CPU mode */
+    const int polled=runtime_user_events_polled();
+    pthread_mutex_lock(&lock);
+    const int32_t events=polled ? system_events_pending : 0;
+    pthread_mutex_unlock(&lock);
+    memcpy(status,&events,4);
     return 0;
 }
-static ABI int32_t system_event(void *event) { (void)event; return SYSTEM_NO_EVENT; }
+static ABI int32_t system_event(unsigned char *event) {
+    if (!event) return SYSTEM_PARAMETER;
+    const int polled=runtime_user_events_polled();
+    pthread_mutex_lock(&lock);
+    const int ready=polled && system_events_pending;
+    if (ready) {
+        memcpy(event,system_events[0],SYSTEM_EVENT_BYTES);
+        memmove(system_events[0],system_events[1],(size_t)--system_events_pending*SYSTEM_EVENT_BYTES);
+    }
+    pthread_mutex_unlock(&lock);
+    if (ready) printf("Runtime: system event 0x%08x delivered\n",*(const uint32_t *)event);
+    return ready ? 0 : SYSTEM_NO_EVENT;
+}
 static ABI int32_t hide_splash(void) { note("SystemService: splash screen hidden"); return 0; }
 static ABI int32_t safe_area(float *info) { if (!info) return SYSTEM_PARAMETER; *info=1.0f; return 0; } /* full screen */
 static ABI int32_t disable_music_player(void) { return 0; }
@@ -536,6 +503,7 @@ static ABI int32_t ime_panel_size_extended(const ImeParam *param, const void *ex
     return 0;
 }
 
+#define MAX_USERS 4
 /* ---- Ime keyboard: a registration per user. Key events are not delivered, so the handler is never called. ---- */
 #define IME_ERR_BUSY ((int32_t)0x80BC0001)
 #define IME_ERR_NOT_OPENED ((int32_t)0x80BC0002)
@@ -718,10 +686,7 @@ static ABI int32_t audio_in_open(void) { return AUDIO_IN_NOT_OPENED; }
 
 
 static const RuntimeExport exports[]={
-    {"sceUserServiceInitialize",user_initialize}, {"sceUserServiceTerminate",user_terminate},
-    {"sceUserServiceGetInitialUser",user_initial}, {"sceUserServiceGetLoginUserIdList",user_list},
-    {"sceUserServiceGetUserName",user_name}, {"sceUserServiceGetEvent",user_event},
-    {"sceUserServiceGetUserColor",user_color}, {"sceSystemServiceReenableMusicPlayer",reenable_music_player},
+    {"sceSystemServiceReenableMusicPlayer",reenable_music_player},
     {"sceSystemServiceParamGetInt",system_param}, {"sceSystemServiceGetStatus",system_status},
     {"sceSystemServiceReceiveEvent",system_event}, {"sceSystemServiceHideSplashScreen",hide_splash},
     {"sceSystemServiceLaunchWebBrowser",launch_browser}, {"sceSystemServiceLoadExec",load_exec},
@@ -780,7 +745,6 @@ static const RuntimeExport exports[]={
     {"sceNetCtlUnregisterCallbackForNpToolkit",netctl_unregister},
     {"sceNpRegisterStateCallbackForToolkit",np_register}, {"sceNpUnregisterStateCallbackForToolkit",ok_void},
     {"sceNpCheckCallbackForLib",ok_void},
-    {"sceUserServiceRegisterEventCallback",ok_void}, {"sceUserServiceUnregisterEventCallback",ok_void},
     {"sceNpCreateRequest",np_request}, {"sceNpCheckNpAvailabilityA",np_signed_out},
     {"sceNpGetAccountIdA",np_signed_out}, {"sceNpGetAccountId",np_signed_out}, {"sceNpGetParentalControlInfoA",np_signed_out},
     {"sceNpGetUserIdByAccountId",np_signed_out},

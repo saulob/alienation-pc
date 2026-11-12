@@ -10,7 +10,7 @@
 .PARAMETER Reset
   Deletes the local test lobby's database (accounts, friend codes, friends) and stops. Nothing else is touched.
 .PARAMETER SeedTestFriends
-  Makes test instances a and b (user\test-client-a, user\test-client-b) friends before starting.
+  Makes test instances Alpha and Bravo (user\test-client-alpha, user\test-client-bravo) friends before starting.
 #>
 [CmdletBinding()]
 param(
@@ -52,7 +52,7 @@ if (-not $Memory) {
     $arguments += @('--db', $Database)
 }
 if ($SeedTestFriends) {
-    $identities = @('a', 'b') | ForEach-Object { Join-Path $script:RepoRoot "user\test-client-$_\online_identity.ini" }
+    $identities = @('alpha', 'bravo') | ForEach-Object { Join-Path $script:RepoRoot "user\test-client-$_\online_identity.ini" }
     $missing = @($identities | Where-Object { -not (Test-Path -LiteralPath $_) })
     if ($missing) { Stop-Tool "Start each test instance once first (no identity yet: $($missing -join ', '))" }
     foreach ($identity in $identities) { $arguments += @('--seed-friends', $identity) }

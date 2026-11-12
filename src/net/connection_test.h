@@ -39,11 +39,16 @@ struct ConnectionReport {
     std::string verdict;
     std::string friend_code;           // from the lobby, when it answered
     std::vector<std::string> details;  // addresses, servers and errors, for the log
+    ConnectionFacts facts;
 };
 
 ConnectionReport summarize_connection(const ConnectionFacts& facts);
 // "Ready", "Limited" or "Not ready".
 const char* ConnectionStatusText(ConnectionReport::Mark mark);
+
+// The measurements of a finished test as one settings value, with when it ran (Unix seconds); no addresses.
+std::string encode_connection_facts(const ConnectionFacts& facts, int64_t when);
+bool decode_connection_facts(const std::string& text, ConnectionFacts& facts, int64_t& when);
 
 // The launcher's test opens the port the game will bind: the configured one, else the game's.
 uint16_t connection_test_port(const OnlineConfig& config);

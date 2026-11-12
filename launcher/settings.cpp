@@ -52,6 +52,7 @@ constexpr ManagedSetting kBaseSettings[] = {
     {kOnlineUdpPortKey, "0"},
     {kOnlineStunKey, net::kDefaultStunServers},
     {kConnectionTestPortKey, "0"},
+    {kConnectionTestResultKey, ""},
     {kPingDisplayKey, "0"},
     {kLobbyVisibleKey, "0"},
     {kLauncherXKey, ""},
@@ -287,7 +288,11 @@ std::string SettingsSummary(const LauncherSettings& settings, const GameBuild* b
     const char* build_label = run ? run->game_build : build ? build->label : nullptr;
     line("Alienation PC v" + net::port_version() + ", " + net::host_platform() + ", game build " +
          (build_label ? build_label : "not a supported build"));
-    line("Online Play off (not available for Alienation yet)");
+    net::OnlineConfig online = ReadOnlineConfig(settings.file());
+    net::apply_environment(online);
+    line(!online.enabled ? std::string("Online Play off")
+                         : "Online Play on, online protocol " + std::to_string(net::kOnlineProtocolVersion) +
+                               (online.lobby == net::kDefaultLobbyUrl ? std::string() : ", lobby override " + online.lobby));
     line(std::string("Controller prompts ") + AlnPromptStyleLabel(aln_controller_prompts_style(Utf8(settings.file()).c_str())));
 
     const std::string mode = settings.Get(kDisplayModeKey, "windowed");

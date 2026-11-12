@@ -28,7 +28,14 @@ No dependencies are installed for either the tests or the local server.
 - **Reads the classic Matching2 API needs:** `room.external` (GetRoomDataExternalList) and `room.members`
   (GetRoomMemberDataExternalList), for the client's own room or a room a search could find; never a key, code or address.
 - **`rooms.list`**: the launcher's Public Lobby, the public rooms of the reader's build (host, players, slots, joinable,
-  host version, minutes open), at most 50, `rev` for an unchanged list.
+  the game's searchable attributes, host version, minutes open, and the `session` of a joinable room), at most 50, `rev`
+  for an unchanged list.
+- **NP sessions** (`session.create`, `.join`, `.data`, `.update`, `.leave`): the game makes one per room through its
+  WebApi (`POST /v1/sessions`) and every join reads the room id back from its 16 bytes of session data. A session belongs
+  to its creator's room and ends with it; a private one (friends-only or invite-only squad) is open to the owner's friends
+  and to invited players. `friends.list` names a friend's session when the reader may join it.
+- **Invitations** (`invite.send`, `.list`, `.answer`, `.used`; events `invite.received`, `invite.answered`): to friends
+  only, at most 16 per send and 20 pending per player, 30 minutes.
 - **No party statistics** (Dragon's character classes): `party.report` is an unknown request here.
 
 ## Production
@@ -61,7 +68,7 @@ Nothing in the repository logs in, stores a token or deploys by itself.
 4. From the repository root: `.\tools\worker.ps1 -DryRun` bundles without uploading; `.\tools\worker.ps1` deploys. It uses
    the Wrangler already installed (`npx --no-install` never downloads one).
 5. Check it: `curl https://alienation-lobby.<your subdomain>.workers.dev/` answers
-   `{"service":"alienation-lobby","proto":1,"backend":"1.0.0"}`, and the launcher's Connection test says Lobby: Ready.
+   `{"service":"alienation-lobby","proto":1,"backend":"1.1.0"}`, and the launcher's Connection test says Lobby: Ready.
 6. If the subdomain differs from the one in `kDefaultLobbyUrl`, change that constant (players must not need `ALN_LOBBY`).
 
 The Worker uses `CF-Connecting-IP` as each player's address and `request.cf.country` for the country statistics.
@@ -93,12 +100,13 @@ Every protection is invisible to a client that behaves; limits live in memory (`
 `src/metrics.js` keeps anonymous aggregate counts in the Durable Object: sessions (per platform, version and country),
 rooms created, joins, peaks, closed rooms with their largest occupancy and lifetime, rooms that had a guest and rooms the
 relay carried. Counted in memory and written with the 15-minute diagnostics (never one write per event): refused joins by
-reason (`join_failed`), relay frames and payload bytes (`relay`), room leaves, friend requests and new friendships
-(`activity`), and the abuse diagnostics (`abuse`). No row names a player, an account, an address or a room.
+reason (`join_failed`), relay frames and payload bytes (`relay`), room leaves, friend requests, new friendships, sessions
+created and squad invitations sent, accepted and declined (`activity`), and the abuse diagnostics (`abuse`). No row names a player, an account, an address or a room.
 
 `/admin` (Bearer `ALN_DASHBOARD_TOKEN`) has the Dashboard (Lobby health, Connection health, Room lifecycle, Relay usage,
 Friends, Abuse protection, history with period comparisons) and Bugs tabs. The live summary also shows the backend
-version, the lobby protocol, and the connected players per game build and online protocol.
+version, the lobby protocol, the connected players per game build and online protocol, the joinable rooms, and the
+open rooms by players and seats and by game build.
 
 ```
 curl -H "Authorization: Bearer <token>" https://alienation-lobby.<subdomain>.workers.dev/admin/api/summary

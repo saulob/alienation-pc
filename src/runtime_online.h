@@ -9,6 +9,7 @@
 
 #include "net/addr.h"
 #include "net/identity.h"
+#include "net/json.h"
 #include "net/online_config.h"
 #include "net/peer_socket.h"
 
@@ -36,6 +37,26 @@ inline uint16_t peer_member(const net::Endpoint& e) { return e.ip == kPeerAddres
 void pump();
 // Reads the developer overrides of the rooms (ALN_JOIN_CODE).
 void matching2_configure();
+// Keeps the lobby link up from now on (friends see the player online, invitations arrive), started again when it drops.
+void start_presence();
+// One lobby request answered on the calling thread (a WebApi request), up to `timeout_ms`; false with `code` otherwise.
+// Game callbacks still run only from pump().
+bool lobby_call(const std::string& op, net::Json body, net::Json* reply, std::string* code, int timeout_ms = 8000);
+// A request whose answer nobody waits for.
+void lobby_send(const std::string& op, net::Json body);
+// The game is ending: leaves the room and closes the lobby link so the seat and the presence go at once; waits for the
+// lobby's answer for at most a second.
+void leave_for_exit();
+std::string own_build();
+
+// NP sessions, invitations and the Invitation dialog (runtime_webapi.cpp).
+uintptr_t webapi_export(const std::string& symbol);
+// A lobby "invite.*" or "friend.*" event, on the pump thread.
+void sessions_event(const std::string& event, const net::Json& body);
+// Per pump: invitation prompts and the launcher's pending join.
+void sessions_pump();
+// A Join or an accepted invitation the launcher left for this game process (online_join.ini in the profile).
+void load_pending_join(const std::string& user_dir);
 uintptr_t matching2_export(const std::string& symbol);
 uintptr_t p2p_export(const std::string& symbol);
 

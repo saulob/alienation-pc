@@ -55,7 +55,13 @@ PLAYING
   Fullscreen.
 - Xbox and PlayStation controllers and the keyboard are supported; the
   launcher's Controls page lists the keys.
-- Online play is not available yet. The launcher makes no online connection.
+- Online co-op (2 to 4 players): turn Online play On in the launcher's Online
+  page, run the Connection test once, add friends with their Friend Code, then
+  use the game's own squad menus (Create Squad, Join Squad, Invite friends).
+  Invitations and Join also work from the launcher's Online page. With Online
+  play Off the game makes no online connection.
+- Local co-op (CUSA00062 1.06 and DUPLEX): up to four controllers; press
+  OPTIONS on another controller to join.
 
 
 WHERE THINGS ARE

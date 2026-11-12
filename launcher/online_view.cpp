@@ -22,11 +22,13 @@ const char* OnlineTabLabel(OnlineTab tab) {
     return "";
 }
 
-std::vector<OnlineSection> OnlinePageSections(bool on, OnlineTab tab, size_t friend_requests, bool lobby_visible) {
+std::vector<OnlineSection> OnlinePageSections(bool on, OnlineTab tab, size_t friend_requests, bool lobby_visible,
+                                              size_t invitations) {
     if (!on) {
         return {OnlineSection::kOnlinePlay};
     }
     std::vector<OnlineSection> sections{OnlineSection::kOnlinePlay, OnlineSection::kTabs};
+    if (tab != OnlineTab::kSettings) sections.push_back(OnlineSection::kStatusLine);
     switch (tab) {
     case OnlineTab::kSettings:
         for (const OnlineSection section : {OnlineSection::kOnlineName, OnlineSection::kFriendCode,
@@ -35,6 +37,9 @@ std::vector<OnlineSection> OnlinePageSections(bool on, OnlineTab tab, size_t fri
         }
         break;
     case OnlineTab::kFriends:
+        if (invitations > 0) {
+            sections.push_back(OnlineSection::kInvitations);
+        }
         if (friend_requests > 0) {
             sections.push_back(OnlineSection::kFriendRequests);
         }
@@ -65,6 +70,81 @@ const char* ConnectionTestRunningNote(bool windows) {
                    : nullptr;
 }
 
+const char* ConnectionStateText(ConnectionState state) {
+    switch (state) {
+    case ConnectionState::kOffline: return "Offline";
+    case ConnectionState::kConnecting: return "Connecting";
+    case ConnectionState::kConnected: return "Connected";
+    case ConnectionState::kLimited: return "Limited";
+    case ConnectionState::kNotReady: return "Not ready";
+    }
+    return "";
+}
+
+ConnectionStatus ConnectionStatusOf(bool online_on, OnlineLink link, const net::ConnectionFacts* last_test, bool testing) {
+    using Mark = net::ConnectionReport::Mark;
+    ConnectionStatus status;
+    if (!online_on) {
+        status.headline = "Online play is off: the game makes no online connections.";
+        return status;
+    }
+    const bool up = link == OnlineLink::kUp;
+    const bool unreachable = link == OnlineLink::kUnreachable;
+    if (up) {
+        status.rows.push_back({"Lobby", Mark::kOk, "Ready", "Connected to the online service."});
+    } else if (unreachable) {
+        status.rows.push_back({"Lobby", Mark::kProblem, "Not ready", "Lobby unavailable: the online service cannot be reached."});
+    } else {
+        status.rows.push_back({"Lobby", Mark::kNote, "Connecting", "Connecting to the online service..."});
+    }
+    net::ConnectionReport report;
+    if (last_test) {
+        net::ConnectionFacts facts = *last_test;
+        // While the link connects, the test's own sign-in stands; once it is up or unreachable, the link decides.
+        if (up || unreachable) facts.lobby_ok = up;
+        report = net::summarize_connection(facts);
+        status.tested = true;
+        for (size_t i = 1; i < report.lines.size(); ++i) {
+            const net::ConnectionReport::Line& line = report.lines[i];
+            status.rows.push_back({line.label, line.mark, net::ConnectionStatusText(line.mark), line.text});
+        }
+    } else {
+        for (const char* label : {"Public", "Direct", "Router", "Relay"}) {
+            status.rows.push_back({label, Mark::kNote, "Not tested", "Run the Connection test."});
+        }
+    }
+    if (unreachable) {
+        status.state = ConnectionState::kNotReady;
+        status.headline = "Not ready: the online service cannot be reached right now.";
+    } else if (!up) {
+        status.state = ConnectionState::kConnecting;
+        status.headline = "Connecting to the online service...";
+    } else if (testing) {
+        status.state = ConnectionState::kConnected;
+        status.headline = "Connected. Testing how other players reach you...";
+    } else if (!status.tested) {
+        status.state = ConnectionState::kConnected;
+        status.headline = "Connected. Run the Connection test to check how other players reach you.";
+    } else if (report.ready) {
+        const bool direct = report.lines.size() > 2 && report.lines[2].mark == Mark::kOk;
+        status.state = ConnectionState::kConnected;
+        status.headline = direct ? "Connected. Ready for online play."
+                                 : "Connected. Ready for online play: players who cannot connect to you directly play "
+                                   "through the relay.";
+    } else {
+        status.state = ConnectionState::kLimited;
+        status.headline = report.verdict + ".";
+    }
+    return status;
+}
+
+std::string TestedAgoText(int64_t seconds) {
+    if (seconds < 60) return "Tested just now";
+    if (seconds < 3600) return "Tested " + std::to_string(seconds / 60) + " min ago";
+    if (seconds < 2 * 86400) return "Tested " + std::to_string(seconds / 3600) + " h ago";
+    return "Tested " + std::to_string(seconds / 86400) + " days ago";
+}
+
 ConnectionTestLook ConnectionTestLookOf(bool required) {
     return required ? ConnectionTestLook{true, true, "Connection test required"} : ConnectionTestLook{};
 }
@@ -82,7 +162,8 @@ std::vector<OnlinePlayer> ReadOnlinePlayers(const net::Json& rows) {
         const std::string& shown = row["display_name"].as_string();
         OnlinePlayer player{row["account"].as_string(), shown.empty() ? row["name"].as_string() : shown, row["online"].as_bool(),
                             row["room"].as_u64() != 0, row["platform"].as_string(), row["version"].as_string(),
-                            int(row["online_protocol"].as_int()), row["build"].as_string(), row["joinable"].as_bool()};
+                            int(row["online_protocol"].as_int()), row["build"].as_string(), row["joinable"].as_bool(),
+                            row["session"].as_string()};
         if (player.name.empty()) {
             player.name = net::kDefaultOnlineName;
         }
@@ -108,15 +189,31 @@ FriendStatus FriendStatusOf(const OnlinePlayer& player, const std::string& local
         status.text += " \xC2\xB7 v" + player.version;
     }
     const bool other_build = !player.build.empty() && !local_build.empty() && player.build != local_build;
-    status.incompatible = player.in_room && (!net::online_compatible(player.online_protocol) || other_build);
+    status.incompatible = other_build || (player.in_room && !net::online_compatible(player.online_protocol));
     return status;
+}
+
+std::string FriendSectionTitle(const char* section, size_t count) {
+    return std::string(section) + " (" + std::to_string(count) + ")";
+}
+
+bool CanJoinFriend(const OnlinePlayer& player, const std::string& local_build) {
+    return player.online && player.joinable && !player.session.empty() && !local_build.empty() && player.build == local_build &&
+           net::online_compatible(player.online_protocol);
 }
 
 std::vector<PublicRoom> ReadPublicRooms(const net::Json& rows) {
     std::vector<PublicRoom> rooms;
     for (const net::Json& row : rows.items()) {
         PublicRoom room{row["host"].as_string(), int(row["players"].as_int()), int(row["slots"].as_int()),
-                        row["joinable"].as_bool(), row["version"].as_string(), int(row["minutes"].as_int())};
+                        row["joinable"].as_bool(), row["version"].as_string(), int(row["minutes"].as_int()),
+                        row["session"].as_string()};
+        for (const net::Json& attr : row["ints"].items()) {
+            if (attr.items().size() != 2) continue;
+            const int64_t id = attr.items()[0].as_int(), value = attr.items()[1].as_int();
+            if (id == 0x4d) room.game_mode = int(value);
+            if (id == 0x4f) room.world_level = int(value);
+        }
         if (room.host.empty() || room.players < 1 || room.slots < room.players) continue;
         rooms.push_back(std::move(room));
     }
@@ -126,6 +223,8 @@ std::vector<PublicRoom> ReadPublicRooms(const net::Json& rows) {
 std::string PublicRoomStatus(const PublicRoom& room) {
     std::string text = std::to_string(room.players) + "/" + std::to_string(room.slots) + " players \xC2\xB7 ";
     text += room.joinable ? "Joinable" : "Full";
+    if (room.game_mode >= 0) text += room.game_mode & 1 ? " \xC2\xB7 Hardcore" : " \xC2\xB7 Normal";
+    if (room.world_level > 0) text += " \xC2\xB7 World level " + std::to_string(room.world_level);
     if (!room.version.empty()) text += " \xC2\xB7 v" + room.version;
     text += " \xC2\xB7 " + (room.minutes < 1 ? std::string("just opened") : std::to_string(room.minutes) + " min");
     return text;
@@ -133,6 +232,36 @@ std::string PublicRoomStatus(const PublicRoom& room) {
 
 std::string FriendRequestText(const OnlinePlayer& sender) {
     return sender.name + " wants to be your friend";
+}
+
+std::vector<SquadInvitation> ReadSquadInvitations(const net::Json& rows) {
+    std::vector<SquadInvitation> invitations;
+    for (const net::Json& row : rows.items()) {
+        const std::string& shown = row["display_name"].as_string();
+        SquadInvitation i{row["invitation"].as_string(), row["session"].as_string(), shown.empty() ? row["name"].as_string() : shown,
+                          row["build"].as_string(), int(row["players"].as_int()), int(row["slots"].as_int()),
+                          int(row["minutes"].as_int()), row["joinable"].as_bool()};
+        if (i.invitation.empty() || i.session.empty()) continue;
+        if (i.name.empty()) i.name = net::kDefaultOnlineName;
+        invitations.push_back(std::move(i));
+    }
+    return invitations;
+}
+
+bool CanAcceptInvitation(const SquadInvitation& invitation, const std::string& local_build) {
+    return invitation.joinable && !local_build.empty() && invitation.build == local_build;
+}
+
+std::string SquadInvitationText(const SquadInvitation& invitation, const std::string& local_build) {
+    if (local_build.empty()) return "Install the game to join.";
+    if (invitation.build != local_build) return "Another game version or region: " + invitation.build + ".";
+    if (!invitation.joinable) return "The squad is full or closed.";
+    return std::to_string(invitation.players) + "/" + std::to_string(invitation.slots) + " players \xC2\xB7 " +
+           (invitation.minutes < 1 ? std::string("just now") : std::to_string(invitation.minutes) + " min ago");
+}
+
+std::string PendingJoinText(const std::string& session, const std::string& invitation, int64_t unix_seconds) {
+    return "session=" + session + "\ninvitation=" + invitation + "\ntime=" + std::to_string(unix_seconds) + "\n";
 }
 
 void SortLobbyPlayers(std::vector<LobbyPlayer>& players) {

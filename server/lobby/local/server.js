@@ -67,6 +67,8 @@ export function startLobbyServer({ host: address = '127.0.0.1', port = 8790, db 
     res.end(JSON.stringify({ service: 'alienation-lobby (local)', proto: PROTOCOL, sockets: host.conns.size }));
   });
 
+  // Sockets closing after close() was called never reach the lobby: its database is closed.
+  let stopping = false;
   server.on('upgrade', (req, socket) => {
     const remote = req.socket.remoteAddress?.replace(/^::ffff:/, '') ?? '';
     const observed = testObservedAddress && remote === '127.0.0.1' ? new URL(req.url, 'ws://lobby').searchParams.get('observed') : null;
@@ -91,7 +93,7 @@ export function startLobbyServer({ host: address = '127.0.0.1', port = 8790, db 
         lobby.relay(conn, new Uint8Array(bytes));
       },
       onClose() {
-        if (!conn) return;
+        if (!conn || stopping) return;
         lobby.closed(conn);
         host.conns.delete(conn);
         log(`socket ${first.cid} closed (${host.conns.size} open)`);
@@ -119,6 +121,9 @@ export function startLobbyServer({ host: address = '127.0.0.1', port = 8790, db 
         lobby,
         host,
         close: () => new Promise((done) => {
+          stopping = true;
+          host.onAlarm = null;
+          clearTimeout(host.timer);
           for (const conn of host.conns) conn.close(1001, 'server stopping');
           server.close(() => {
             host.sql.close();

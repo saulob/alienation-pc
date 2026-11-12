@@ -281,26 +281,35 @@ void TextEntryBox() {
     ImGui::End();
 }
 
+// A centred panel of a fixed share of the display: the title, rows that scroll (room for at least six at 720p) and
+// the controls.
 void ChoiceBox() {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f,
-                                   viewport->WorkPos.y + viewport->WorkSize.y * 0.5f),
+    const ImVec2 area = viewport->WorkSize;
+    const ImVec2 size(std::min(std::max(area.x * 0.46f, 560.0f * base_scale), area.x * 0.9f),
+                      std::min(std::max(area.y * 0.58f, 400.0f * base_scale), area.y * 0.9f));
+    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + area.x * 0.5f, viewport->WorkPos.y + area.y * 0.5f),
                             ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSizeConstraints(ImVec2(viewport->WorkSize.x * 0.36f, 0.0f),
-                                        ImVec2(viewport->WorkSize.x * 0.8f, viewport->WorkSize.y * 0.8f));
+    ImGui::SetNextWindowSize(size, ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.94f);
-    ImGui::Begin("##choice", nullptr,
-                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
-                     ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
-                     ImGuiWindowFlags_NoFocusOnAppearing);
+    const ImGuiWindowFlags passive = ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing;
+    ImGui::Begin("##choice", nullptr, ImGuiWindowFlags_NoDecoration | passive);
+    ImGui::SetWindowFontScale(1.35f);
     ImGui::TextColored(ImVec4(0.85f, 0.72f, 0.45f, 1.0f), "%s", choice_title.c_str());
+    ImGui::SetWindowFontScale(1.0f);
     ImGui::Separator();
+    const float footer = ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y;
+    ImGui::BeginChild("##choice_rows", ImVec2(0.0f, -footer), ImGuiChildFlags_None, passive);
+    ImGui::SetWindowFontScale(1.3f);
     // Save pictures are 228x128; rows without one keep the text aligned when others have one.
     const bool pictures = std::any_of(choice_textures.begin(), choice_textures.end(),
                                       [](ImTextureData* tex) { return tex != nullptr; });
     const ImVec2 picture_size(228.0f * base_scale, 128.0f * base_scale);
+    const float pad = 4.0f * base_scale;
+    const float right = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
     for (int i = 0; i < int(choice_items.size()); ++i) {
         const bool selected = i == choice_index;
+        ImGui::Dummy(ImVec2(0.0f, pad));
         ImGui::BeginGroup();
         ImTextureData* tex = i < int(choice_textures.size()) ? choice_textures[i] : nullptr;
         if (tex) {
@@ -318,17 +327,13 @@ void ChoiceBox() {
         }
         ImGui::EndGroup();
         if (selected) {
-            if (pictures) {
-                const ImVec2 min = ImGui::GetItemRectMin(), max = ImGui::GetItemRectMax();
-                const float pad = 3.0f * base_scale;
-                ImGui::GetWindowDrawList()->AddRect(ImVec2(min.x - pad, min.y - pad),
-                                                    ImVec2(max.x + pad, max.y + pad),
-                                                    IM_COL32(255, 230, 140, 255), 0.0f, 0,
-                                                    2.0f * base_scale);
-            }
+            const ImVec2 min = ImGui::GetItemRectMin(), max = ImGui::GetItemRectMax();
+            ImGui::GetWindowDrawList()->AddRect(ImVec2(min.x - pad, min.y - pad), ImVec2(std::max(max.x, right), max.y + pad),
+                                                IM_COL32(255, 230, 140, 255), 3.0f * base_scale, 0, 2.0f * base_scale);
             ImGui::SetScrollHereY();
         }
     }
+    ImGui::EndChild();
     ImGui::Separator();
     ImGui::TextDisabled("%s", aln::Tr("Up/Down or D-pad: choose   Enter or Cross (A): OK   Esc or Circle (B): cancel"));
     ImGui::End();

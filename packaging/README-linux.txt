@@ -40,7 +40,10 @@ INSTALL
 Start the AppImage, click "Install game..." on the Play page and select your
 .pkg file. When the Play page says "Ready to play", press PLAY.
 
-Online play is not available yet. The launcher makes no online connection.
+Online co-op: turn Online play On in the launcher's Online page, run the
+Connection test once, add friends with their Friend Code and use the game's
+own squad menus. With Online play Off the game makes no online connection.
+Online play on Linux is experimental.
 
 
 LICENSE

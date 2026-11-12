@@ -13,7 +13,8 @@ export const DIMENSIONS = ['platform', 'platform_mix', 'version', 'country', 're
 export const TALLIES = {
   join_failed: new Set(['not_found', 'full', 'closed', 'incompatible', 'name_taken']),
   relay: new Set(['frames', 'bytes']),
-  activity: new Set(['room_leaves', 'friend_requests', 'friendships']),
+  activity: new Set(['room_leaves', 'friend_requests', 'friendships', 'sessions_created', 'invites_sent', 'invites_accepted',
+    'invites_declined']),
 };
 export const LIFETIMES = [['under_1m', 60e3], ['1_5m', 5 * 60e3], ['5_15m', 15 * 60e3], ['15_60m', 60 * 60e3], ['over_1h', Infinity]];
 export const DIAGNOSTICS = new Set(['ws_upgrade_accepted', 'ws_upgrade_limited', 'ws_upgrade_ip_cap', 'hello_accepted',
@@ -238,7 +239,9 @@ export class Metrics {
       day,
       live: { online: live.online, in_rooms: live.in_rooms, rooms: live.rooms, platform: sorted(live.platform),
         version: sorted(live.version), country: sorted(live.country), protocol: sorted(live.protocol ?? new Map()),
-        build: sorted(live.build ?? new Map()), relay_capable: live.relay_capable ?? 0 },
+        build: sorted(live.build ?? new Map()), relay_capable: live.relay_capable ?? 0,
+        joinable_rooms: live.joinable_rooms ?? 0, room_players: sorted(live.room_players ?? new Map()),
+        room_build: sorted(live.room_build ?? new Map()) },
       today: { ...today, peak_online: Math.max(today.peak_online, live.online),
         peak_in_rooms: Math.max(today.peak_in_rooms, live.in_rooms), peak_rooms: Math.max(today.peak_rooms, live.rooms) },
     };

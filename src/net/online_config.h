@@ -16,6 +16,9 @@ inline constexpr char kDefaultStunServers[] = "stun.cloudflare.com:3478,stun.l.g
 // The production lobby (server/lobby); only the developer override ALN_LOBBY replaces it.
 inline constexpr char kDefaultLobbyUrl[] = "wss://alienation-lobby.saulobenigno.workers.dev";
 inline constexpr char kDefaultOnlineName[] = "Player";
+// A Join or an accepted invitation the launcher hands to the game it starts: session=, invitation=, time= (Unix seconds)
+// lines in the profile folder; the game reads and deletes it at start and ignores one older than ten minutes.
+inline constexpr char kPendingJoinFile[] = "online_join.ini";
 
 struct OnlineConfig {
     bool enabled = false;

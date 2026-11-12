@@ -3,13 +3,15 @@
 #include <cstdlib>
 #include <string>
 
+#include "net/connection_test.h"
 #include "settings.h"
 
 namespace aln {
 
 bool IsOnlineSetting(std::string_view key) {
     for (const std::string_view online :
-         {kOnlineEnabledKey, kOnlineNameKey, kOnlineUdpPortKey, kOnlineStunKey, kConnectionTestPortKey}) {
+         {kOnlineEnabledKey, kOnlineNameKey, kOnlineUdpPortKey, kOnlineStunKey, kConnectionTestPortKey,
+          kConnectionTestResultKey}) {
         if (key == online) {
             return true;
         }
@@ -26,6 +28,11 @@ bool IsValidOnlineSetting(std::string_view key, std::string_view value) {
     }
     if (key == kOnlineNameKey) {
         return value.size() <= 64;
+    }
+    if (key == kConnectionTestResultKey) {
+        net::ConnectionFacts facts;
+        int64_t when = 0;
+        return value.empty() || net::decode_connection_facts(std::string(value), facts, when);
     }
     return true;
 }
@@ -54,14 +61,14 @@ bool ConnectionTestNeeded(const trg::SettingsStore& settings, bool online_on, bo
     return testing || std::atoi(settings.Get(kConnectionTestPortKey, "0").c_str()) != port;
 }
 
-bool RecordConnectionTest(LauncherSettings& settings, uint16_t port) {
-    return settings.SaveNow({{kConnectionTestPortKey, std::to_string(port)}});
+bool RecordConnectionTest(LauncherSettings& settings, uint16_t port, const std::string& result) {
+    return settings.SaveNow({{kConnectionTestPortKey, std::to_string(port)}, {kConnectionTestResultKey, result}});
 }
 
 void ForgetConnectionTestWhenOff(trg::SettingsStore& settings, bool online_on) {
-    if (!online_on && settings.Get(kConnectionTestPortKey, "0") != "0") {
-        settings.Set(kConnectionTestPortKey, "0");
-    }
+    if (online_on) return;
+    if (settings.Get(kConnectionTestPortKey, "0") != "0") settings.Set(kConnectionTestPortKey, "0");
+    if (!settings.Get(kConnectionTestResultKey, "").empty()) settings.Set(kConnectionTestResultKey, "");
 }
 
 } // namespace aln

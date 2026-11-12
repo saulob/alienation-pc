@@ -19,6 +19,7 @@
 #include "aln_resolution.h"
 #include "skip_intro.h"
 #include "exit_game.h"
+#include "online_status.h"
 #include "exit_game_stream.h"
 #include "text_fix.h"
 #include "controller_prompts.h"
@@ -251,7 +252,9 @@ static LONG CALLBACK vectored_fault(EXCEPTION_POINTERS *info) {
     const EXCEPTION_RECORD *record=info->ExceptionRecord;
     DWORD code=record->ExceptionCode;
     if (code==EXCEPTION_ACCESS_VIOLATION && record->NumberParameters>=2) {
-        /* GPU page tracking (write-protected guest pages) is resolved first. */
+        if (runtime_memory_commit_fault((uintptr_t)record->ExceptionInformation[1],(int)record->ExceptionInformation[0]))
+            return EXCEPTION_CONTINUE_EXECUTION;
+        /* GPU page tracking (write-protected guest pages) is resolved next. */
         if (gpu_enabled && alngpu_handle_fault(info,(void *)record->ExceptionInformation[1])) return EXCEPTION_CONTINUE_EXECUTION;
         if (runtime_fault_recover) {
             /* A speculative guest memory read (GPU draw preparation) faulted: the thread resumes
@@ -430,22 +433,29 @@ static int sfo_value(const char *path, const char *key, char *text, size_t text_
     }
     return 0;
 }
-/* The Options row and its hooks go in together: the bytecode is patched only when the hooked code is the known one. */
-static void install_exit_game(const char *app0, const char *build_key, uint8_t *code, uint64_t size, uint8_t *stubs,
-                              size_t stubs_size) {
+/* Each script patch goes in with its hooks: the bytecode is patched only when the hooked code is the known one. */
+static void install_scripts(const char *app0, const char *build_key, uint8_t *code, uint64_t size, uint8_t *exit_stubs,
+                            size_t exit_stubs_size, uint8_t *status_stubs, size_t status_stubs_size) {
     const ExitGameSite *site = exit_game_site(build_key);
     const char *why = "";
-    char detail[160] = "";
-    if (!exit_game_verify(code, size, site, &why)) {
-        printf("Exit Game: unavailable: %s\n", why);
-        return;
-    }
-    if (aln_exit_game_stream_install(app0, build_key, detail, sizeof(detail)) != 0) {
-        printf("Exit Game: unavailable: %s\n", detail);
+    int wanted = 0;
+    if (exit_game_verify(code, size, site, &why)) wanted |= ALN_SCRIPT_EXIT_GAME;
+    else printf("Exit Game: unavailable: %s\n", why);
+    if (online_status_install(code, size, build_key, runtime_online_status, status_stubs, status_stubs_size))
+        wanted |= ALN_SCRIPT_ONLINE_STATUS;
+    if (!wanted) return;
+    AlnScriptPatches patches;
+    aln_script_stream_install(app0, build_key, wanted, &patches);
+    if (wanted & ALN_SCRIPT_ONLINE_STATUS)
+        printf("Online status: %s%s\n", patches.applied & ALN_SCRIPT_ONLINE_STATUS ? "" : "unavailable: ",
+               patches.online_status);
+    if (!(wanted & ALN_SCRIPT_EXIT_GAME)) return;
+    if (!(patches.applied & ALN_SCRIPT_EXIT_GAME)) {
+        printf("Exit Game: unavailable: %s\n", patches.exit_game);
         return;
     }
     exit_game_set_handler(alngpu_request_close);
-    if (exit_game_install(code, size, site, stubs, stubs_size)) printf("Exit Game: %s\n", detail);
+    if (exit_game_install(code, size, site, exit_stubs, exit_stubs_size)) printf("Exit Game: %s\n", patches.exit_game);
 }
 static int mapped(Segment *segments, uint64_t count, uint64_t address, uint64_t bytes) {
     for (uint64_t i = 0; i < count; ++i)
@@ -775,7 +785,9 @@ int main(int argc, char **argv) {
     const int skip_intro_requested = aln_skip_intro(settings_file);
     const size_t skip_intro_bytes = known_build && skip_intro_requested ? skip_intro_stub_bytes() : 0;
     const size_t exit_game_bytes = known_build ? exit_game_stub_bytes() : 0;
-    const size_t hook_bytes = skip_intro_bytes + exit_game_bytes ? round_page(skip_intro_bytes + exit_game_bytes) : 0;
+    const size_t status_bytes = known_build ? online_status_stub_bytes() : 0;
+    const size_t all_hook_bytes = skip_intro_bytes + exit_game_bytes + status_bytes;
+    const size_t hook_bytes = all_hook_bytes ? round_page(all_hook_bytes) : 0;
     /* The hook stubs follow the image, within a jump of it. */
     image = allocate(round_page(size) + hook_bytes);
     if (fread(image, 1, size, f) != size || fgetc(f) != EOF) fail("incorrect memory image size");
@@ -921,7 +933,8 @@ int main(int argc, char **argv) {
         else puts("Skip Intro: requested but unavailable for an unknown game build: not a supported build");
     }
     if (known_build)
-        install_exit_game(app0,build_key,image,size,image+round_page(size)+skip_intro_bytes,exit_game_bytes);
+        install_scripts(app0,build_key,image,size,image+round_page(size)+skip_intro_bytes,exit_game_bytes,
+                        image+round_page(size)+skip_intro_bytes+exit_game_bytes,status_bytes);
     printf("Display: render resolution %dx%d (%s), aspect ratio %s\n",render_target.width,render_target.height,
            render_resolution->key,aspect_ratio->name);
     const AlnRunSettings run_settings={known_build ? game_build.label : NULL,render_target.width,render_target.height,

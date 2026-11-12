@@ -8,6 +8,8 @@
 
 #define NP_INVALID_ARGUMENT ((int32_t)0x80550003)
 #define NP_USER_NOT_FOUND ((int32_t)0x80550004)
+#define NP_SIGNED_OUT ((int32_t)0x80550006)
+#define NP_AUTH_ISSUER 1
 #define NET_CTL_INVALID_ADDR ((int32_t)0x80412107)
 #define NET_CTL_NOT_CONNECTED ((int32_t)0x80412108)
 #define NP_STATE_SIGNED_IN 2
@@ -29,10 +31,11 @@ static unsigned char np_id[NP_ID_SIZE]; /* SceNpId: online id (16 + terminator +
 static uint32_t local_ip; /* host byte order: 127.0.0.1 is 0x7f000001 */
 static struct { int used, delivered; NpStateCallback callback; void *arg; } state_callbacks[MAX_CALLBACKS];
 static int next_callback=1;
-static struct { int id, started; int32_t result; } requests[MAX_REQUESTS];
+static struct { int id, started, auth; int32_t result; } requests[MAX_REQUESTS];
 static int next_request=0x100;
 static struct { void *callback, *arg; int used; } netctl_callbacks[MAX_CALLBACKS];
 static int logged_availability, logged_parental, logged_plus;
+static volatile int signed_in;
 static void (*pump)(void);
 
 void runtime_np_configure(int on, uint64_t account_id, const char *online_id, uint32_t ip) {
@@ -49,9 +52,11 @@ void runtime_np_configure(int on, uint64_t account_id, const char *online_id, ui
     memset(requests,0,sizeof(requests));
     memset(netctl_callbacks,0,sizeof(netctl_callbacks));
     logged_availability=logged_parental=logged_plus=0;
+    signed_in=0;
     pthread_mutex_unlock(&lock);
 }
 int runtime_np_enabled(void) { return enabled; }
+int runtime_np_signed_in(void) { return signed_in; }
 void runtime_np_set_pump(void (*fn)(void)) { pump=fn; }
 
 static int local_online_id(const char *online_id) {
@@ -98,6 +103,7 @@ static ABI int32_t np_check_callback(void) {
     for (int i=0;i<count;++i) {
         printf("Online: NP signed in as %.16s (user %d)\n",(const char *)id,LOCAL_USER);
         due[i].callback(LOCAL_USER,NP_STATE_SIGNED_IN,id,due[i].arg);
+        signed_in=1;
     }
     if (pump) pump();
     return 0;
@@ -108,7 +114,7 @@ static ABI int32_t np_create_request(const void *param) {
     int32_t id=NP_INVALID_ARGUMENT;
     for (int i=0;i<MAX_REQUESTS;++i) if (!requests[i].id) {
         requests[i].id=next_request++;
-        requests[i].started=0;
+        requests[i].started=requests[i].auth=0;
         requests[i].result=0;
         id=requests[i].id;
         break;
@@ -143,6 +149,27 @@ static ABI int32_t np_poll(int32_t id, int32_t *result) {
     else if (slot>=0) { if (result) *result=requests[slot].result; r=0; }
     pthread_mutex_unlock(&lock);
     return r;
+}
+
+/* ---- NpAuth: the authorization code of the game's UNX Global Matrix login, never issued (online_status.h) ---- */
+/* sceNpAuthGetAuthorizationCode(request, param, SceNpAuthorizationCode *, int *issuer) */
+static ABI int32_t auth_get_code(int32_t id, const void *param, char *code, int32_t *issuer) {
+    (void)param;
+    pthread_mutex_lock(&lock);
+    const int slot=request_slot(id);
+    if (slot>=0) requests[slot].auth=1;
+    pthread_mutex_unlock(&lock);
+    if (slot<0) return NP_INVALID_ARGUMENT;
+    if (code) strcpy(code,"ALIENATIONPC");
+    if (issuer) *issuer=NP_AUTH_ISSUER;
+    return 0;
+}
+/* The game reads only the return value: 1 running, 0 done, anything else failed. */
+static ABI int32_t auth_poll(int32_t id, int32_t *result) {
+    pthread_mutex_lock(&lock);
+    const int slot=request_slot(id), auth=slot>=0 && requests[slot].auth;
+    pthread_mutex_unlock(&lock);
+    return auth ? NP_POLL_RUNNING : np_poll(id,result);
 }
 static void log_once(int *flag, const char *what) {
     pthread_mutex_lock(&lock);
@@ -230,6 +257,9 @@ static const RuntimeExport exports[]={
     {"sceNpAbortRequest",np_abort_request}, {"sceNpPollAsync",np_poll},
     {"sceNpCheckNpAvailability",np_check_availability}, {"sceNpGetParentalControlInfo",np_parental_control},
     {"sceNpCheckPlus",np_check_plus}, {"sceNpGetAccountId",np_account_id},
+    {"sceNpAuthCreateAsyncRequest",np_create_request}, {"sceNpAuthDeleteRequest",np_delete_request},
+    {"sceNpAuthAbortRequest",np_abort_request}, {"sceNpAuthGetAuthorizationCode",auth_get_code},
+    {"sceNpAuthPollAsync",auth_poll},
     {"sceNpRegisterPlusEventCallback",np_ok}, {"sceNpUnregisterPlusEventCallback",np_ok},
     {"sceNpNotifyPlusFeature",np_ok}, {"sceNpSetNpTitleId",np_ok}, {"sceNpSetContentRestriction",np_ok},
     {"sceNetCtlGetState",netctl_state}, {"sceNetCtlGetInfo",netctl_info},

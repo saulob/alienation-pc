@@ -1,5 +1,8 @@
 #include "net/connection_test.h"
 
+#include <cstdio>
+#include <cstring>
+
 #include "net/addr.h"
 #include "net/lobby_link.h"
 #include "net/relay_frame.h"
@@ -31,6 +34,45 @@ uint16_t connection_test_port(const OnlineConfig& config) { return config.udp_po
 
 const char* ConnectionStatusText(ConnectionReport::Mark mark) {
     return mark == ConnectionReport::Mark::kOk ? "Ready" : mark == ConnectionReport::Mark::kNote ? "Limited" : "Not ready";
+}
+
+std::string encode_connection_facts(const ConnectionFacts& f, int64_t when) {
+    const auto bit = [](bool on) { return on ? '1' : '0'; };
+    std::string flags{bit(f.identity_ok), bit(f.lobby_ok),      bit(f.relay_ok),     bit(f.port_open),
+                      bit(f.stun_off),    bit(f.udp_ok),        bit(f.public_address), bit(f.second_answer),
+                      bit(f.same_mapping), char('0' + int(f.router)), bit(f.upnp_off)};
+    return "1:" + flags + ":" + std::to_string(f.udp_port) + ":" + std::to_string(f.lobby_latency_ms) + ":" +
+           std::to_string(when);
+}
+
+bool decode_connection_facts(const std::string& text, ConnectionFacts& out, int64_t& when) {
+    char flags[12] = {};
+    unsigned port = 0;
+    long long latency = 0, at = 0;
+    if (std::sscanf(text.c_str(), "1:%11[0-2]:%u:%lld:%lld", flags, &port, &latency, &at) != 4 || std::strlen(flags) != 11 ||
+        port > 65535 || at <= 0 || flags[9] > '2') {
+        return false;
+    }
+    for (int i = 0; i < 11; ++i) {
+        if (i != 9 && flags[i] > '1') return false;
+    }
+    ConnectionFacts f;
+    f.identity_ok = flags[0] == '1';
+    f.lobby_ok = flags[1] == '1';
+    f.relay_ok = flags[2] == '1';
+    f.port_open = flags[3] == '1';
+    f.stun_off = flags[4] == '1';
+    f.udp_ok = flags[5] == '1';
+    f.public_address = flags[6] == '1';
+    f.second_answer = flags[7] == '1';
+    f.same_mapping = flags[8] == '1';
+    f.router = ConnectionFacts::Router(flags[9] - '0');
+    f.upnp_off = flags[10] == '1';
+    f.udp_port = uint16_t(port);
+    f.lobby_latency_ms = latency < -1 ? -1 : latency;
+    out = f;
+    when = at;
+    return true;
 }
 
 ConnectionReport summarize_connection(const ConnectionFacts& f) {
@@ -119,6 +161,7 @@ ConnectionReport summarize_connection(const ConnectionFacts& f) {
                               "carrier-grade NAT)"
                             : "router: no UPnP mapping");
 
+    r.facts = f;
     r.ready = f.identity_ok && f.lobby_ok && f.port_open && (direct || router_opened || relay);
     if (!f.identity_ok || !f.lobby_ok) {
         r.verdict = "Not ready: cannot reach the online service";

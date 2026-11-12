@@ -609,9 +609,11 @@ void PeerSocket::Handshake(const uint8_t* data, size_t size, const Endpoint& fro
         link->last_progress_ms = now;
         link->next_ping_ms = now;
         link->health.next_check_ms = now + kQualityPeriodMs;
-        std::printf("P2P: link %d to peer %llu connected via %s after %llu ms\n", link->id, (unsigned long long)sender,
-                    is_relay_endpoint(from) ? "the relay" : endpoint_text(from).c_str(),
-                    (unsigned long long)(now - link->started_ms));
+        const char* path = is_relay_endpoint(from)                       ? "the relay"
+                           : classify(from.ip) == AddressKind::kPublic ? "public "
+                                                                         : "LAN ";
+        std::printf("P2P: link %d to peer %llu connected via %s%s after %llu ms\n", link->id, (unsigned long long)sender, path,
+                    is_relay_endpoint(from) ? "" : endpoint_text(from).c_str(), (unsigned long long)(now - link->started_ms));
     }
     if (!reply) SendHello(*link, from, true);
 }

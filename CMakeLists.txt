@@ -45,8 +45,8 @@ target_include_directories(aln_keys PUBLIC src)
 target_link_libraries(aln_keys PUBLIC SDL3::SDL3)
 target_compile_options(aln_keys PRIVATE -Wall -Wextra -Werror)
 
-# The online layer the launcher's Online page is built on (identity, lobby link, STUN, UPnP, peer transport). Dormant:
-# nothing in it runs unless online play is turned on, which this port does not offer yet.
+# The online layer of the launcher's Online page and the game's online play (identity, lobby link, STUN, UPnP, peer
+# transport); nothing in it runs unless Online play is on.
 add_library(aln_net STATIC src/net/addr.cpp src/net/connection_test.cpp src/net/crypto.cpp src/net/identity.cpp
     src/net/json.cpp src/net/lobby_link.cpp src/net/online_config.cpp src/net/online_version.cpp src/net/peer_socket.cpp
     src/net/relay_frame.cpp src/net/stun.cpp src/net/upnp.cpp src/net/websocket.cpp
@@ -74,6 +74,7 @@ set_target_properties(aln_ui_text PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIR
 
 add_subdirectory(gpu)
 add_subdirectory(launcher)
+find_package(ZLIB REQUIRED)
 
 set(ALN_RUNTIME_SOURCES
     src/boot_diagnostic.c
@@ -106,6 +107,9 @@ set(ALN_RUNTIME_SOURCES
     src/runtime_services.c
     src/runtime_thread.c
     src/runtime_time.c
+    src/runtime_users.c
+    src/runtime_webapi.cpp
+    src/online_status.c
     src/skip_intro.c)
 # The built-in system fonts are assembled into runtime_font.c (.incbin): rebuild it when a font changes.
 set(ALN_NOTO_SANS ${CMAKE_SOURCE_DIR}/third_party/fonts/NotoSans-Regular.ttf)
@@ -146,11 +150,11 @@ if (WIN32)
     # The PS4 user range (64 GiB - 1 TiB) must stay free of host allocations: no high-entropy ASLR.
     # The guest main thread runs on the process stack: 16 MiB, committed (guest code has no stack probes).
     target_link_options(alienation PRIVATE -Wl,--disable-high-entropy-va "SHELL:-Xlinker --stack -Xlinker 16777216,16777216")
-    target_link_libraries(alienation PRIVATE aln_launcher alngpu SDL3::SDL3 Freetype::Freetype onecore bcrypt ws2_32 -pthread)
+    target_link_libraries(alienation PRIVATE aln_launcher alngpu SDL3::SDL3 Freetype::Freetype ZLIB::ZLIB onecore bcrypt ws2_32 -pthread)
 else()
     # -rdynamic: fault reports name host symbols (dladdr).
     target_link_options(alienation PRIVATE -rdynamic)
-    target_link_libraries(alienation PRIVATE aln_launcher alngpu SDL3::SDL3 Freetype::Freetype Threads::Threads ${CMAKE_DL_LIBS} m)
+    target_link_libraries(alienation PRIVATE aln_launcher alngpu SDL3::SDL3 Freetype::Freetype ZLIB::ZLIB Threads::Threads ${CMAKE_DL_LIBS} m)
 endif()
 
 # The launcher reads its images next to the executable.
@@ -188,7 +192,6 @@ target_compile_options(aln-resolution-patch-tests PRIVATE -Wall -Wextra -Werror)
 
 # The real Options and Select Campaign code of each prepared build, run before and after the Exit Game patch
 # (tools/test.ps1); not part of the default build.
-find_package(ZLIB REQUIRED)
 add_executable(aln-exit-game-menu-tests EXCLUDE_FROM_ALL tests/exit_game_menu_tests.c launcher/exit_game_script.c)
 target_include_directories(aln-exit-game-menu-tests PRIVATE launcher)
 target_compile_definitions(aln-exit-game-menu-tests PRIVATE ALN_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
@@ -238,9 +241,9 @@ set_target_properties(aln-rtc-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQU
 target_compile_options(aln-rtc-tests PRIVATE $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -Werror -fno-omit-frame-pointer>)
 if (WIN32)
     target_compile_definitions(aln-rtc-tests PRIVATE _WIN32_WINNT=0x0A00 NTDDI_VERSION=0x0A000007)
-    target_link_libraries(aln-rtc-tests PRIVATE aln_launcher alngpu SDL3::SDL3 Freetype::Freetype onecore bcrypt ws2_32 -pthread)
+    target_link_libraries(aln-rtc-tests PRIVATE aln_launcher alngpu SDL3::SDL3 Freetype::Freetype ZLIB::ZLIB onecore bcrypt ws2_32 -pthread)
 else()
-    target_link_libraries(aln-rtc-tests PRIVATE aln_launcher alngpu SDL3::SDL3 Freetype::Freetype Threads::Threads ${CMAKE_DL_LIBS} m)
+    target_link_libraries(aln-rtc-tests PRIVATE aln_launcher alngpu SDL3::SDL3 Freetype::Freetype ZLIB::ZLIB Threads::Threads ${CMAKE_DL_LIBS} m)
 endif()
 
 # Focused tests of libSceIme keyboard functions through the import resolver (tools/test.ps1, tools/build.sh --test); not part of the default
@@ -252,9 +255,9 @@ set_target_properties(aln-ime-keyboard-tests PROPERTIES CXX_STANDARD 20 CXX_STAN
 target_compile_options(aln-ime-keyboard-tests PRIVATE $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -Werror -fno-omit-frame-pointer>)
 if (WIN32)
     target_compile_definitions(aln-ime-keyboard-tests PRIVATE _WIN32_WINNT=0x0A00 NTDDI_VERSION=0x0A000007)
-    target_link_libraries(aln-ime-keyboard-tests PRIVATE aln_launcher alngpu SDL3::SDL3 Freetype::Freetype onecore bcrypt ws2_32 -pthread)
+    target_link_libraries(aln-ime-keyboard-tests PRIVATE aln_launcher alngpu SDL3::SDL3 Freetype::Freetype ZLIB::ZLIB onecore bcrypt ws2_32 -pthread)
 else()
-    target_link_libraries(aln-ime-keyboard-tests PRIVATE aln_launcher alngpu SDL3::SDL3 Freetype::Freetype Threads::Threads ${CMAKE_DL_LIBS} m)
+    target_link_libraries(aln-ime-keyboard-tests PRIVATE aln_launcher alngpu SDL3::SDL3 Freetype::Freetype ZLIB::ZLIB Threads::Threads ${CMAKE_DL_LIBS} m)
 endif()
 
 # Focused tests of libSceJson2 objects through the import resolver (tools/test.ps1, tools/build.sh --test); not part of the default
@@ -266,9 +269,9 @@ set_target_properties(aln-json2-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_RE
 target_compile_options(aln-json2-tests PRIVATE $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -Werror -fno-omit-frame-pointer>)
 if (WIN32)
     target_compile_definitions(aln-json2-tests PRIVATE _WIN32_WINNT=0x0A00 NTDDI_VERSION=0x0A000007)
-    target_link_libraries(aln-json2-tests PRIVATE aln_launcher alngpu SDL3::SDL3 Freetype::Freetype onecore bcrypt ws2_32 -pthread)
+    target_link_libraries(aln-json2-tests PRIVATE aln_launcher alngpu SDL3::SDL3 Freetype::Freetype ZLIB::ZLIB onecore bcrypt ws2_32 -pthread)
 else()
-    target_link_libraries(aln-json2-tests PRIVATE aln_launcher alngpu SDL3::SDL3 Freetype::Freetype Threads::Threads ${CMAKE_DL_LIBS} m)
+    target_link_libraries(aln-json2-tests PRIVATE aln_launcher alngpu SDL3::SDL3 Freetype::Freetype ZLIB::ZLIB Threads::Threads ${CMAKE_DL_LIBS} m)
 endif()
 
 # Focused tests of scePthreadCancel against every blocking wait (tools/test.ps1, tools/build.sh --test); not part of the default
@@ -280,9 +283,9 @@ set_target_properties(aln-thread-cancel-tests PROPERTIES CXX_STANDARD 20 CXX_STA
 target_compile_options(aln-thread-cancel-tests PRIVATE $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -Werror -fno-omit-frame-pointer>)
 if (WIN32)
     target_compile_definitions(aln-thread-cancel-tests PRIVATE _WIN32_WINNT=0x0A00 NTDDI_VERSION=0x0A000007)
-    target_link_libraries(aln-thread-cancel-tests PRIVATE aln_launcher alngpu SDL3::SDL3 Freetype::Freetype onecore bcrypt ws2_32 -pthread)
+    target_link_libraries(aln-thread-cancel-tests PRIVATE aln_launcher alngpu SDL3::SDL3 Freetype::Freetype ZLIB::ZLIB onecore bcrypt ws2_32 -pthread)
 else()
-    target_link_libraries(aln-thread-cancel-tests PRIVATE aln_launcher alngpu SDL3::SDL3 Freetype::Freetype Threads::Threads ${CMAKE_DL_LIBS} m)
+    target_link_libraries(aln-thread-cancel-tests PRIVATE aln_launcher alngpu SDL3::SDL3 Freetype::Freetype ZLIB::ZLIB Threads::Threads ${CMAKE_DL_LIBS} m)
 endif()
 
 # Focused tests of the GPU tiling parameters and macro-tiled addresses (tools/test.ps1); not part of the default build.
@@ -403,19 +406,41 @@ target_compile_options(aln-savedata-tests PRIVATE -Wall -Wextra -Werror)
 add_executable(aln-np-tests EXCLUDE_FROM_ALL tests/np_tests.c src/runtime_np.c)
 target_include_directories(aln-np-tests PRIVATE src)
 target_compile_options(aln-np-tests PRIVATE -Wall -Wextra -Werror)
+# The network status box: its states, texts per language, hook sites, the never-issued authorization code and the script
+# patch run on each prepared build's bytecode (no game).
+add_executable(aln-online-status-tests EXCLUDE_FROM_ALL tests/online_status_tests.c src/online_status.c src/guest_hook.c
+    src/runtime_np.c launcher/exit_game_script.c launcher/online_status_script.c)
+target_include_directories(aln-online-status-tests PRIVATE src launcher)
+target_compile_definitions(aln-online-status-tests PRIVATE ALN_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+target_compile_options(aln-online-status-tests PRIVATE -Wall -Wextra -Werror)
 if (WIN32)
     target_link_libraries(aln-savedata-tests PRIVATE bcrypt -pthread)
     target_link_libraries(aln-np-tests PRIVATE -pthread)
+    target_link_libraries(aln-online-status-tests PRIVATE ZLIB::ZLIB -pthread)
 else()
     target_link_libraries(aln-savedata-tests PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
     target_link_libraries(aln-np-tests PRIVATE Threads::Threads)
+    target_link_libraries(aln-online-status-tests PRIVATE ZLIB::ZLIB Threads::Threads)
 endif()
-# The classic Matching2 and DGRAM_P2P entry points against a loopback development lobby (tools/test.ps1 starts one).
-add_executable(aln-online-hle-tests EXCLUDE_FROM_ALL tests/online_hle_tests.cpp src/runtime_matching2.cpp src/runtime_p2p.cpp)
-target_include_directories(aln-online-hle-tests PRIVATE src)
+# The classic Matching2, NpWebApi sessions, the Invitation dialog, DGRAM_P2P entry points and the launcher's online client
+# against a loopback development lobby (tools/test.ps1 starts one).
+add_executable(aln-online-hle-tests EXCLUDE_FROM_ALL tests/online_hle_tests.cpp src/runtime_matching2.cpp src/runtime_p2p.cpp
+    src/runtime_webapi.cpp src/online_status.c src/guest_hook.c launcher/online_client.cpp launcher/online_view.cpp)
+target_include_directories(aln-online-hle-tests PRIVATE src launcher)
 set_target_properties(aln-online-hle-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 target_compile_options(aln-online-hle-tests PRIVATE -Wall -Wextra)
 target_link_libraries(aln-online-hle-tests PRIVATE aln_net)
+# Local co-op input: SDL3 virtual gamepads through libScePad and libSceUserService; no window, no physical controller.
+add_executable(aln-local-pad-tests EXCLUDE_FROM_ALL tests/local_pad_tests.c src/runtime_pad.c src/runtime_users.c)
+target_include_directories(aln-local-pad-tests PRIVATE src)
+target_compile_options(aln-local-pad-tests PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(aln-local-pad-tests PRIVATE aln_keys SDL3::SDL3 $<IF:$<BOOL:${WIN32}>,-pthread,Threads::Threads>)
+# The launcher's Online page model (sections, connection status, friends, invitations, public rooms); no window.
+add_executable(aln-online-view-tests EXCLUDE_FROM_ALL tests/online_view_tests.cpp launcher/online_view.cpp)
+target_include_directories(aln-online-view-tests PRIVATE launcher src)
+set_target_properties(aln-online-view-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_compile_options(aln-online-view-tests PRIVATE -Wall -Wextra)
+target_link_libraries(aln-online-view-tests PRIVATE aln_net)
 
 if (NOT WIN32)
     # Focused tests of the memory and fiber layers (tools/build.sh --test); not part of the default build.

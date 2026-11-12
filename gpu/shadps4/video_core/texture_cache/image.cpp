@@ -120,8 +120,8 @@ void UniqueImage::Create(const vk::ImageCreateInfo& image_ci) {
     // A full card keeps the image over budget, then in system memory, instead of ending the game.
     if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY) {
         alloc_ci.flags &= ~VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
-        LOG_WARNING(Render_Vulkan, "Allocating image {}x{}x{} over budget", image_ci.extent.width,
-                    image_ci.extent.height, image_ci.extent.depth);
+        LOG_WARNING(Render_Vulkan, "Video memory budget exceeded: image {}x{}x{} retried over budget",
+                    image_ci.extent.width, image_ci.extent.height, image_ci.extent.depth);
         Common::GpuTrace::Record(Common::GpuTrace::Event::AllocationFallback, image_ci.extent.width,
                                  image_ci.extent.height, 1);
         result = vmaCreateImage(allocator, &image_ci_unsafe, &alloc_ci, &unsafe_image, &allocation,
@@ -135,6 +135,12 @@ void UniqueImage::Create(const vk::ImageCreateInfo& image_ci) {
                                  image_ci.extent.height, 2);
         result = vmaCreateImage(allocator, &image_ci_unsafe, &alloc_ci, &unsafe_image, &allocation,
                                 &alloc_info);
+    }
+    if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY) {
+        LOG_CRITICAL(Render_Vulkan,
+                     "Image {}x{}x{} could not be allocated after the over-budget and system-memory "
+                     "attempts; the game cannot continue",
+                     image_ci.extent.width, image_ci.extent.height, image_ci.extent.depth);
     }
     ASSERT_MSG(result == VK_SUCCESS, "Failed allocating image with error {}",
                vk::to_string(vk::Result{result}));

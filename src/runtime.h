@@ -36,6 +36,9 @@ void runtime_mutex_report(void);
 uintptr_t runtime_memory_resolve(const char *name);
 void runtime_memory_report(void);
 int runtime_memory_is_mapped(uintptr_t address, uint64_t size);
+/* Windows: commits the guest page holding `address` on its first use; 1 when the access (0 read, 1 write, 8 execute,
+ * as the access violation reports it) can be retried. */
+int runtime_memory_commit_fault(uintptr_t address, int access);
 const char *runtime_import_name(const char *name);
 uintptr_t runtime_rwlock_resolve(const char *name);
 void runtime_rwlock_report(void);
@@ -108,11 +111,22 @@ uintptr_t runtime_lookup(const RuntimeExport *table, size_t count, const char *n
 uintptr_t runtime_kernel_resolve(const char *name);
 uintptr_t runtime_file_resolve(const char *name);
 uintptr_t runtime_services_resolve(const char *name);
+uintptr_t runtime_users_resolve(const char *name);
+/* 1 once the game polled sceUserServiceGetEvent: its user manager knows the initial user. */
+int runtime_user_events_polled(void);
+/* Queues one SceSystemServiceEvent (eventType @0, data @4; at most 0xc0 bytes) for sceSystemServiceReceiveEvent; 0 when
+ * the queue is full. */
+int runtime_system_event_push(const void *event, size_t size);
 /* Online play for this process (runtime_online.cpp): reads the settings, the profile's online identity and the game
  * build ("CUSA00062-1.00"; NULL for an unknown build, which stays offline), then configures the NP layer. Before the
  * imports are bound. */
 void runtime_online_configure(const char *settings_file, const char *user_dir, const char *build);
 int runtime_online_active(void);
+/* The process is ending: the room and the lobby link are left cleanly (a second at most), so the squad and the friends see
+ * the player go at once instead of after the lobby's grace period. */
+void runtime_online_leave(void);
+/* What the network status box shows: ONLINE_STATUS_* (online_status.h); logs each change. */
+int runtime_online_status(void);
 /* Matching2 and the game's P2P socket while online play is on; 0 otherwise or for another import. */
 uintptr_t runtime_online_resolve(const char *name);
 /* Lobby messages, the endpoint exchange and the queued Matching2 callbacks, on the thread calling sceNpCheckCallback. */
@@ -123,6 +137,8 @@ void runtime_np_configure(int enabled, uint64_t account, const char *online_id, 
 int runtime_np_enabled(void);
 /* Called at the end of every sceNpCheckCallback while online play is on. */
 void runtime_np_set_pump(void (*pump)(void));
+/* The game was told its user signed in. */
+int runtime_np_signed_in(void);
 uintptr_t runtime_np_resolve(const char *name);
 void runtime_file_report(void);
 void runtime_file_configure(const char *app0, const char *user);

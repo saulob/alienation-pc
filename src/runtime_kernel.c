@@ -187,6 +187,7 @@ static ABI __attribute__((noreturn)) void hard_exit(int status) {
     aln_startup_phase("guest exit requested");
     printf("Runtime: guest requested _exit(%d)\n",status);
     runtime_report();
+    runtime_online_leave();
     fflush(stdout);
     if (status == 0) runtime_log_mark_clean_exit();
     runtime_log_finalize();

@@ -1,6 +1,7 @@
 // Online play for this process: the launcher's Online play setting (alienation.ini, ALN_* overrides), the profile's online
-// identity and the game build. With it on, runtime_np.c signs the initial user in, and this layer answers Matching2 and
-// the P2P socket; with it off every import keeps its offline behaviour (runtime_services.c).
+// identity and the game build. With it on, runtime_np.c signs the initial user in, and this layer answers Matching2, NP
+// sessions (NpWebApi), the Invitation dialog and the P2P socket; with it off every import keeps its offline behaviour
+// (runtime_services.c).
 #include "runtime.h"
 
 #include <cstdio>
@@ -53,6 +54,8 @@ extern "C" void runtime_online_configure(const char* settings_file, const char* 
     runtime_np_configure(1, s.identity.account, s.online_id.c_str(), ip);
     runtime_np_set_pump(runtime_online_pump);
     online::matching2_configure();
+    online::load_pending_join(user_dir ? user_dir : "user");
+    online::start_presence();
     std::printf("Online: on as %s, build %s, protocol %d, lobby %s, UDP port %s, UPnP %s\n", s.online_id.c_str(), build,
                 net::kOnlineProtocolVersion, s.config.lobby.empty() ? "not set" : s.config.lobby.c_str(),
                 s.config.udp_port ? std::to_string(s.config.udp_port).c_str() : "3658 or any free one",
@@ -60,6 +63,10 @@ extern "C" void runtime_online_configure(const char* settings_file, const char* 
 }
 
 extern "C" int runtime_online_active(void) { return online::g_settings.enabled ? 1 : 0; }
+
+extern "C" void runtime_online_leave(void) {
+    if (online::g_settings.enabled) online::leave_for_exit();
+}
 
 extern "C" void runtime_online_pump(void) {
     if (online::g_settings.enabled) online::pump();
@@ -71,5 +78,6 @@ extern "C" uintptr_t runtime_online_resolve(const char* name) {
     if (!symbol) return 0;
     const std::string s(symbol);
     if (const uintptr_t f = online::matching2_export(s)) return f;
+    if (const uintptr_t f = online::webapi_export(s)) return f;
     return online::p2p_export(s);
 }
