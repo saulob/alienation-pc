@@ -125,6 +125,27 @@ endif()
 set_target_properties(aln-update-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 target_compile_options(aln-update-tests PRIVATE -Wall -Wextra)
 
+# The update controller against a scripted loopback HTTP server: no release yet (404), 504, dropped connections,
+# stalls, redirects, retries, and the production address and asset names. Never contacts GitHub.
+add_executable(aln-update-network-tests EXCLUDE_FROM_ALL ../tests/update_network_tests.cpp update_config.cpp
+    updater/github_release.cpp updater/install_transaction.cpp updater/json.cpp updater/sha256.cpp
+    updater/update_controller.cpp updater/update_job.cpp updater/update_paths.cpp updater/update_platform.cpp
+    updater/update_zip.cpp updater/version.cpp updater/third_party/miniz/miniz.c)
+target_include_directories(aln-update-network-tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(aln-update-network-tests PRIVATE ALN_PORT_VERSION="${ALN_PORT_VERSION}")
+target_link_libraries(aln-update-network-tests PRIVATE trg_core)
+if (WIN32)
+    target_link_libraries(aln-update-network-tests PRIVATE shell32 ws2_32)
+endif()
+set_target_properties(aln-update-network-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_compile_options(aln-update-network-tests PRIVATE -Wall -Wextra)
+
+# The data folder: beside the program, beside the AppImage file or in $XDG_DATA_HOME, never inside the AppImage.
+add_executable(aln-paths-tests EXCLUDE_FROM_ALL ../tests/paths_tests.cpp)
+target_link_libraries(aln-paths-tests PRIVATE aln_launcher_core)
+set_target_properties(aln-paths-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_compile_options(aln-paths-tests PRIVATE -Wall -Wextra)
+
 # Focused tests of the Bug Report page's logic, on synthetic logs in temporary folders: no window, no network.
 add_executable(aln-incident-tests EXCLUDE_FROM_ALL ../tests/incident_tests.cpp)
 target_compile_definitions(aln-incident-tests PRIVATE ALN_SOURCE_DIR="${PROJECT_SOURCE_DIR}")

@@ -1,10 +1,11 @@
 [Desktop Entry]
 Type=Application
 Name=Alienation PC
-Comment=PC port of Alienation (bring your own game package)
+Comment=PC port of Alienation, bring your own game package
 Exec=AppRun
 Icon=alienation-pc
-Categories=Game;
+Categories=Game;ActionGame;
+Keywords=Alienation;Housemarque;shooter;co-op;
 Terminal=false
 StartupWMClass=alienation
 Actions=Launcher;

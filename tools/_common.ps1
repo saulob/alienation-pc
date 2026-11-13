@@ -174,10 +174,12 @@ $script:Toolchains = [ordered]@{
     clang64 = @{ Dir = 'clang64'; Compiler = 'clang.exe'; Package = 'mingw-w64-clang-x86_64' }
 }
 # Needed to build the loader, runtime and video core.
-$script:BuildTools = @('clang.exe', 'cmake.exe', 'ninja.exe', 'pkgconf.exe', 'SDL3.dll', 'glslang.exe', 'vulkan-1.dll', 'libfreetype-6.dll')
+$script:BuildTools = @('clang.exe', 'cmake.exe', 'ninja.exe', 'pkgconf.exe', 'SDL3.dll', 'glslang.exe', 'vulkan-1.dll', 'libfreetype-6.dll',
+    '..\..\usr\bin\make.exe', '..\..\usr\bin\nasm.exe')
 $script:Clang64Packages = 'mingw-w64-clang-x86_64-{toolchain,cmake,ninja,pkgconf,sdl3,freetype} ' +
     'mingw-w64-clang-x86_64-{vulkan-headers,vulkan-loader,vulkan-memory-allocator,glslang} ' +
-    'mingw-w64-clang-x86_64-{fmt,boost,robin-map,xxhash,libpng,zydis,spirv-tools,spirv-headers,spirv-cross,ffmpeg}'
+    'mingw-w64-clang-x86_64-{fmt,boost,robin-map,xxhash,libpng,zydis,spirv-tools,spirv-headers,spirv-cross} ' +
+    'make nasm'
 
 function Get-ToolchainStatus([string]$Name) {
     $info = $script:Toolchains[$Name]
@@ -215,8 +217,9 @@ function Get-Imports([string]$Path, [string]$Objdump) {
     foreach ($line in $out) { if ($line -match 'DLL Name:\s*(\S+)') { $Matches[1] } }
 }
 
-# The DLLs that $Exe loads from $Dir, directly or through each other; Windows' own DLLs are not in $Dir.
-function Get-DllClosure([string]$Exe, [string]$Dir, [string]$Objdump) {
+# The DLLs that $Exe loads from the folders in $Dir (the first that has a DLL wins), directly or through each other;
+# Windows' own DLLs are not in them.
+function Get-DllClosure([string]$Exe, [string[]]$Dir, [string]$Objdump) {
     $found = [ordered]@{}
     $queue = New-Object System.Collections.Generic.Queue[string]
     $queue.Enqueue($Exe)
@@ -224,14 +227,61 @@ function Get-DllClosure([string]$Exe, [string]$Dir, [string]$Objdump) {
         foreach ($name in Get-Imports $queue.Dequeue() $Objdump) {
             $key = $name.ToLowerInvariant()
             if ($script:SystemProvidedDlls -contains $key -or $found.Contains($key)) { continue }
-            $file = Join-Path $Dir $name
-            if (Test-Path -LiteralPath $file -PathType Leaf) {
-                $found[$key] = (Get-Item -LiteralPath $file).FullName
-                $queue.Enqueue($found[$key])
+            foreach ($folder in $Dir) {
+                $file = Join-Path $folder $name
+                if (Test-Path -LiteralPath $file -PathType Leaf) {
+                    $found[$key] = (Get-Item -LiteralPath $file).FullName
+                    $queue.Enqueue($found[$key])
+                    break
+                }
             }
         }
     }
     return $found
+}
+
+# FFmpeg for AvPlayer is built from gpu\ffmpeg.txt by tools\build-ffmpeg.sh (LGPL, the game's codecs only), never taken
+# from MSYS2, whose GPL-3.0-or-later build cannot ship with this GPL-2.0-only program.
+function Read-FFmpegPin {
+    $pin = @{}
+    foreach ($line in Get-Content -LiteralPath (Join-Path $script:RepoRoot 'gpu\ffmpeg.txt')) {
+        if ($line -match '^\s*(#|$)') { continue }
+        $key, $value = $line -split '\s+', 2
+        $pin[$key] = $value
+    }
+    foreach ($key in 'version', 'url', 'sha256', 'configure') { if (-not $pin[$key]) { throw "gpu\ffmpeg.txt has no $key" } }
+    return $pin
+}
+
+function Get-FFmpegPrefix { Join-Path $script:RepoRoot "cache\deps\ffmpeg\$((Read-FFmpegPin).version)\clang64" }
+
+# Builds FFmpeg in MSYS2 CLANG64 when the prefix does not hold the current pin; returns the prefix.
+function Sync-FFmpeg {
+    $prefix = Get-FFmpegPrefix
+    $work = Join-Path (Split-Path $prefix -Parent) 'work'
+    $bash = Join-Path (Get-Msys2Root) 'usr\bin\bash.exe'
+    if (-not (Test-Path -LiteralPath $bash)) { Stop-Tool 'MSYS2 bash is needed to build FFmpeg (tools\setup.ps1)' }
+    $saved = @{ MSYSTEM = $env:MSYSTEM; CHERE_INVOKING = $env:CHERE_INVOKING }
+    $env:MSYSTEM = 'CLANG64'
+    $env:CHERE_INVOKING = '1'
+    Push-Location $script:RepoRoot
+    try {
+        $command = "bash tools/build-ffmpeg.sh '$($prefix.Replace('\', '/'))' '$($work.Replace('\', '/'))'"
+        & $bash -lc $command 2>&1 | ForEach-Object { Write-Host "  $_"; Write-BuildLogLine "  $_" }
+        if ($LASTEXITCODE -ne 0) { Stop-Tool 'FFmpeg could not be built (tools\build-ffmpeg.sh, gpu\ffmpeg.txt)' }
+    } finally {
+        Pop-Location
+        foreach ($name in $saved.Keys) {
+            if ($null -eq $saved[$name]) { Remove-Item "env:$name" -ErrorAction SilentlyContinue } else { Set-Item "env:$name" $saved[$name] }
+        }
+    }
+    return $prefix
+}
+
+# An FFmpeg DLL is the LGPL build: its licence string says so and its configuration has no --enable-gpl.
+function Test-LgplFFmpegDll([string]$Path) {
+    $text = [Text.Encoding]::GetEncoding(28591).GetString([IO.File]::ReadAllBytes($Path))
+    return $text.Contains('LGPL version 2.1 or later') -and -not $text.Contains('--enable-gpl')
 }
 
 function Test-Sha256([string]$Path, [string]$Expected) {
@@ -363,11 +413,11 @@ function Get-AngleRuntimeProblems([string]$Dir, $Pin, [scriptblock]$Imports) {
 }
 
 # A development run needs nothing on PATH either: everything the game loads sits beside it, as in a release.
-function Install-GameRuntime([string]$Exe, [string]$Runtime, [string]$ToolBin) {
+function Install-GameRuntime([string]$Exe, [string]$Runtime, [string]$ToolBin, [string]$FFmpegBin) {
     $objdump = Join-Path $ToolBin 'llvm-objdump.exe'
     $bin = Split-Path $Exe -Parent
     $pin = Read-AnglePin
-    foreach ($dll in (Get-DllClosure $Exe $ToolBin $objdump).Values) { Copy-IfChanged $dll $bin }
+    foreach ($dll in (Get-DllClosure $Exe @(@($FFmpegBin, $ToolBin) | Where-Object { $_ }) $objdump).Values) { Copy-IfChanged $dll $bin }
     foreach ($file in Get-AngleDlls $pin) {
         $dll = Join-Path $Runtime $file.Name
         Copy-IfChanged $dll $bin

@@ -3,7 +3,7 @@ Version @VERSION@
 
 Alienation for PlayStation 4, running natively on Windows: the game's own code
 runs on the PC with a replacement for the PS4 system libraries and a Vulkan
-renderer. This is an early, unfinished port.
+renderer.
 
 Source code and issue tracker:
 https://github.com/saulob/alienation-pc
@@ -19,10 +19,10 @@ PS4 package (.pkg). This port currently accepts these builds:
   Title ID CUSA04430, APP_VER 01.00 (content ID HP9000-CUSA04430_00-ALIENATIONGAMEKR, Asia)
 
 To add the European 1.06 update, install the base game first, then click
-"Install update..." on the Play page and select the update package. 1.06 is
-recognized but not ported yet: it runs without the 1.00 enhancements (render
-resolution, aspect ratio, frame rate target, Skip Intro, Exit Game, Xbox
-prompts) and is untested. "Remove update" returns to 1.00; saves are kept.
+"Install update..." on the Play page and select the update package. "Remove
+update" returns to 1.00; saves are kept. The DUPLEX single-package repack of
+1.06 is installed with "Install game..." and runs as 1.06. Every build has the
+same port features; local co-op exists only in 1.06 (and DUPLEX).
 
 Any other build is refused, and the log names what was found. A package still
 encrypted for a PS4 console cannot be unpacked on a PC.
@@ -73,10 +73,10 @@ WHERE THINGS ARE
 
 LICENSE
 -------
-The original project code of this port is licensed under the GNU General
-Public License v2.0 or later (GPL-2.0-or-later). The full text is in
-LICENSE.txt. Third-party components keep their own licenses; see the
-"licenses" folder.
+The port's own code is licensed under the GNU General Public License v2.0
+or later, its libSceJson2 code under GPL-2.0 only, so the program is
+distributed under GPL-2.0. The full text is in LICENSE.txt. Third-party
+components keep their own licenses; see the "licenses" folder.
 
 Game files are not included and are not covered by this project's license.
 This port is not affiliated with or endorsed by Housemarque, Sony Interactive

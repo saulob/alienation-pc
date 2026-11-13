@@ -451,8 +451,11 @@ def main() -> int:
     for build, name, offset, oz, od, crc, units, nz, nd, data in scenes:
         payload = zlib.decompress(arrays[data])
         if name == "menu_layout":
-            original = read_stream_block(ROOT / "game" / "prepared" / build / "stream.dat",
-                                         int(offset, 16), int(nd, 16), int(oz), int(od))
+            stream = ROOT / "game" / "prepared" / build / "stream.dat"
+            if not stream.exists():
+                print(f"skipped {build} {name}: {stream} not found")
+                continue
+            original = read_stream_block(stream, int(offset, 16), int(nd, 16), int(oz), int(od))
             print(f"{build} {name}: {len(payload)} bytes (original {len(original)})")
             for failure in verify_layout(payload, original):
                 failures.append(f"{build} {failure}")

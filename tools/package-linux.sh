@@ -34,7 +34,10 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 
 # The release baseline: Ubuntu 20.04. No shipped ELF may need a newer glibc.
 max_glibc=2.31
-desktop_file="Alienation_PC.desktop"
+# The AppStream ID: appimagetool and appimage.github.io read usr/share/metainfo/<desktop file name>.appdata.xml.
+app_id=io.github.saulob.alienation_pc
+desktop_file=$app_id.desktop
+metainfo=usr/share/metainfo/$app_id.appdata.xml
 appimagetool_version=1.9.1
 appimagetool_sha256=ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
 
@@ -43,7 +46,7 @@ excluded='^(ld-linux.*|libc|libm|libdl|librt|libpthread|libresolv|libutil|libnsl
 # Fallback copies, used only when the system's are older than the build's.
 compat_libs='^(libstdc\+\+|libgcc_s)\.so'
 
-forbidden_names='^(game|user|logs|cache|build|prepared|extracted|image|trophy|sce_sys|sce_module|eboot\.bin|param\.sfo|aln\.ini|boot\.bin|content\.bin|image\.json|imports\.json|symbols)$'
+forbidden_names='^(game|user|logs|cache|build|prepared|extracted|image|trophy|sce_sys|sce_module|eboot\.bin|param\.sfo|alienation\.ini|boot\.bin|content\.bin|image\.json|imports\.json|symbols)$'
 forbidden_patterns='\.(pkg|pdb|debug|log|dmp|ini|bin|self|sprx|prx|elf|cpk|sfo|json|trp|spv|pipeline_cache|o|a|tmp|bak|sav|py|ps1|c|cpp|h)$'
 glibc_parts='^(ld-linux.*|libc|libm|libdl|libpthread|librt|libresolv|libutil|libmvec|libanl|libnsl|libBrokenLocale|libthread_db|libnss_.*)\.so'
 
@@ -91,11 +94,26 @@ check_appdir() { # dir [the AppImage file, whose runtime is an ELF too]
             done
         fi
     done < <(find "$dir" -mindepth 1 -print0)
-    for leaf in AppRun "$desktop_file" alienation-pc.png usr/bin/alienation \
+    for leaf in AppRun "$desktop_file" "usr/share/applications/$desktop_file" "$metainfo" alienation-pc.png \
+                usr/share/icons/hicolor/256x256/apps/alienation-pc.png usr/bin/alienation \
                 usr/bin/assets/launcher/sponsor-heart.png \
                 usr/share/licenses/AlienationPC/THIRD-PARTY-LICENSES.txt \
                 usr/share/licenses/AlienationPC/NotoSansTC/LICENSE-NotoSansTC.txt usr/share/doc/AlienationPC/README.txt; do
         [[ -e $dir/$leaf ]] || problem "missing: $leaf"
+    done
+    # FFmpeg must be the LGPL build of gpu/ffmpeg.txt: a GPL one cannot ship with this GPL-2.0-only program.
+    local lib
+    for lib in "$dir"/usr/lib/libav*.so* "$dir"/usr/lib/libsw*.so*; do
+        [[ -f $lib && ! -L $lib ]] || continue
+        grep -a -q -F 'LGPL version 2.1 or later' "$lib" || problem "not the LGPL FFmpeg: ${lib#"$dir"/}"
+        grep -a -q -F -- '--enable-gpl' "$lib" && problem "a GPL FFmpeg: ${lib#"$dir"/}"
+    done
+    # DT_RPATH, not DT_RUNPATH: a host LD_LIBRARY_PATH (Steam's runtime) must not replace the bundled libraries.
+    readelf -d "$dir/usr/bin/alienation" | grep -q '(RPATH).*\[\$ORIGIN/\.\./lib\]' ||
+        problem 'usr/bin/alienation does not carry DT_RPATH $ORIGIN/../lib'
+    readelf -d "$dir/usr/bin/alienation" | grep -q '(RUNPATH)' && problem 'usr/bin/alienation carries a DT_RUNPATH'
+    for lib in "$dir"/usr/lib/*.so*; do
+        readelf -d "$lib" | grep -q '(RUNPATH)' && problem "${lib#"$dir"/} carries a DT_RUNPATH"
     done
     local missing
     missing=$(env -u LD_LIBRARY_PATH ldd "$dir/usr/bin/alienation" | grep 'not found' || true)
@@ -122,6 +140,9 @@ newer_than "$host_glibc" "$max_glibc" &&
 
 version=$(sed -nE 's/^project\(alienation_pc VERSION ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' CMakeLists.txt)
 [[ -n $version ]] || die 'project VERSION not found in CMakeLists.txt'
+# The release date in the AppStream metadata: today (UTC) unless ALN_RELEASE_DATE gives the publication date.
+release_date=${ALN_RELEASE_DATE:-$(date -u +%Y-%m-%d)}
+[[ $release_date =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || die "ALN_RELEASE_DATE is not YYYY-MM-DD: $release_date"
 name=AlienationPC-v$version-x86_64
 loader=$root/build/cmake/linux/bin/alienation
 dist=${out_dir:-$root/dist}
@@ -172,10 +193,13 @@ bundle() {
 bundle "$loader"
 for lib in "$appdir"/usr/lib/*.so*; do
     strip --strip-unneeded "$lib"
-    patchelf --set-rpath '$ORIGIN' "$lib"
+    patchelf --remove-rpath "$lib"
+    patchelf --force-rpath --set-rpath '$ORIGIN' "$lib"
 done
 strip --strip-unneeded "$appdir"/usr/lib/compat/*.so* 2>/dev/null || true
 # DT_RPATH (not RUNPATH) is inherited by the libraries' own dependencies and wins over LD_LIBRARY_PATH.
+# patchelf rewrites an existing DT_RUNPATH in place even with --force-rpath, so the build's one goes first.
+patchelf --remove-rpath "$appdir/usr/bin/alienation"
 patchelf --force-rpath --set-rpath '$ORIGIN/../lib' "$appdir/usr/bin/alienation"
 echo "Bundled: $(cd "$appdir/usr/lib" && ls -- *.so* | tr '\n' ' ')"
 echo "Fallback: $(cd "$appdir/usr/lib/compat" && ls -- *.so* | tr '\n' ' ')"
@@ -188,12 +212,18 @@ gcc_need=$(objdump -T "$appdir/usr/bin/alienation" "$appdir"/usr/lib/*.so* | gre
 sed "s/@GLIBCXX_NEED@/${glibcxx_need:-0}/g; s/@GCC_NEED@/${gcc_need:-0}/g" \
     packaging/linux/AppRun > "$appdir/AppRun"
 chmod 755 "$appdir/AppRun"
-install -m644 packaging/linux/alienation-pc.desktop "$appdir/$desktop_file"
-install -m644 packaging/linux/alienation-pc.desktop "$appdir/usr/share/applications/$desktop_file"
+install -m644 "packaging/linux/$desktop_file" "$appdir/$desktop_file"
+install -m644 "packaging/linux/$desktop_file" "$appdir/usr/share/applications/$desktop_file"
 install -m644 packaging/icons/app-icon-256.png "$appdir/alienation-pc.png"
 install -m644 packaging/icons/app-icon-256.png "$appdir/usr/share/icons/hicolor/256x256/apps/alienation-pc.png"
 ln -s alienation-pc.png "$appdir/.DirIcon"
-desktop-file-validate "$appdir/$desktop_file" 2>/dev/null || true
+desktop-file-validate "$appdir/$desktop_file" || die "$desktop_file does not validate"
+install -d "$appdir/usr/share/metainfo"
+sed "s/@VERSION@/$version/; s/@DATE@/$release_date/" "packaging/linux/$app_id.appdata.xml" > "$appdir/$metainfo"
+grep -q "<release version=\"$version\" date=\"$release_date\"/>" "$appdir/$metainfo" || die 'the metainfo has no release entry'
+if command -v appstreamcli >/dev/null; then
+    appstreamcli validate --no-net "$appdir/$metainfo" || die "$metainfo does not validate"
+fi
 sed "s/@VERSION@/$version/" packaging/README-linux.txt > "$appdir/usr/share/doc/AlienationPC/README.txt"
 
 licenses=$appdir/usr/share/licenses/AlienationPC
@@ -215,7 +245,8 @@ done
 # The licence texts of the distribution packages the bundled libraries come from, or of the sources
 # packaging/linux/ci-deps.sh built them from (it installs those texts in /usr/local/share/licenses/<component>).
 declare -A source_built=([libSDL3]=SDL3 [libfmt]=fmt [libZydis]=zydis [libZycore]=zydis [libxxhash]=xxhash
-                         [libcrypto]=openssl [libssl]=openssl)
+                         [libcrypto]=openssl [libssl]=openssl [libavcodec]=ffmpeg [libavformat]=ffmpeg
+                         [libavutil]=ffmpeg [libswscale]=ffmpeg [libswresample]=ffmpeg)
 manifest=$licenses/SYSTEM-PACKAGES.txt
 {
     echo "Libraries bundled in the AppImage, with the Ubuntu packages or sources they come from and their licence texts."
@@ -232,8 +263,9 @@ for lib in $(cd "$appdir/usr/lib" && ls -- *.so* compat/*.so* 2>/dev/null | sed 
         install -m644 "/usr/share/doc/$package/copyright" "$licenses/system/$package/copyright"
         printf '\n%s (%s %s)\n  Licence text: licenses/system/%s/copyright\n' "$lib" "$package" "$version_of" "$package" >> "$manifest"
     elif component=${source_built[${lib%%.so*}]:-} && [[ -n $component && $(readlink -f -- "$path") == /usr/local/lib/* ]]; then
-        texts=(/usr/local/share/licenses/"$component"/*)
-        [[ -f ${texts[0]} ]] || die "No licence text in /usr/local/share/licenses/$component (run packaging/linux/ci-deps.sh)"
+        texts=()
+        for text in /usr/local/share/licenses/"$component"/*; do [[ $text == *.stamp ]] || texts+=("$text"); done
+        ((${#texts[@]})) && [[ -f ${texts[0]} ]] || die "No licence text in /usr/local/share/licenses/$component (run packaging/linux/ci-deps.sh)"
         mkdir -p "$licenses/system/$component"
         install -m644 "${texts[@]}" "$licenses/system/$component/"
         printf '\n%s (%s, built from source by packaging/linux/ci-deps.sh)\n  Licence text: licenses/system/%s/\n' \

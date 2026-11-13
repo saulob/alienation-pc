@@ -574,6 +574,11 @@ int main(int argc, char **argv) {
     signal(SIGABRT,abort_signal);
     _set_invalid_parameter_handler(invalid_parameter);
     _set_purecall_handler(purecall);
+#else
+    /* Before the launcher's lobby connection: a peer closing a TLS stream or a router's UPnP answer must fail the
+       write, not end the process. */
+    struct sigaction ignore_pipe = {0}; ignore_pipe.sa_handler = SIG_IGN;
+    sigemptyset(&ignore_pipe.sa_mask); sigaction(SIGPIPE, &ignore_pipe, NULL);
 #endif
     if (game_child) {
         puts("Startup: game-only child process");

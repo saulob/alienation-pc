@@ -79,7 +79,7 @@ public:
     }
 
     // Blocking I/O with a deadline; nonblocking sockets underneath so close() can end a wait.
-    bool Write(const void* data, size_t size) {
+    bool Write(const void* data, size_t size, int timeout_ms = 10000) {
         const auto* p = static_cast<const uint8_t*>(data);
         while (size) {
             if (closed_) return false;
@@ -93,14 +93,14 @@ public:
                 }
                 if (n <= 0) {
                     if (e != SSL_ERROR_WANT_READ && e != SSL_ERROR_WANT_WRITE) return false;
-                    if (!Wait(e == SSL_ERROR_WANT_READ ? POLLIN : POLLOUT, 10000)) return false;
+                    if (!Wait(e == SSL_ERROR_WANT_READ ? POLLIN : POLLOUT, timeout_ms)) return false;
                     continue;
                 }
             } else {
                 n = int(::send(fd_, p, size, MSG_NOSIGNAL));
                 if (n < 0) {
                     if (errno != EAGAIN && errno != EWOULDBLOCK) return false;
-                    if (!Wait(POLLOUT, 10000)) return false;
+                    if (!Wait(POLLOUT, timeout_ms)) return false;
                     continue;
                 }
             }
@@ -148,7 +148,7 @@ public:
         return true;
     }
 
-    bool Frame(uint8_t opcode, const void* payload, size_t size) {
+    bool Frame(uint8_t opcode, const void* payload, size_t size, int timeout_ms = 10000) {
         std::vector<uint8_t> frame;
         frame.push_back(uint8_t(0x80 | opcode));
         if (size < 126) {
@@ -167,7 +167,7 @@ public:
         const auto* p = static_cast<const uint8_t*>(payload);
         for (size_t i = 0; i < size; ++i) frame.push_back(p[i] ^ mask[i & 3]);
         std::lock_guard<std::mutex> lock(send_mutex_);
-        return Write(frame.data(), frame.size());
+        return Write(frame.data(), frame.size(), timeout_ms);
     }
 
     bool send_text(const std::string& text) override { return !closed_ && Frame(1, text.data(), text.size()); }
@@ -194,7 +194,7 @@ public:
             std::string payload(size_t(length), '\0');
             if (length && !ReadExact(reinterpret_cast<uint8_t*>(payload.data()), size_t(length))) return false;
             if (opcode == 8) {
-                Frame(8, payload.data(), std::min<size_t>(payload.size(), 2));
+                if (!closing_.exchange(true)) Frame(8, payload.data(), std::min<size_t>(payload.size(), 2));
                 return false;
             }
             if (opcode == 9) {
@@ -209,7 +209,13 @@ public:
         }
     }
 
+    // A close frame tells the lobby the player left, as WinHTTP's shutdown does on Windows; a bare disconnect looks like a
+    // dropped connection, which the lobby holds for a grace period. Bounded so a dead connection cannot delay an exit.
     void close() override {
+        if (!closing_.exchange(true)) {
+            static constexpr uint8_t kNormalClosure[2] = {0x03, 0xe8};
+            Frame(8, kNormalClosure, sizeof(kNormalClosure), 1000);
+        }
         if (closed_.exchange(true)) return;
         ::shutdown(fd_, SHUT_RDWR);
     }
@@ -223,6 +229,7 @@ private:
     int fd_;
     SSL_CTX* context_;
     SSL* ssl_;
+    std::atomic<bool> closing_{false};
     std::atomic<bool> closed_{false};
     std::mutex send_mutex_;
     // The reader thread and senders share one SSL object, which OpenSSL does not allow concurrently; held per call only.

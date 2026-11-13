@@ -93,6 +93,8 @@ Write-Step "Toolchain clang64 ($($tc.Bin)), $config"
 
 Sync-GpuDependencies
 $angleRuntime = Sync-AngleRuntime $tc.Bin
+Write-Step 'FFmpeg (gpu\ffmpeg.txt)'
+$ffmpeg = (Sync-FFmpeg).Replace('\', '/')
 
 if ($Clean -and (Test-Path -LiteralPath $buildDir)) {
     Write-Step 'Cleaning build\cmake'
@@ -101,9 +103,13 @@ if ($Clean -and (Test-Path -LiteralPath $buildDir)) {
 $cache = Join-Path $buildDir 'CMakeCache.txt'
 $configured = (Test-Path -LiteralPath (Join-Path $buildDir 'build.ninja')) -and (Test-Path -LiteralPath $cache) -and
     (Select-String -Path $cache -SimpleMatch "CMAKE_BUILD_TYPE:STRING=$config" -Quiet)
-if (-not $configured) {
+# Another FFmpeg prefix needs a fresh configuration: pkg-config results stay cached otherwise.
+$sameFFmpeg = $configured -and (Select-String -Path $cache -SimpleMatch "ALN_FFMPEG_PREFIX:PATH=$ffmpeg" -Quiet)
+if (-not $configured -or -not $sameFFmpeg) {
     Write-Step 'Configuring'
-    Invoke-Native cmake @('-S', $root, '-B', $buildDir, '-G', 'Ninja', "-DCMAKE_BUILD_TYPE=$config", '-DCMAKE_C_COMPILER=clang')
+    $fresh = if ($configured) { @('--fresh') } else { @() }
+    Invoke-Native cmake (@('-S', $root, '-B', $buildDir, '-G', 'Ninja') + $fresh + @("-DCMAKE_BUILD_TYPE=$config",
+        '-DCMAKE_C_COMPILER=clang', "-DALN_FFMPEG_PREFIX=$ffmpeg"))
     if ($LASTEXITCODE -ne 0) { Stop-Tool 'CMake configuration failed' }
 }
 else { Write-Ok 'CMake configuration reused' }
@@ -111,7 +117,7 @@ Write-Step 'Building'
 Invoke-Native ninja @('-C', $buildDir, 'alienation', 'trg-updater')
 if ($LASTEXITCODE -ne 0) { Stop-Tool 'Build failed' }
 if (-not (Test-Path -LiteralPath $loader)) { Stop-Tool "Missing $loader" }
-Install-GameRuntime $loader $angleRuntime $tc.Bin
+Install-GameRuntime $loader $angleRuntime $tc.Bin (Join-Path $ffmpeg 'bin')
 
 $installed = @(Get-PreparedBuilds)
 if ($installed.Count -eq 0) {

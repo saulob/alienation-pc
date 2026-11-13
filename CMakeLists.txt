@@ -442,7 +442,8 @@ target_link_libraries(aln-online-hle-tests PRIVATE aln_net)
 add_executable(aln-local-pad-tests EXCLUDE_FROM_ALL tests/local_pad_tests.c src/runtime_pad.c src/runtime_users.c)
 target_include_directories(aln-local-pad-tests PRIVATE src)
 target_compile_options(aln-local-pad-tests PRIVATE -Wall -Wextra -Werror)
-target_link_libraries(aln-local-pad-tests PRIVATE aln_keys SDL3::SDL3 $<IF:$<BOOL:${WIN32}>,-pthread,Threads::Threads>)
+target_link_libraries(aln-local-pad-tests PRIVATE aln_keys SDL3::SDL3 $<IF:$<BOOL:${WIN32}>,-pthread,Threads::Threads>
+    $<$<NOT:$<BOOL:${WIN32}>>:m>)
 # The launcher's Online page model (sections, connection status, friends, invitations, public rooms); no window.
 add_executable(aln-online-view-tests EXCLUDE_FROM_ALL tests/online_view_tests.cpp launcher/online_view.cpp)
 target_include_directories(aln-online-view-tests PRIVATE launcher src)
@@ -455,5 +456,10 @@ if (NOT WIN32)
     add_executable(aln-runtime-tests EXCLUDE_FROM_ALL tests/runtime_tests.c src/runtime_memory.c src/runtime_fiber.c src/runtime_thread.c)
     target_include_directories(aln-runtime-tests PRIVATE src)
     target_compile_options(aln-runtime-tests PRIVATE -Wall -Wextra -Werror -fno-omit-frame-pointer)
-    target_link_libraries(aln-runtime-tests PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
+    target_link_libraries(aln-runtime-tests PRIVATE aln_startup_phase Threads::Threads ${CMAKE_DL_LIBS})
+
+    # A peer that closes its socket fails the write instead of killing the process.
+    add_executable(aln-sigpipe-tests EXCLUDE_FROM_ALL tests/sigpipe_tests.c)
+    target_compile_definitions(aln-sigpipe-tests PRIVATE ALN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    target_compile_options(aln-sigpipe-tests PRIVATE -Wall -Wextra -Werror)
 endif()

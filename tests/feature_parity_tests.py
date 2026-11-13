@@ -279,10 +279,98 @@ def check_online_keys():
         check(form['build'] in keys(), f'{name}: online key {form["build"]} is not a build key')
 
 
+# Suites that exist on one platform only, with what covers the same ground on the other.
+WINDOWS_ONLY_SUITES = {
+    'aln-memory-windows-tests': 'aln-runtime-tests (Linux memory and fiber layers)',
+    'aln-crash-guard-tests': 'the loader\'s POSIX fault handler; no Windows crash guard on Linux',
+    'aln-log-tests': 'runtime_log_posix.c; the Windows test covers closed standard handles',
+    'aln-update-helper-tests': 'the AppImage replaces itself without trg-updater.exe (aln-update-tests)',
+}
+LINUX_ONLY_SUITES = ('aln-runtime-tests', 'aln-sigpipe-tests')
+# Linux has no Windows API for these; everything else must be offered on Linux too.
+LINUX_UNAVAILABLE = ('Direct3D 11 renderer (experimental)', 'Allow overlay programs')
+
+
+def windows_suites():
+    return set(re.findall(r"'(aln-[a-z0-9-]+-tests)'", read('tools/test.ps1')))
+
+
+def linux_suites():
+    script = read('tools/build.sh')
+    found = set()
+    for name in ('tests', 'lobby_tests'):
+        match = re.search(rf'^{name}=\(([^)]*)\)', script, re.M)
+        check(match is not None, f'tools/build.sh has no {name}=(...) list')
+        if match:
+            found |= set(match.group(1).split())
+    return found, script
+
+
+def check_platforms():
+    """Every platform feature is declared for Windows, Linux and the Steam Deck, and the sources agree."""
+    states = (parity.SUPPORTED, parity.EQUIVALENT, parity.UNAVAILABLE)
+    for feature, entry in parity.PLATFORM_FEATURES.items():
+        check(len(entry) == 5, f'{feature}: not (Windows, Linux, Steam Deck, builds, note)')
+        windows, linux, deck, builds, note = entry
+        check(all(state in states for state in (windows, linux, deck)), f'{feature}: unknown platform state')
+        check(windows == parity.SUPPORTED, f'{feature}: Windows is the reference and supports every feature')
+        check(bool(note.strip()), f'{feature}: no note')
+        check(builds == parity.ALL_BUILDS or builds in parity.FEATURES, f'{feature}: builds {builds!r} is no build feature')
+        check(parity.platform_builds(feature), f'{feature}: no build has it')
+        check((linux == parity.UNAVAILABLE) == (feature in LINUX_UNAVAILABLE),
+              f'{feature}: Linux leaves it out without a platform reason, or offers what it cannot')
+        check(deck != parity.UNAVAILABLE or linux == parity.UNAVAILABLE, f'{feature}: the Steam Deck drops a Linux feature')
+    check(parity.platform_builds('Local co-op') == ['CUSA00062-1.06', 'DUPLEX'],
+          'Local co-op is offered where the game has none')
+
+    settings = read('launcher/settings.h')
+    check(re.search(r'#ifdef _WIN32\s*\n\s*\{"d3d11", ', settings) is not None and settings.count('"d3d11"') == 1,
+          'Direct3D 11 is offered outside Windows')
+    check(re.search(r'\{"opengl", ', settings) and re.search(r'\{"vulkan", ', settings), 'a renderer is missing')
+    process = read('launcher/game_process.h')
+    check(re.search(r'#ifdef _WIN32\s*\n(?:.*\n)*?inline constexpr bool kSeparateGameProcessAvailable = true;\s*\n#else\s*\n'
+                    r'inline constexpr bool kSeparateGameProcessAvailable = false;', process) is not None,
+          'Allow overlay programs is not Windows only')
+    modes = re.search(r'kFrameRateModes\{([^}]*)\}', read('gpu/shim/aln_frame_pacing.h')).group(1)
+    named = next(feature for feature in parity.PLATFORM_FEATURES if feature.startswith('Frame rate ('))
+    shown = ['Unlimited' if mode.strip() == '0' else mode.strip() for mode in modes.split(',')]
+    check(named == f'Frame rate ({", ".join(shown)})', f'the Frame rate modes are {shown}, the table says {named}')
+    check(f'for (const int fps : {{{modes}}})' in read('launcher/launcher.cpp'), 'the launcher offers other Frame rates')
+    check('CanRepeatFrames() const override { return true; }' in read('gpu/shadps4/video_core/renderer_vulkan/vk_presenter.h')
+          and 'CanRepeatFrames() const override { return false; }' in
+          read('gpu/shadps4/video_core/renderer_opengl/gl_presenter.h'),
+          'the Frame rate note no longer matches which presenters repeat frames')
+    present = read('gpu/shim/aln_present.h')
+    check('GAMESCOPE_WAYLAND_DISPLAY' in present and 'return !windows && gamescope_wayland_display' in present,
+          'Gamescope detection changed')
+    paths = read('launcher/paths.cpp')
+    for needle in ('"ALN_PORTABLE_DIR"', '"APPIMAGE"', '"XDG_DATA_HOME"', 'AlienationPC'):
+        check(needle in paths, f'launcher/paths.cpp lost {needle}: the Linux data folder rules changed')
+    config = read('launcher/update_config.cpp')
+    check('-x86_64.AppImage"' in config and 'HasOriginalAppImage(appimage)' in config,
+          'the Linux updater does not replace the original AppImage')
+    check('sigaction(SIGPIPE, &ignore_pipe' in read('src/loader.c'), 'Linux would end on a closed peer (SIGPIPE)')
+
+    windows = windows_suites()
+    linux, script = linux_suites()
+    for suite in sorted(windows - linux):
+        check(suite in WINDOWS_ONLY_SUITES, f'{suite} runs on Windows only: add it to tools/build.sh or name its '
+                                            'Linux counterpart')
+    for suite in sorted(linux - windows):
+        check(suite in LINUX_ONLY_SUITES, f'{suite} runs on Linux only without a reason')
+    for suite in WINDOWS_ONLY_SUITES:
+        check(suite in windows, f'{suite} is listed as Windows only but tools/test.ps1 does not run it')
+    python_linux = set(re.findall(r'(tests/\w+\.py|tools/prompts/\w+\.py)', script))
+    python_windows = {name.replace('\\', '/') for name in re.findall(r"'python' '([^']+\.py)'", read('tools/test.ps1'))}
+    check(python_windows <= python_linux, f'Python suites missing from tools/build.sh: {sorted(python_windows - python_linux)}')
+
+
 def check_docs():
     text = read('docs/GAME_BUILDS.md')
     check(parity.markdown_table() in text and parity.identity_table() in text,
           'docs/GAME_BUILDS.md does not hold the current parity tables (python scripts/feature_parity.py)')
+    check(parity.platform_table() in read('docs/LINUX.md'),
+          'docs/LINUX.md does not hold the current platform table (python scripts/feature_parity.py --platforms)')
 
 
 def main():
@@ -294,12 +382,13 @@ def main():
     check_package_forms()
     check_identity()
     check_online_keys()
+    check_platforms()
     check_docs()
     for text in failures:
         print(f'FAILED: {text}')
     if not failures:
         print(f'feature parity tests passed ({len(parity.PARITY)} builds, {len(parity.PACKAGE_FORMS)} package form, '
-              f'{len(parity.FEATURES)} features)')
+              f'{len(parity.FEATURES)} features, {len(parity.PLATFORM_FEATURES)} platform features)')
     return 1 if failures else 0
 
 

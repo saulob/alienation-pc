@@ -167,7 +167,6 @@ static ABI int32_t ajm_instance_create(uint32_t id, uint32_t codec, uint64_t fla
     if (c && c->registered[codec]) for (uint32_t i=1;i<=MAX_INSTANCES;++i) if (!c->instances[i].used) {
         c->instances[i]=(Instance){1,codec};
         *out=i|(codec<<14); r=0; ++instances_created;
-        if (instances_created<=8) printf("DEBUG_SAULO: Ajm instance codec %u flags %#llx\n",codec,(unsigned long long)flags);
         break;
     }
     pthread_mutex_unlock(&lock);

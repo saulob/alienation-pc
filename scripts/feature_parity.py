@@ -13,9 +13,17 @@ Verification
   MANUAL TEST REQUIRED            only playing the game can show it.
 No status is final until the manual test matrix passes in game.
 
-tests/feature_parity_tests.py checks this table against the build profiles, the patch tables, the tests and
-docs/GAME_BUILDS.md. Usage: python scripts/feature_parity.py   prints the docs tables
+PLATFORM_FEATURES adds the platforms: Windows x64 (ZIP), Linux x86_64 (AppImage) and the Steam Deck, which runs the same
+AppImage. EQUIVALENT is the same result through the platform's own mechanism. The Steam Deck column is what the Linux
+build is expected to do there; no Steam Deck hardware test is claimed.
+
+tests/feature_parity_tests.py checks these tables against the build profiles, the patch tables, the tests, the sources
+and docs/GAME_BUILDS.md and docs/LINUX.md.
+Usage: python scripts/feature_parity.py               prints the build tables
+       python scripts/feature_parity.py --platforms   prints the platform table
+       python scripts/feature_parity.py --summary     one line per platform feature (tools/build.sh --test)
 """
+import sys
 SUPPORTED = 'SUPPORTED'
 DIFFERENT = 'INTENTIONALLY DIFFERENT'
 UNAVAILABLE = 'UNAVAILABLE'
@@ -42,15 +50,15 @@ FEATURES = (
     'Boot', 'Save', 'Trophies', 'Audio', 'Controller support', 'PlayStation Original prompts', 'Xbox prompts',
     'Xbox prompts in every language', 'Asian Menu Buttons', 'Skip Intro', 'Exit Game: Options',
     'Exit Game: Select Campaign', '60 FPS', 'Frame rate', 'Render Resolution', 'Aspect Ratio', 'True Ultrawide', 'GPU heap scaling',
-    'SMAA', 'FSR', 'Texture filtering', 'Online', 'Online status', 'Matching2', 'P2P', 'Sessions and invitations',
-    'Local co-op',
+    'SMAA', 'FSR', 'Texture filtering', 'Online', 'Friends', 'Online status', 'Matching2', 'P2P',
+    'Sessions and invitations', 'Local co-op', 'Voice-Over Language text fix',
     'Install Game', 'Install Update', 'Remove Update',
     'Build diagnostics', 'Bug reports',
 )
 
 # Features whose note is shown even when SUPPORTED: the notes that differ between builds.
-NOTED = ('Save', 'Xbox prompts', 'Xbox prompts in every language', 'Asian Menu Buttons', 'Local co-op', 'Install Game',
-         'Install Update', 'Remove Update')
+NOTED = ('Save', 'Xbox prompts', 'Xbox prompts in every language', 'Asian Menu Buttons', 'Local co-op',
+         'Voice-Over Language text fix', 'Install Game', 'Install Update', 'Remove Update')
 
 _RUNTIME = 'runtime and renderer, no guest patch'
 _EXIT_MENUS = 'tests/exit_game_menu_tests.c runs the real menu bytecode'
@@ -61,7 +69,11 @@ _NO_LOCAL_COOP = ('the menus have no local co-op join, and the executable lacks 
                   '(the 1.06 update added both); tests/patch_site_tests.py')
 
 
-def _common(save, prompts, languages, menu_buttons, install_update, remove_update, online, local_coop):
+_TEXT_FIX_NONE = (UNAVAILABLE, STATIC, 'nothing to fix: this build\'s Voice-Over Language names are right')
+
+
+def _common(save, prompts, languages, menu_buttons, install_update, remove_update, online, local_coop,
+            text_fix=_TEXT_FIX_NONE):
     return {
         'Boot': (SUPPORTED, MANUAL, 'boot image of this build'),
         'Save': (SUPPORTED, MANUAL, save),
@@ -86,11 +98,14 @@ def _common(save, prompts, languages, menu_buttons, install_update, remove_updat
         'FSR': (SUPPORTED, MANUAL, _RUNTIME),
         'Texture filtering': (SUPPORTED, MANUAL, _RUNTIME),
         'Online': (SUPPORTED, MANUAL, online),
+        'Friends': (SUPPORTED, HEADLESS, 'friend codes, presence and invitations on the launcher\'s Online page; '
+                    'tests/online_view_tests.cpp and the lobby tests'),
         'Online status': (SUPPORTED, HEADLESS, 'Online Connecting/Connected/Unavailable/Off in the native box, 18 languages; tests/online_status_tests.c'),
         'Matching2': (SUPPORTED, MANUAL, online),
         'P2P': (SUPPORTED, MANUAL, online),
         'Sessions and invitations': (SUPPORTED, MANUAL, 'NP sessions for every squad, invitations, Join'),
         'Local co-op': local_coop,
+        'Voice-Over Language text fix': text_fix,
         'Install Game': (SUPPORTED, HEADLESS, 'from its base package; ' + _INSTALL),
         'Install Update': install_update,
         'Remove Update': remove_update,
@@ -126,7 +141,8 @@ PARITY = {
         (SUPPORTED, HEADLESS, _MENU_ON + '; native On; tests/menu_buttons_tests.c'),
         (UNAVAILABLE, STATIC, 'no CUSA04430 update is known; the profile has no update build'),
         (UNAVAILABLE, STATIC, 'no CUSA04430 update is known'),
-        'lobby key CUSA04430-1.00', (UNAVAILABLE, STATIC, _NO_LOCAL_COOP)),
+        'lobby key CUSA04430-1.00', (UNAVAILABLE, STATIC, _NO_LOCAL_COOP),
+        (SUPPORTED, HEADLESS, 'Portuguese (Brasil, Portugal) "Inglês" without the cut letter; tests/text_fix_tests.c')),
 }
 
 # Package forms that are not builds of their own: each runs as its build, with the build's executable as the proof.
@@ -156,6 +172,94 @@ IDENTITY = {
 
 COLUMNS = (('CUSA00062-1.00', 'CUSA00062 1.00 · EUR'), ('CUSA00062-1.06', 'CUSA00062 1.06 · EUR'),
            ('DUPLEX', 'DUPLEX (CUSA00062 1.06)'), ('CUSA04430-1.00', 'CUSA04430 1.00 · ASIA/KR'))
+
+
+WINDOWS, LINUX, DECK = 'Windows', 'Linux', 'Steam Deck'
+PLATFORMS = (WINDOWS, LINUX, DECK)
+EQUIVALENT = 'EQUIVALENT'
+ALL_BUILDS = 'all'
+_S, _E, _U = SUPPORTED, EQUIVALENT, UNAVAILABLE
+_REPEATS = ('above 60 the latest game frame is shown again on Vulkan (the game still runs at 60); OpenGL and '
+            'Direct3D 11 show only the game\'s own frames')
+_GAMESCOPE = 'Gamescope paces presentation itself: rates above the display\'s refresh may not show'
+
+# feature: (Windows, Linux, Steam Deck, builds, note). builds is ALL_BUILDS or the build feature whose SUPPORTED
+# columns it follows. A note is required wherever a platform is not SUPPORTED.
+PLATFORM_FEATURES = {
+    'Launcher pages (Play, Display, Graphics, Gameplay, Controls, Online, Trophies, Bug Report, About)':
+        (_S, _S, _S, ALL_BUILDS, 'the same launcher code'),
+    'Show the launcher at start':
+        (_S, _E, _E, ALL_BUILDS, 'Shift or --launcher; Linux: --launcher or the desktop entry\'s Show launcher action '
+         '(Shift is read only on X11); Steam Deck Gaming Mode: --launcher in the Launch Options'),
+    'Install game': (_S, _E, _E, 'Install Game', 'Windows file dialog; Linux: zenity or kdialog, else the launcher\'s '
+                     'own chooser (mouse, keyboard, controller)'),
+    'Install update': (_S, _S, _S, 'Install Update', 'official CUSA00062 1.06 layers over 1.00'),
+    'Remove update': (_S, _S, _S, 'Remove Update', 'official layers only'),
+    'DUPLEX package form': (_S, _S, _S, ALL_BUILDS, 'runs as CUSA00062 1.06; an update over it is refused'),
+    'Online Play': (_S, _S, _S, 'Online', 'one lobby protocol and online version on every platform'),
+    'Friends and friend codes': (_S, _S, _S, 'Friends', 'the same lobby accounts'),
+    'Invitations and Accept and play': (_S, _S, _S, 'Sessions and invitations', 'the same launcher online client'),
+    'Matching2 rooms of 2 to 4 players': (_S, _S, _S, 'Matching2', 'full mesh of peers'),
+    'P2P with relay fallback': (_S, _S, _S, 'P2P', 'direct UDP, STUN, UPnP, the lobby relay when direct fails'),
+    'Cross-platform play': (_S, _S, _S, 'Online', 'Windows and Linux players of the same build meet in one room'),
+    'Online status box': (_S, _S, _S, 'Online status', 'Online Off, Connecting, Connected, Unavailable'),
+    'Local co-op': (_S, _S, _S, 'Local co-op', 'one to four controllers; only where the game has it'),
+    'Frame rate (30, 60, 90, 120, 144, 165, 240, Unlimited)': (_S, _S, _S, 'Frame rate', _REPEATS + '; ' + _GAMESCOPE),
+    'Frame counter, frame rate and render resolution in the title': (_S, _S, _S, ALL_BUILDS, 'the same overlay code'),
+    'Vulkan renderer': (_S, _S, _S, ALL_BUILDS, 'the supported renderer'),
+    'OpenGL renderer (experimental)': (_S, _S, _S, ALL_BUILDS, 'renders part of the game\'s features'),
+    'Direct3D 11 renderer (experimental)':
+        (_S, _U, _U, ALL_BUILDS, 'Direct3D is a Windows API: ANGLE\'s Direct3D 11 back end exists only there'),
+    'Render resolution': (_S, _S, _S, 'Render Resolution', 'the same guest patch'),
+    'Aspect ratio': (_S, _S, _S, 'Aspect Ratio', 'the same guest patch'),
+    'True Ultrawide': (_S, _S, _S, 'True Ultrawide', 'mission map markers may be misplaced (known issue)'),
+    'SMAA': (_S, _S, _S, 'SMAA', 'Vulkan post-processing'),
+    'FSR 1 and RCAS': (_S, _S, _S, 'FSR', 'Vulkan post-processing'),
+    'Texture filtering': (_S, _S, _S, 'Texture filtering', 'the same renderer setting'),
+    'VSync': (_S, _S, _E, ALL_BUILDS, _GAMESCOPE),
+    'Display mode, monitor and graphics card': (_S, _S, _E, ALL_BUILDS, 'Gamescope owns the Steam Deck\'s output and '
+                                                'shows the game full screen'),
+    'Skip Intro': (_S, _S, _S, 'Skip Intro', 'the same guest patch'),
+    'Exit Game': (_S, _S, _S, 'Exit Game: Options', 'the same menu patch'),
+    'Xbox and PlayStation prompts': (_S, _S, _S, 'Xbox prompts', 'the same patched assets'),
+    'Asian Menu Buttons': (_S, _S, _S, 'Asian Menu Buttons', 'the same engine getters'),
+    'Voice-Over Language text fix': (_S, _S, _S, 'Voice-Over Language text fix', 'the same stream.dat patch'),
+    'Controller and keyboard input': (_S, _S, _S, 'Controller support', 'SDL3; Steam Input on the Steam Deck'),
+    'Save data': (_S, _S, _S, 'Save', 'per user and title, in the data folder'),
+    'Trophies and Trophy Key': (_S, _S, _S, 'Trophies', 'importing a key file needs a file chooser on Linux (zenity or '
+                                'kdialog); Enter Trophy Key works everywhere'),
+    'Bug Report and the logs folder': (_S, _E, _E, 'Bug reports', 'Explorer; Linux: xdg-open'),
+    'Built-in updater': (_S, _S, _S, ALL_BUILDS, 'Windows: the ZIP through trg-updater.exe; Linux: the AppImage file is '
+                         'replaced beside itself and restarted'),
+    'Data folder': (_S, _E, _E, ALL_BUILDS, 'beside alienation.exe; Linux: beside the AppImage file, or '
+                    '$XDG_DATA_HOME/AlienationPC when that folder is read-only; never inside the AppImage'),
+    'Allow overlay programs': (_S, _U, _U, ALL_BUILDS, 'Linux overlays are Vulkan layers or LD_PRELOAD libraries that '
+                               'attach to the game process as it is'),
+}
+
+
+def platform_builds(feature):
+    """The build columns where a platform feature exists."""
+    builds = PLATFORM_FEATURES[feature][3]
+    if builds == ALL_BUILDS:
+        return [key for key, _ in COLUMNS]
+    return [key for key, _ in COLUMNS if status(key, builds)[0] == SUPPORTED]
+
+
+def platform_table():
+    names = dict(COLUMNS)
+    lines = [_row('Feature', list(PLATFORMS) + ['Builds', 'Notes']), '|' + '---|' * (len(PLATFORMS) + 3)]
+    for feature, (windows, linux, deck, _, note) in PLATFORM_FEATURES.items():
+        builds = platform_builds(feature)
+        shown = 'all' if len(builds) == len(COLUMNS) else ', '.join(names[key] for key in builds)
+        lines.append(_row(feature, [windows, linux, deck, shown, note]))
+    return '\n'.join(lines)
+
+
+def platform_summary():
+    width = max(map(len, PLATFORM_FEATURES))
+    return '\n'.join(f'{feature:<{width}}  ' + '  '.join(f'{p}: {state}' for p, state in zip(PLATFORMS, states[:3]))
+                     for feature, states in PLATFORM_FEATURES.items())
 
 
 def status(column, feature):
@@ -190,6 +294,11 @@ def markdown_table():
 
 
 if __name__ == '__main__':
-    print(identity_table())
-    print()
-    print(markdown_table())
+    if '--platforms' in sys.argv:
+        print(platform_table())
+    elif '--summary' in sys.argv:
+        print(platform_summary())
+    else:
+        print(identity_table())
+        print()
+        print(markdown_table())

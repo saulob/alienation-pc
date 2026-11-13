@@ -164,8 +164,6 @@ static ABI int32_t audio3d_bed_write(uint32_t id, uint32_t channels, uint32_t fo
     Port *p=port_of(id);
     if (!p) return ERR_INVALID_PORT;
     if (channels!=2 && channels!=6 && channels!=8) return ERR_INVALID_PARAMETER;
-    static int reported;
-    if (!reported++) printf("DEBUG_SAULO: Audio3d first bed write: %u channels, format %u, %u frames\n",channels,format,frames);
     pthread_mutex_lock(&p->lock);
     const int32_t r=enqueue(p,&p->bed,buffer,format,channels,frames,1);
     pthread_mutex_unlock(&p->lock);

@@ -4,10 +4,38 @@ A native PC port of Housemarque's **Alienation** (PS4). The game's original x86-
 replacement PS4 system libraries and a Vulkan renderer derived from shadPS4. The port's foundation is the
 [Dragon's Crown Pro PC](https://github.com/saulob/dragons-crown-pro-pc) runtime, launcher and renderer.
 
-**Status: early development.** The launcher, package installation and boot image are in place for every supported
-build; in-game behaviour is tested by hand. See [docs/FIRST_BOOT.md](docs/FIRST_BOOT.md).
-
 No game files are included. You need your own decrypted Alienation PS4 package.
+
+## Download and install
+
+Download the latest release from the [Releases](https://github.com/saulob/alienation-pc/releases) page; each file has a
+`.sha256` beside it. Both platforms need a processor with AVX and LZCNT (Intel Haswell, AMD FX or newer) and a Vulkan
+1.3 driver. What is new and what is known not to work yet is in the release notes ([docs/releases](docs/releases)).
+
+**Windows 10 (1903) or 11, 64-bit:** `AlienationPC-v<version>-windows-x64.zip`
+
+1. Extract the ZIP into a folder you can write to (not Program Files).
+2. Run `alienation.exe`. The launcher opens.
+3. On the Play page press **Install game...** and select your `.pkg`. When it says Ready to play, press **PLAY**.
+
+**Linux x86_64 (experimental):** `AlienationPC-v<version>-x86_64.AppImage`, glibc 2.31 (Ubuntu 20.04) or newer
+
+```sh
+chmod +x AlienationPC-v<version>-x86_64.AppImage
+./AlienationPC-v<version>-x86_64.AppImage
+```
+
+Keep it in a folder of its own: the game, saves, settings and logs are created beside it. FUSE is not required.
+`--launcher` (or the desktop entry's **Show launcher** action) opens the launcher.
+
+**Steam Deck (experimental):** in Desktop Mode, download the AppImage into its own folder, make it executable
+(Properties, Permissions, Is executable), start it and install your package. Then add it to Steam with **Add a
+Non-Steam Game**. In Gaming Mode, put `--launcher` in its Launch Options when you need the launcher; L3 + R3 opens the
+Options menu in game. The Linux and Steam Deck build is checked headlessly but has not been tested on Steam Deck
+hardware yet; see [docs/LINUX.md](docs/LINUX.md).
+
+The built-in updater offers new releases from this repository and installs them without touching the game, saves or
+settings.
 
 ## Supported builds
 
@@ -119,7 +147,14 @@ FAIL for each with the real output of a failing one, and ends with the totals; t
 failed or a dependency is missing. It needs the project `.venv` (`tools\setup.ps1 -InstallPython`), Node.js 22.13 or
 later and the prepared games in `game\prepared`; `-Packages <folder>` also checks your real `.pkg` files (read only),
 `-List` lists the suites and `-Detail` shows passing output. No game, launcher window, controller, audio or production
-service is used; real gameplay is still tested by hand. `tools/build.sh --test` runs the portable subset on Linux.
+service is used; real gameplay is still tested by hand. `-Release` also checks the packaged artifacts in `dist\`.
+
+## Building (Linux) and packaging
+
+`tools/build.sh` builds on Linux x86_64 with Clang, CMake and Ninja; `tools/build.sh --test` is the Linux test gate
+(every portable suite, the Python and lobby suites, the platform parity summary). `tools\package.ps1` makes the Windows
+ZIP, `tools/package-linux.sh` the AppImage (built on Ubuntu 20.04), and `tools\package-release.ps1` both in one run
+through WSL2. Nothing is published by these scripts. See [docs/LINUX.md](docs/LINUX.md).
 
 ## Layout
 

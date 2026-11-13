@@ -39,6 +39,12 @@ $pacmanDb = Join-Path $msys 'var\lib\pacman\local'
 $objcopy = Join-Path $bin 'llvm-objcopy.exe'
 $objdump = Join-Path $bin 'llvm-objdump.exe'
 $packagePrefix = 'mingw-w64-clang-x86_64-'
+# FFmpeg's DLLs come from the LGPL build of gpu\ffmpeg.txt (tools\build.ps1 builds it), never from MSYS2.
+$ffmpegPin = Read-FFmpegPin
+$ffmpegPrefix = Get-FFmpegPrefix
+$ffmpegBin = Join-Path $ffmpegPrefix 'bin'
+$ffmpegLicences = Join-Path $ffmpegPrefix 'share\licenses\ffmpeg'
+$dllDirs = @($ffmpegBin, $bin)
 
 # Licence texts of the code compiled into alienation.exe from this repository and its fetched dependencies.
 $BuiltInLicenses = [ordered]@{
@@ -73,7 +79,7 @@ $AngleLinkedLicences = @('spirv-tools', 'vulkan-loader', 'VulkanMemoryAllocator'
 
 $RootFiles = @('alienation.exe', 'trg-updater.exe', 'README.txt', 'LICENSE.txt')
 $AssetFiles = @('assets\launcher\sponsor-heart.png')
-$ForbiddenNames = @('game', 'user', 'logs', 'cache', 'build', 'prepared', 'extracted', 'image', 'sce_sys', 'sce_module',
+$ForbiddenNames = @('game', 'user', 'logs', 'cache', 'build', 'prepared', 'extracted', 'image', 'trophy', 'sce_sys', 'sce_module',
     'eboot.bin', 'param.sfo', 'alienation.ini', 'boot.bin', 'content.bin', 'image.json', 'imports.json', 'symbols')
 $ForbiddenPatterns = @('*.pkg', '*.pdb', '*.debug', '*.log', '*.dmp', '*.ini', '*.bin', '*.self', '*.sprx', '*.prx',
     '*.elf', '*.cpk', '*.sfo', '*.json', '*.spv', '*.pipeline_cache', '*.obj', '*.o', '*.a', '*.lib', '*.tmp', '*.bak',
@@ -143,12 +149,12 @@ function Test-ReleaseFolder([string]$Dir) {
         if (-not (Get-ChildItem -LiteralPath (Join-Path $base "licenses\$folder") -File -ErrorAction SilentlyContinue)) { $problems.Add("missing licence: licenses\$folder") }
     }
     if (Test-Path -LiteralPath $exe) {
-        foreach ($name in (Get-DllClosure $exe $bin $objdump).Keys) {
+        foreach ($name in (Get-DllClosure $exe $dllDirs $objdump).Keys) {
             if (-not $dlls.Contains($name)) { $problems.Add("missing DLL: $name") }
         }
     }
     if (Test-Path -LiteralPath $updaterExe) {
-        foreach ($name in (Get-DllClosure $updaterExe $bin $objdump).Keys) {
+        foreach ($name in (Get-DllClosure $updaterExe $dllDirs $objdump).Keys) {
             if (-not $dlls.Contains($name)) { $problems.Add("missing DLL: $name") }
         }
     }
@@ -259,12 +265,19 @@ if ($LASTEXITCODE -ne 0) { Stop-Tool 'llvm-objcopy --strip-debug failed on trg-u
 
 Write-Step 'Staging the DLLs it loads'
 $angleRuntime = Sync-AngleRuntime $bin
-$dlls = Get-DllClosure $loader $bin $objdump
-$updaterDlls = Get-DllClosure $updater $bin $objdump
+$dlls = Get-DllClosure $loader $dllDirs $objdump
+$updaterDlls = Get-DllClosure $updater $dllDirs $objdump
 foreach ($dllName in $updaterDlls.Keys) { if (-not $dlls.Contains($dllName)) { $dlls[$dllName] = $updaterDlls[$dllName] } }
 Add-AngleDlls $dlls $angleRuntime $bin
 $owners = [ordered]@{}
+$ffmpegDlls = @()
 foreach ($dll in $dlls.Values) {
+    if ((Split-Path $dll -Parent) -eq (Resolve-Path -LiteralPath $ffmpegBin).Path) {
+        if (-not (Test-LgplFFmpegDll $dll)) { Stop-Tool "$(Split-Path $dll -Leaf) is not the LGPL FFmpeg of gpu\ffmpeg.txt" }
+        $ffmpegDlls += Split-Path $dll -Leaf
+        Copy-Item -LiteralPath $dll $stage
+        continue
+    }
     $owner = & $pacman -Qqo $dll.Substring($msys.Length).Replace('\', '/') 2>$null
     if ($LASTEXITCODE -ne 0 -or -not $owner) { Stop-Tool "No MSYS2 package owns $dll" }
     $short = $owner.Substring($packagePrefix.Length)
@@ -310,6 +323,18 @@ $manifest.Add("angleproject $($AnglePin.version) ($((Get-AngleDlls $AnglePin | F
 $manifest.Add('  Licence: BSD-3-Clause')
 $manifest.Add("  Source:  https://repo.msys2.org/mingw/sources/mingw-w64-angleproject-$($AnglePin.version).src.tar.zst")
 $manifest.Add("  Upstream revision: $($AnglePin.revision)")
+if ($ffmpegDlls.Count -eq 0) { Stop-Tool 'alienation.exe loads no FFmpeg DLL from the gpu\ffmpeg.txt build' }
+foreach ($text in 'LICENSE.md', 'COPYING.LGPLv2.1', 'BUILD.txt') {
+    $source = Join-Path $ffmpegLicences $text
+    if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { Stop-Tool "Missing FFmpeg licence file: $source" }
+    New-Item -ItemType Directory -Force (Join-Path $licenses 'ffmpeg') | Out-Null
+    Copy-Item -LiteralPath $source (Join-Path $licenses 'ffmpeg')
+}
+$manifest.Add('')
+$manifest.Add("ffmpeg $($ffmpegPin.version) ($($ffmpegDlls -join ', '); built from source, not an MSYS2 package)")
+$manifest.Add('  Licence: LGPL-2.1-or-later')
+$manifest.Add("  Source:  $($ffmpegPin.url) (SHA-256 $($ffmpegPin.sha256))")
+$manifest.Add('  Configuration: licenses\ffmpeg\BUILD.txt')
 Write-Text (Join-Path $licenses 'MSYS2-PACKAGES.txt') (($manifest -join "`n") + "`n")
 $readme = (Get-Content -LiteralPath (Join-Path $root 'packaging\README.txt') -Raw).Replace('@VERSION@', $version)
 Write-Text (Join-Path $stage 'README.txt') $readme

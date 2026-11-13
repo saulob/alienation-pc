@@ -1,6 +1,7 @@
 // aln: always-on bounded record of significant GPU operations, printed when the device is lost
 // or a GPU assertion fails. Recording is lock-free and allocation-free.
 #pragma once
+#include <cstddef>
 #include "common/types.h"
 
 namespace Common::GpuTrace {

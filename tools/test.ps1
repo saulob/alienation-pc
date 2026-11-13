@@ -30,6 +30,11 @@ Lists the suites by section and exits; nothing is built or run.
 
 .PARAMETER Filter
 Runs only the suites whose section, name or description contains this text. The run is marked as partial.
+
+.PARAMETER Release
+Also checks the release artifacts of the CMakeLists.txt version in dist\ (tools\package-release.ps1 makes them): the
+Windows folder again with tools\package.ps1 -VerifyOnly, the ZIP against that folder, both .sha256 files and the
+AppImage's header.
 #>
 [CmdletBinding()]
 param(
@@ -37,7 +42,8 @@ param(
     [switch]$SkipGameData,
     [switch]$Detail,
     [switch]$List,
-    [string]$Filter = ''
+    [string]$Filter = '',
+    [switch]$Release
 )
 
 . (Join-Path $PSScriptRoot '_common.ps1')
@@ -83,6 +89,7 @@ Add-Exes $s @(
     , @('aln-sdl-compat-tests', 'SDL compatibility')
     , @('aln-trophy-tests', 'trophies')
     , @('aln-incident-tests', 'bug reports and incident report')
+    , @('aln-paths-tests', 'data folder beside the program (Linux: beside the AppImage, XDG fallback)')
 )
 
 $s = 'Memory'
@@ -146,7 +153,15 @@ Add-Suite $s 'node' 'server\lobby\test' 'lobby protocol, friends, presence, room
 $s = 'Packaging and install'
 Add-Suite $s 'exe' 'aln-game-install-tests' 'Install game and Install update: EUR base and 1.06, DUPLEX repack, ASIA/KR base, refusals' @{ Packages = $true }
 Add-Suite $s 'exe' 'aln-update-tests' 'updater (no network)'
+Add-Suite $s 'exe' 'aln-update-network-tests' 'updater on a loopback server: no release yet (404), failures, stalls, redirects, retries, production address and asset names'
 Add-Suite $s 'exe' 'aln-update-helper-tests' 'update helper'
+Add-Suite $s 'python' 'tests\release_contract_tests.py' 'one version source, updater address and asset names, desktop entry, AppStream metadata, packager lists, LGPL FFmpeg pin, release notes'
+
+if ($Release) {
+    $s = 'Release artifacts'
+    Add-Suite $s 'check' 'Windows package' 'dist\ folder verified again, ZIP entries equal to it, .zip.sha256 matches' @{ Run = 'Test-WindowsRelease' }
+    Add-Suite $s 'check' 'Linux AppImage' 'AppImage type 2 header, .AppImage.sha256 matches, symbols kept outside' @{ Run = 'Test-LinuxRelease' }
+}
 
 $s = 'Final static checks'
 Add-Suite $s 'check' 'every test is wired in' 'each CMake test target, test script and test source is run by this script or excluded with a reason' @{ Run = 'Test-Coverage' }
@@ -273,6 +288,61 @@ function Test-Coverage {
     if ($problems.Count) { return New-Result 1 @($problems) }
     $excluded = @($known | Where-Object { $excludedTargets.ContainsKey($_) })
     return New-Result 0 (@("$($known.Count - $excluded.Count) CMake test targets, all run") + ($excluded | ForEach-Object { "excluded $_ : $($excludedTargets[$_])" }))
+}
+
+function Get-ReleaseName {
+    $cmake = Get-Content -Raw -LiteralPath (Join-Path $root 'CMakeLists.txt')
+    if ($cmake -notmatch '(?m)^project\(alienation_pc VERSION ([0-9]+\.[0-9]+\.[0-9]+)') { return $null }
+    return "AlienationPC-v$($Matches[1])"
+}
+
+function Test-ChecksumFile([string]$Artifact) {
+    $file = "$Artifact.sha256"
+    if (-not (Test-Path -LiteralPath $Artifact -PathType Leaf)) { return "missing $Artifact" }
+    if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { return "missing $file" }
+    $line = Get-Content -LiteralPath $file -TotalCount 1
+    if ($line -notmatch '^([0-9a-f]{64})  (.+)$' -or $Matches[2] -ne (Split-Path $Artifact -Leaf)) { return "$file is not '<sha256>  <name>'" }
+    $expected = $Matches[1]
+    if ((Get-FileHash -LiteralPath $Artifact -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) { return "$file does not match" }
+    return $null
+}
+
+function Test-WindowsRelease {
+    $name = Get-ReleaseName
+    if (-not $name) { return New-Result 1 @('project VERSION not found in CMakeLists.txt') }
+    $dist = Join-Path $root 'dist'
+    $folder = Join-Path $dist "$name-windows-x64"
+    $zip = "$folder.zip"
+    $lines = New-Object System.Collections.Generic.List[string]
+    $problem = Test-ChecksumFile $zip
+    if ($problem) { return New-Result 1 @($problem, 'run tools\package-release.ps1 (or tools\package.ps1) first') }
+    if (-not (Test-Path -LiteralPath $folder -PathType Container)) { return New-Result 1 @("missing $folder") }
+    $verify = Invoke-Process $hostExe @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $root 'tools\package.ps1'), '-VerifyOnly', $folder) $root 600
+    $verify.Lines | ForEach-Object { $lines.Add($_) }
+    if ($verify.Code -ne 0) { return New-Result 1 @($lines) }
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = [IO.Compression.ZipFile]::OpenRead($zip)
+    try { $entries = @($archive.Entries | Where-Object { $_.Name } | ForEach-Object { $_.FullName } | Sort-Object) } finally { $archive.Dispose() }
+    $staged = @(Get-ChildItem -LiteralPath $folder -Recurse -File | ForEach-Object { "$name-windows-x64/" + $_.FullName.Substring($folder.Length + 1).Replace('\', '/') } | Sort-Object)
+    if (Compare-Object $entries $staged) { return New-Result 1 @($lines + 'the ZIP does not hold exactly the verified folder') }
+    if (@($entries | Where-Object { $_ -match '(?i)\.(pdb|debug)$|symbols/' }).Count) { return New-Result 1 @($lines + 'the ZIP holds debug symbols') }
+    $lines.Add("$($entries.Count) files in $(Split-Path $zip -Leaf), checksum matches")
+    return New-Result 0 @($lines)
+}
+
+function Test-LinuxRelease {
+    $name = Get-ReleaseName
+    if (-not $name) { return New-Result 1 @('project VERSION not found in CMakeLists.txt') }
+    $image = Join-Path $root "dist\$name-x86_64.AppImage"
+    $problem = Test-ChecksumFile $image
+    if ($problem) { return New-Result 1 @($problem, 'run tools\package-release.ps1 first') }
+    $bytes = New-Object byte[] 11
+    $stream = [IO.File]::OpenRead($image)
+    try { [void]$stream.Read($bytes, 0, 11) } finally { $stream.Dispose() }
+    if (-not ($bytes[0] -eq 0x7f -and $bytes[1] -eq 0x45 -and $bytes[8] -eq 0x41 -and $bytes[9] -eq 0x49 -and $bytes[10] -eq 2)) {
+        return New-Result 1 @("$(Split-Path $image -Leaf) is not a type 2 AppImage")
+    }
+    return New-Result 0 @("$(Split-Path $image -Leaf): type 2 AppImage, $([math]::Round((Get-Item -LiteralPath $image).Length / 1MB, 1)) MB, checksum matches")
 }
 
 function Test-GitWhitespace {

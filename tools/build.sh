@@ -150,8 +150,9 @@ if ! grep -qs "CMAKE_BUILD_TYPE:STRING=$config" "$build_dir/CMakeCache.txt" || [
 fi
 step 'Building'
 targets=(alienation)
-tests=(aln-image-format-tests aln-resolution-patch-tests aln-runtime-tests aln-runtime-overlay-tests aln-savedata-tests aln-np-tests aln-online-status-tests aln-online-view-tests aln-local-pad-tests aln-controller-prompts-tests aln-exit-game-tests aln-exit-game-menu-tests aln-text-fix-tests aln-menu-buttons-tests aln-skip-intro-tests aln-module-history-tests aln-rtc-tests aln-ime-keyboard-tests aln-json2-tests aln-thread-cancel-tests aln-avplayer-thread-tests aln-tiling-tests aln-gds-lane-offset-tests aln-gpu-crash-trace-tests aln-gpu-recording-tests aln-renderer-selection-tests aln-opengl-backend-tests aln-opengl-perf-tests aln-cursor-tests aln-window-tests aln-sdl-compat-tests aln-present-tests aln-trophy-tests aln-incident-tests aln-game-install-tests aln-update-tests)
-# Run with a loopback development lobby below. The Windows-only suites (memory, log, crash guard, update helper) are not built here.
+tests=(aln-image-format-tests aln-resolution-patch-tests aln-frame-pacing-tests aln-runtime-tests aln-sigpipe-tests aln-runtime-overlay-tests aln-savedata-tests aln-np-tests aln-online-status-tests aln-online-view-tests aln-local-pad-tests aln-controller-prompts-tests aln-exit-game-tests aln-exit-game-menu-tests aln-text-fix-tests aln-menu-buttons-tests aln-skip-intro-tests aln-module-history-tests aln-rtc-tests aln-ime-keyboard-tests aln-json2-tests aln-thread-cancel-tests aln-avplayer-thread-tests aln-tiling-tests aln-gds-lane-offset-tests aln-gpu-crash-trace-tests aln-gpu-recording-tests aln-renderer-selection-tests aln-opengl-backend-tests aln-opengl-perf-tests aln-cursor-tests aln-window-tests aln-sdl-compat-tests aln-present-tests aln-trophy-tests aln-incident-tests aln-paths-tests aln-game-install-tests aln-update-tests aln-update-network-tests)
+# Run with a loopback development lobby below. The Windows-only suites (memory, log, crash guard, update helper) are
+# not defined here; tests/feature_parity_tests.py names their Linux counterparts.
 lobby_tests=(aln-online-hle-tests)
 ((test)) && targets+=("${tests[@]}" "${lobby_tests[@]}")
 ninja -C "$build_dir" "${targets[@]}"
@@ -159,49 +160,85 @@ loader=$build_dir/bin/alienation
 [[ -x $loader ]] || die "Missing $loader"
 
 # The portable Python suites of tools/test.ps1; they need the project .venv (cryptography, pillow, numpy).
-python_tests=(tests/game_profile_tests.py tests/feature_parity_tests.py tests/patch_site_tests.py tests/display_aspect_tests.py tests/controller_prompts_static_tests.py tests/prompt_language_tests.py tools/prompts/verify_prompts.py)
+python_tests=(tests/game_profile_tests.py tests/feature_parity_tests.py tests/release_contract_tests.py tests/patch_site_tests.py tests/display_aspect_tests.py tests/controller_prompts_static_tests.py tests/prompt_language_tests.py tools/prompts/verify_prompts.py)
 if ((test)); then
-    for t in "${tests[@]}"; do
-        step "Running $t"
-        "$build_dir/bin/$t"
-    done
+    # Every suite runs even after one fails; a missing dependency fails its suites by name.
+    export SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy
+    unset ALN_LOBBY ALN_ONLINE ALN_ONLINE_NAME ALN_UPNP ALN_UDP_PORT ALN_STUN ALN_TEST_LOBBY
+    passed=() failed=() skipped=()
+    checks=0
+    out=$(mktemp)
+    suite() { # name command...
+        local name=$1 code=0 count
+        shift
+        step "Running $name"
+        "$@" >"$out" 2>&1 || code=$?
+        cat "$out"
+        count=$(grep -oE '[0-9]+ checks' "$out" | tail -1 | grep -oE '^[0-9]+' || true)
+        checks=$((checks + ${count:-0}))
+        if ((code == 0)) && ! grep -qE '^\s*(FAIL|FAILED)\b' "$out"; then passed+=("$name"); else failed+=("$name"); fi
+        grep -E '^\s*skipped\b' "$out" | sed "s|^ *|$name: |" >>"$out.skipped" || true
+    }
+    missing() { step "Running $1"; echo "MISSING: $2"; failed+=("$1"); }
+
+    for t in "${tests[@]}"; do suite "$t" "$build_dir/bin/$t"; done
+
+    step 'Every test target is run'
+    unlisted=$(ninja -C "$build_dir" -t targets all | grep -oE '^aln-[a-z0-9-]+-tests:' | tr -d : | sort -u |
+               grep -vxF -f <(printf '%s\n' "${tests[@]}" "${lobby_tests[@]}") || true)
+    if [[ -n $unlisted ]]; then echo "Not run by tools/build.sh --test: $unlisted"; failed+=(coverage); else passed+=(coverage); fi
 
     venv_python=$root/.venv/bin/python
-    [[ -x $venv_python ]] || die 'The project Python environment is missing: python3 -m venv .venv && .venv/bin/pip install cryptography pillow numpy'
-    "$venv_python" -I -c 'import cryptography, PIL, numpy' ||
-        die 'The project .venv lacks cryptography, pillow or numpy: .venv/bin/pip install cryptography pillow numpy'
-    for t in "${python_tests[@]}"; do
-        step "Running $t"
-        "$venv_python" -I "$root/$t"
-    done
+    if [[ ! -x $venv_python ]]; then
+        for t in "${python_tests[@]}"; do missing "$t" 'the project .venv: python3 -m venv .venv && .venv/bin/pip install cryptography pillow numpy'; done
+    elif ! "$venv_python" -I -c 'import cryptography, PIL, numpy'; then
+        for t in "${python_tests[@]}"; do missing "$t" 'cryptography, pillow or numpy in .venv'; done
+    else
+        for t in "${python_tests[@]}"; do suite "$t" "$venv_python" -I "$root/$t"; done
+    fi
 
-    command -v node >/dev/null || die 'Node.js 22.13 or later is needed for the lobby tests (see docs/ONLINE.md)'
-    node -e 'process.exit(process.versions.node.split(".").map(Number).reduce((a, n, i) => a || (n - [22, 13, 0][i]), 0) >= 0 ? 0 : 1)' ||
-        die 'Node.js is older than 22.13'
-    step 'Running the lobby backend tests'
-    (cd "$root/server/lobby" && node --no-warnings --test 'test/*.test.js')
+    node_ok=0
+    if command -v node >/dev/null &&
+       node -e 'process.exit(process.versions.node.split(".").map(Number).reduce((a, n, i) => a || (n - [22, 13, 0][i]), 0) >= 0 ? 0 : 1)'; then
+        node_ok=1
+    fi
+    if ((!node_ok)); then
+        missing 'lobby backend tests' 'Node.js 22.13 or later (see docs/ONLINE.md)'
+        for t in "${lobby_tests[@]}"; do missing "$t" 'Node.js 22.13 or later for the loopback lobby'; done
+    else
+        suite 'lobby backend tests' bash -c "cd '$root/server/lobby' && node --no-warnings --test 'test/*.test.js'"
+        # The development lobby in memory on a free loopback port; it never reaches the production service.
+        port=$(node -e 'const s = require("net").createServer().listen(0, "127.0.0.1", () => { console.log(s.address().port); s.close(); })')
+        node --no-warnings "$root/server/lobby/local/server.js" --host 127.0.0.1 --port "$port" >/dev/null 2>&1 &
+        lobby_pid=$!
+        for _ in $(seq 1 40); do
+            curl -fs "http://127.0.0.1:$port/" >/dev/null 2>&1 && break
+            sleep 0.25
+        done
+        if curl -fs "http://127.0.0.1:$port/" >/dev/null; then
+            for t in "${lobby_tests[@]}"; do suite "$t" env ALN_TEST_LOBBY="ws://127.0.0.1:$port/" "$build_dir/bin/$t"; done
+        else
+            for t in "${lobby_tests[@]}"; do missing "$t" 'the development lobby did not start'; done
+        fi
+        kill "$lobby_pid" 2>/dev/null || true
+    fi
 
-    # The development lobby in memory on a free loopback port; it never reaches the production service.
-    port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])' 2>/dev/null ||
-        "$venv_python" -I -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
-    node --no-warnings "$root/server/lobby/local/server.js" --host 127.0.0.1 --port "$port" > /dev/null 2>&1 &
-    lobby_pid=$!
-    for _ in $(seq 1 40); do
-        curl -fs "http://127.0.0.1:$port/" > /dev/null 2>&1 && break
-        sleep 0.25
-    done
-    curl -fs "http://127.0.0.1:$port/" > /dev/null || { kill "$lobby_pid" 2>/dev/null || true; die 'The development lobby did not start'; }
-    lobby_code=0
-    for t in "${lobby_tests[@]}"; do
-        step "Running $t (loopback lobby)"
-        ALN_TEST_LOBBY="ws://127.0.0.1:$port/" "$build_dir/bin/$t" || lobby_code=$?
-    done
-    kill "$lobby_pid" 2>/dev/null || true
-    ((lobby_code == 0)) || exit "$lobby_code"
+    if git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        suite 'git diff --check' bash -c "git -C '$root' diff --check && git -C '$root' diff --cached --check"
+    else
+        echo "git diff --check: skipped, $root is not a git checkout (tools/test.ps1 checks the checkout)" >>"$out.skipped"
+    fi
 
-    step 'Running git diff --check'
-    git -C "$root" diff --check
-    git -C "$root" diff --cached --check
+    step 'Platform parity (scripts/feature_parity.py)'
+    if [[ -x $venv_python ]]; then "$venv_python" -I "$root/scripts/feature_parity.py" --summary || failed+=('platform parity'); fi
+
+    step 'Summary'
+    printf 'total suites: %d   passed: %d   failed: %d   checks counted: %d\n' \
+        $((${#passed[@]} + ${#failed[@]})) "${#passed[@]}" "${#failed[@]}" "$checks"
+    if [[ -s $out.skipped ]]; then echo 'parts the suites skipped (not failures):'; sed 's/^/  /' "$out.skipped" | sort -u; fi
+    rm -f "$out" "$out.skipped"
+    ((${#failed[@]} == 0)) || die "FAILED: ${failed[*]}"
+    echo 'All portable suites passed.'
 fi
 
 image_current() {

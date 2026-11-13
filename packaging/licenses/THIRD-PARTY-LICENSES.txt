@@ -141,8 +141,14 @@ GLib                        LGPL-2.1-or-later                                   
 libintl (gettext)           LGPL-2.1-or-later                                                    licenses\gettext-runtime
 libiconv                    LGPL-2.1-or-later                                                    licenses\libiconv
 
-FreeType loads HarfBuzz, which brings Graphite2, GLib, libintl, libiconv, PCRE2 and Brotli with it. GLib, libintl
-and libiconv are LGPL libraries, dynamically linked and replaceable; their source packages are listed in
+FFmpeg (avcodec, avformat, avutil, swresample, swscale DLLs), the game's videos
+                            LGPL-2.1-or-later. Copyright the FFmpeg developers.                  licenses\ffmpeg
+  Not an MSYS2 package: built by tools/build-ffmpeg.sh of the source from the release tarball named in
+  gpu/ffmpeg.txt, with only the MP4 demuxer and the H.264, HEVC and AAC decoders and no GPL part
+  (licenses\ffmpeg\BUILD.txt has the source address, its SHA-256 and the configuration).
+
+FreeType loads HarfBuzz, which brings Graphite2, GLib, libintl, libiconv, PCRE2 and Brotli with it. FFmpeg, GLib,
+libintl and libiconv are LGPL libraries, dynamically linked and replaceable; their sources are listed in
 licenses\MSYS2-PACKAGES.txt. vulkan-1.dll comes with the graphics driver and is not part of the package.
 
 
@@ -156,10 +162,12 @@ libpng                      libpng licence
 Zydis, Zycore               MIT                                        licenses/system/zydis
 xxHash                      BSD-2-Clause                               licenses/system/xxhash
 fmt                         MIT                                        licenses/system/fmt
-OpenSSL (libcrypto 3)       Apache-2.0                                 licenses/system/openssl (game installer: hashes
-                                                                        and package decryption)
-Brotli                      MIT
-bzip2                       bzip2 licence
+OpenSSL (libcrypto 3, libssl 3)
+                            Apache-2.0                                 licenses/system/openssl (the game installer's
+                                                                        hashes and decryption, the lobby's TLS)
+FFmpeg (libavcodec, libavformat, libavutil, libswscale, libswresample)
+                            LGPL-2.1-or-later                          licenses/system/ffmpeg (the game's videos; the
+                                                                        same LGPL configuration as on Windows)
 libstdc++, libgcc_s         GPL-3.0-or-later WITH GCC-exception-3.1    (fallback copies in usr/lib/compat, used only
                                                                         when the system's are older)
 
