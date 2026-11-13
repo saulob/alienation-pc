@@ -48,8 +48,8 @@ constexpr AlnFrameRatePatch kEurope100FrameRate = {0x2507b0, {0x48, 0x8b, 0x47, 
 constexpr AlnFrameRatePatch kEurope106FrameRate = {0x253f10, {0x48, 0x8b, 0x47, 0x28}, {0x31, 0xc0, 0xc3, 0x90}};
 constexpr AlnFrameRatePatch kAsia100FrameRate = {0x2513c0, {0x48, 0x8b, 0x47, 0x28}, {0x31, 0xc0, 0xc3, 0x90}};
 
-// The DUPLEX repack: base and 1.06 update in one gd package whose eboot.bin and game data are the official 1.06 ones.
-constexpr PackageAlias kEurope106Aliases[] = {{"single-package repack", "gd", "01.00", "01.06"}};
+// The complete 1.06 package: base and 1.06 update in one gd package whose eboot.bin and game data are the official 1.06 ones.
+constexpr PackageAlias kEurope106Aliases[] = {{"complete package", "gd", "01.00", "01.06"}};
 
 constexpr GameBuild kGameBuilds[] = {
     {

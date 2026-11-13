@@ -813,7 +813,7 @@ T Translator::GetSrc64(const InstOperand& operand) {
         }
     } else {
         // GCN VOP3 abs/neg modifier bits operate on the sign bit (bit 63 for
-        // 64-bit values). Unpack, modify the high dword's bit 31, repack.
+        // 64-bit values). Unpack, modify the high dword's bit 31, pack again.
         if (operand.input_modifier.abs) {
             const auto unpacked = ir.UnpackUint2x32(value);
             const auto lo = IR::U32{ir.CompositeExtract(unpacked, 0)};

@@ -111,7 +111,7 @@ def cpp_aliases(source):
 
 
 def check_aliases(source, cpp, python):
-    """A repack is mirrored exactly and names no executable of its own: the build's eboot.bin is its only proof."""
+    """A complete package is mirrored exactly and names no executable of its own: the build's eboot.bin is its only proof."""
     aliases = cpp_aliases(source)
     for fields, (title, version, build) in zip(cpp, python):
         wanted = [(a['name'], a['category'], a['app_ver'], a['sfo_version']) for a in build.get('package_aliases', ())]
@@ -120,7 +120,7 @@ def check_aliases(source, cpp, python):
         for alias in build.get('package_aliases', ()):
             check(set(alias) == {'name', 'category', 'app_ver', 'sfo_version', 'extract_folder'},
                   f'{title} {version}: the {alias["name"]} alias carries more than its identity')
-            check(alias['extract_folder'] != build['folder'], f'{title} {version}: the repack shares the update folder')
+            check(alias['extract_folder'] != build['folder'], f'{title} {version}: the complete package shares the update folder')
             identity = game_profiles.alias_identity(title, alias)
             for other_version, other in game_profiles.PROFILES[title]['versions'].items():
                 check(game_profiles.layer_identity(title, game_profiles.finished_layer(other)) != identity,

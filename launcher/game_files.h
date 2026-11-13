@@ -34,18 +34,18 @@ struct GameCheck {
     std::string eboot_sha256; // lower-case hex, set once eboot.bin was read
     const GameBuild* build = nullptr; // the supported build the files were identified as
     size_t layer = 0;                 // for a package: its index in build->layers
-    const PackageAlias* alias = nullptr; // a repack of the build: a complete package outside its layers
+    const PackageAlias* alias = nullptr; // a complete package of the build, outside its layers
 };
 
-// The repack among the build's aliases whose identity (CATEGORY, APP_VER, VERSION) a param.sfo has, or nullptr.
+// The complete package among the build's aliases whose identity (CATEGORY, APP_VER, VERSION) a param.sfo has, or nullptr.
 const PackageAlias* PackageAliasOf(const GameBuild& build, const std::string& sfo);
 
-// The repack an installed game folder was unpacked from, or nullptr for the build's official packages.
+// The complete package an installed game folder was unpacked from, or nullptr for the build's official packages.
 const PackageAlias* InstalledPackageAlias(const std::filesystem::path& app0, const GameBuild& build);
 
 // How an installed build's folder was made. The runtime build is the same whatever the provenance; the update actions
 // are not: only an update laid over its base can be removed or is "already installed" as an update.
-enum class InstallProvenance { kNone, kBasePackage, kUpdateLayers, kRepack };
+enum class InstallProvenance { kNone, kBasePackage, kUpdateLayers, kCompletePackage };
 InstallProvenance InstalledProvenance(const std::filesystem::path& app0, const GameBuild& build);
 
 // The "scope" of a folder's preparation marker: "full", "core" (development) or empty.

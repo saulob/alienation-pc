@@ -10,7 +10,7 @@ and from the SHA-256 of the finished game's `eboot.bin`, never from a file name.
 |---|---|---|---|---|---|---|
 | `CUSA00062` | 1.00 | EUR | base (`gd` APP_VER 01.00, VERSION 01.00) | `f5f41f870db752add56920c5538441bc3750b1442f69c1de3895ee282887d855` | supported | reference build |
 | `CUSA00062` | 1.06 | EUR | base + official update (`gp` APP_VER 01.06, VERSION 01.00) | `c65c18865691d7288055cae70af983aa86898d59936976ef12f5eb033eda7243` | supported | full (table below) |
-| `CUSA00062` | 1.06 | EUR | DUPLEX single-package repack (`gd` APP_VER 01.00, VERSION 01.06) | `c65c18865691d7288055cae70af983aa86898d59936976ef12f5eb033eda7243` | supported, runs as CUSA00062 1.06 | as 1.06, but no update can be installed or removed |
+| `CUSA00062` | 1.06 | EUR | complete package (`gd` APP_VER 01.00, VERSION 01.06) | `c65c18865691d7288055cae70af983aa86898d59936976ef12f5eb033eda7243` | supported, runs as CUSA00062 1.06 | as 1.06, but no update can be installed or removed |
 | `CUSA04430` | 1.00 | ASIA/KR | base (`gd` APP_VER 01.00, VERSION 01.00) | `11928457792fdba30aee3ceb9f5fb300bac720d0f3c1774825a8380a2dc9b72e` | supported | full (table below) |
 
 The launcher shows a build as `CUSA00062 1.00 · EUR`, `CUSA00062 1.06 · EUR` and `CUSA04430 1.00 · ASIA/KR`. CUSA04430's
@@ -20,33 +20,34 @@ no game data of it was available, so none of its sites could be verified.
 Each build has its own folders, `game\prepared\<build key>` and the boot image folder `<build key>`. The active build is
 the complete one prepared last. 1.00 and 1.06 can be installed side by side.
 
-## DUPLEX
+## CUSA00062 1.06 complete package
 
-`Alienation.PS4-DUPLEX.pkg` (2,168,717,312 bytes, fake PKG, 38 entries, content ID `EP9000-CUSA00062_00-ALIENATIONGAMEEU`,
-CATEGORY `gd`, APP_VER 01.00, VERSION 01.06, PUBTOOLINFO c_date 2018-06-27) is the 1.00 base and the 1.06 update in one
-package. Compared file by file with the official base laid over by the official update, read in place from the package:
+A complete package of 1.06 (content ID `EP9000-CUSA00062_00-ALIENATIONGAMEEU`, CATEGORY `gd`, APP_VER 01.00,
+VERSION 01.06) holds the 1.00 base and the 1.06 update in one package. Compared file by file with the official base laid
+over by the official update, read in place from the package:
 
 - `eboot.bin` is byte-identical to official 1.06 (`c65c1886...a7243`; entry `0xda320`, image end `0x2ce99b8`, code
   `0`-`0x1e9f300`, 372,824 relocations, 660 imports, the same 44 NEEDED libraries, procparam SDK `0x3008041`);
 - 953 of its 954 game files are byte-identical, `stream.dat`, `audio.pck`, every video, Havok and Navmesh file among
   them, as are `libc.prx`, `libSceFios2.prx`, `right.sprx`, `nptitle.dat`, `keystone` and `trophy00.trp`;
-- `sce_discmap.plt` differs (the repack merges the update's `sce_discmap_patch.plt`, which it lacks); the runtime's
-  DiscMap calls never read either file. `npbind.dat` differs only in its trailing 4-byte digest (same NPWR09388_00).
-  `param.sfo` differs in CATEGORY, APP_VER, VERSION, PUBTOOLVER and c_date only.
+- `sce_discmap.plt` differs (the complete package merges the update's `sce_discmap_patch.plt`, which it lacks); the
+  runtime's DiscMap calls never read either file. `npbind.dat` differs only in its trailing 4-byte digest (same
+  NPWR09388_00). `param.sfo` differs in CATEGORY, APP_VER, VERSION, PUBTOOLVER and c_date only.
 
-So DUPLEX is no build of its own: it is a package alias of `CUSA00062-1.06` (`PackageAlias` in the build table). Its
-metadata alone never identifies it: the installer reads its `eboot.bin` before unpacking and refuses the package unless
-the executable is 1.06's, and the readiness check requires the same executable in the installed folder. Another package
-with the same metadata and another executable is reported as an unsupported build with its identity in the log.
-Installed, it is `CUSA00062 1.06 · EUR` with the 1.06 boot image, patches, online key and saves; the Play page shows its
-own APP_VER 1.00 · VERSION 1.06 and "single-package repack".
+So the complete package is no build of its own: it is a package alias of `CUSA00062-1.06` (`PackageAlias` in the build
+table). Its metadata alone never identifies it: the installer reads its `eboot.bin` before unpacking and refuses the
+package unless the executable is 1.06's, and the readiness check requires the same executable in the installed folder.
+Another package with the same metadata and another executable is reported as an unsupported build with its identity in
+the log. Installed, it is `CUSA00062 1.06 · EUR` with the 1.06 boot image, patches, online key and saves; the Play page
+shows its own APP_VER 1.00 · VERSION 1.06 and "complete package".
 
 Running as 1.06 is its runtime identity; how its files got there is its installation provenance, read back from the
 installed `param.sfo` (`InstalledProvenance` in `launcher/game_files.cpp`): CATEGORY `gp` is the official update laid
-over the base, CATEGORY `gd` with the 1.06 build's executable is the repack. Install update with the official 1.06 update
-over an installed DUPLEX is refused before anything is written, with "This game already contains version 1.06" (status
-`kAlreadyContainsUpdate`), whether the repack is the active build or only installed. Remove update is not offered for it:
-there is no update layer to remove, so it cannot be turned back into 1.00.
+over the base, CATEGORY `gd` with the 1.06 build's executable is the complete package. Install update with the official
+1.06 update over an installed complete package is refused before anything is written, with "This game already contains
+version 1.06" (status `kAlreadyContainsUpdate`), whether the complete package is the active build or only installed.
+Remove update is not offered for it: there is no separate base and update layer to remove, so it cannot be turned back
+into 1.00.
 
 ## Feature parity
 
@@ -63,13 +64,13 @@ and the tests that carry each claim. Every cell gives a status and how strongly 
 
 No entry is final until the manual test matrix has passed in game.
 
-|  | CUSA00062 1.00 · EUR | CUSA00062 1.06 · EUR | DUPLEX (CUSA00062 1.06) | CUSA04430 1.00 · ASIA/KR |
+|  | CUSA00062 1.00 · EUR | CUSA00062 1.06 · EUR | CUSA00062 1.06 · EUR (complete package) | CUSA04430 1.00 · ASIA/KR |
 |---|---|---|---|---|
 | Runtime build identity | CUSA00062-1.00 | CUSA00062-1.06 | CUSA00062-1.06 | CUSA04430-1.00 |
-| Installation provenance | base package (gd, APP_VER 01.00) | base 1.00 + official update layers (gp, APP_VER 01.06), removable | single-package repack (gd, APP_VER 01.00, VERSION 01.06), no update layer | base package (gd, APP_VER 01.00) |
+| Installation provenance | base package (gd, APP_VER 01.00) | base 1.00 + official update layers (gp, APP_VER 01.06), removable | complete package (gd, APP_VER 01.00, VERSION 01.06), no update layer | base package (gd, APP_VER 01.00) |
 | Online key | CUSA00062-1.00 | CUSA00062-1.06 | CUSA00062-1.06 | CUSA04430-1.00 |
 
-| Feature | CUSA00062 1.00 · EUR | CUSA00062 1.06 · EUR | DUPLEX (CUSA00062 1.06) | CUSA04430 1.00 · ASIA/KR |
+| Feature | CUSA00062 1.00 · EUR | CUSA00062 1.06 · EUR | CUSA00062 1.06 · EUR (complete package) | CUSA04430 1.00 · ASIA/KR |
 |---|---|---|---|---|
 | Boot | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED | SUPPORTED · MANUAL TEST REQUIRED |
 | Save | SUPPORTED · MANUAL TEST REQUIRED: user\savedata\CUSA00062 | SUPPORTED · MANUAL TEST REQUIRED: user\savedata\CUSA00062, shared with 1.00 | SUPPORTED · MANUAL TEST REQUIRED: user\savedata\CUSA00062, shared with 1.00 | SUPPORTED · MANUAL TEST REQUIRED: user\savedata\CUSA04430 |
@@ -214,19 +215,19 @@ style changes nothing in any language.
 |---|---|---|
 | CUSA00062 1.00 base | Install game | CUSA00062 1.00 · EUR |
 | CUSA00062 1.06 update | Install update, with 1.00 installed | CUSA00062 1.06 · EUR, laid over 1.00 |
-| DUPLEX | Install game | CUSA00062 1.06 · EUR (complete package, executable checked) |
+| CUSA00062 1.06 complete package | Install game | CUSA00062 1.06 · EUR (executable checked) |
 | CUSA04430 1.00 base | Install game | CUSA04430 1.00 · ASIA/KR |
 | any other Alienation package | either | refused as unsupported, identity in the log |
 
 1. Install the base game with **Install game...** (Play page).
 2. Once it is ready, the Play page shows **Install update...**. Select the update `.pkg` (any file name).
 3. The launcher reads the package's `param.sfo` and refuses, before writing anything:
-   - a base package (`This is the base game package`), a complete repack (`This is a complete game package`), or an
+   - a base package (`This is the base game package`), a complete package (`This is a complete game package`), or an
      update chosen in Install game (`This is an update package`);
    - an update of another title than the active game (`This update is for CUSA00062, but the installed game is CUSA04430`);
    - an update older than the active update of the same title (`A newer update is installed`);
-   - an update that an installed complete repack of the title already contains (`This game already contains version
-     1.06`): DUPLEX is 1.06 already and has no base to lay the update over;
+   - an update that an installed complete package of the title already contains (`This game already contains version
+     1.06`): a complete package is 1.06 already and has no base to lay the update over;
    - another game, an unknown version (logged with its TITLE_ID, APP_VER, VERSION, CATEGORY and executable hash), a
      package encrypted for a console, an incomplete download, a package inside the port's own game folders.
 4. The update's base build must be installed and valid (`Base game required` otherwise).
@@ -238,11 +239,11 @@ style changes nothing in any language.
    settings, logs, trophies, online identity, friends and bug reports live under `user\` and `logs` and are never touched.
 7. The launcher re-reads the active build and shows it, for example `Ready · CUSA00062 1.06 · EUR`,
    `APP_VER 1.06 · VERSION 1.00`, and logs `package recognized: ... is CUSA00062 1.06 (update, ..., laid over CUSA00062
-   1.00)`; a repack logs `... is CUSA00062 1.06 · EUR (single-package repack, ..., accepted only with the eboot.bin ...)`.
+   1.00)`; a complete package logs `... is CUSA00062 1.06 · EUR (complete package, ..., accepted only with the eboot.bin ...)`.
 
 **Remove update** (Play page, when an update of the active title is installed from its official packages: its
 installed `param.sfo` is the update's `gp` one) removes the update's two folders only, after renaming them aside, and
-makes the base active again. A repack is never offered for removal. A removal that was interrupted is
+makes the base active again. A complete package is never offered for removal. A removal that was interrupted is
 finished at the next start. Install game with the base package of an installed build also makes that build active again
 without copying. The space check counts the update's full size (about 1.6 GB for 1.06); the base's files are links and
 cost nothing on the same drive.
@@ -292,7 +293,7 @@ out, and `sceAppContentGetAddcontInfo` reports no entitlement, as the offline co
 
 The build key is the online identity of the game version: the client sends `CUSA00062-1.00`, `CUSA00062-1.06` or
 `CUSA04430-1.00`, and the lobby only lists, joins and relays rooms of exactly the same key (`server/lobby/src/lobby.js`).
-DUPLEX runs as `CUSA00062-1.06` and meets official 1.06 players: its executable and game data are the same. 1.00 and 1.06
+The complete 1.06 package runs as `CUSA00062-1.06` and meets official 1.06 players: its executable and game data are the same. 1.00 and 1.06
 players never meet until a compatibility of their simulation and network data is proven. No lobby change or deployment
 is needed for this.
 
@@ -319,7 +320,7 @@ these modes should report themselves unavailable rather than crash. Not verified
 
 ## Saves and trophies
 
-1.00, 1.06 and DUPLEX use the same save folder (`user\savedata\CUSA00062`, from TITLE_ID; none sets
+1.00 and 1.06 (installed either way) use the same save folder (`user\savedata\CUSA00062`, from TITLE_ID; none sets
 `INSTALL_DIR_SAVEDATA`), as on a PS4 where an update keeps the title's saves. CUSA04430 keeps its own
 (`user\savedata\CUSA04430`). Whether 1.06 writes a save layout 1.00 cannot read is not known: nothing migrates or rewrites
 saves, and going back to 1.00 after playing 1.06 should be done with a copy of `user\savedata\CUSA00062`. Trophies are

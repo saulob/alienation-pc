@@ -123,7 +123,7 @@ bool SameTitle(const std::string& sfo, const GameBuild& build) {
     return SfoString(sfo, "TITLE_ID") == build.title_id && SfoString(sfo, "CONTENT_ID") == build.content_id;
 }
 
-// The build a finished game's param.sfo names: its last official package, or one of its repacks.
+// The build a finished game's param.sfo names: its last official package, or one of its complete packages.
 const GameBuild* BuildOfSfo(const std::string& sfo, std::span<const GameBuild> builds, const PackageAlias** alias) {
     *alias = nullptr;
     for (const GameBuild& build : builds) {
@@ -394,7 +394,7 @@ InstallProvenance InstalledProvenance(const std::filesystem::path& app0, const G
         return InstallProvenance::kNone;
     }
     if (PackageAliasOf(build, sfo)) {
-        return InstallProvenance::kRepack;
+        return InstallProvenance::kCompletePackage;
     }
     if (!SameIdentity(sfo, FinishedLayer(build))) {
         return InstallProvenance::kNone;
@@ -500,7 +500,7 @@ GameCheck CheckGameTree(const std::filesystem::path& app0, std::span<const GameB
     }
     if (sha != build.eboot_sha256) {
         return Result(GameFileState::kDifferentVersion,
-                      identity.alias ? "eboot.bin of the repack is not the supported build's"
+                      identity.alias ? "eboot.bin of the complete package is not the supported build's"
                                      : "eboot.bin is not the supported build",
                       sha, &build);
     }

@@ -141,9 +141,9 @@ def main():
     print(f"entries       : {info['entry_count']} (within file: {info['entries_within_file']}), "
           f"delta info: {info['has_delta_info']}")
     print(f"PFS image     : {info['pfs_size']} bytes at {info['pfs_offset']:#x} (within file: {info['pfs_within_file']})")
-    repack = game_profiles.alias_of(layer[0], game_profiles.package_identity(info)) if layer else None
-    if repack:
-        described = f"{layer[0]} {layer[1]}, {repack[1]['name']} (complete game; supported only with its eboot.bin sha256)"
+    complete_package = game_profiles.alias_of(layer[0], game_profiles.package_identity(info)) if layer else None
+    if complete_package:
+        described = f"{layer[0]} {layer[1]}, {complete_package[1]['name']} (complete game; supported only with its eboot.bin sha256)"
     elif layer:
         described = (f"{layer[0]} {layer[1]}, layer {layer[2] + 1} of "
                      f"{len(game_profiles.PROFILES[layer[0]]['versions'][layer[1]]['layers'])}")

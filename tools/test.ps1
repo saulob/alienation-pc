@@ -84,7 +84,7 @@ function Add-Exes([string]$Section, [object[]]$Rows) { foreach ($row in $Rows) {
 
 $s = 'Build and parity'
 Add-Suite $s 'check' 'prepared game builds' 'game\prepared holds the three supported builds the static suites read' @{ Run = 'Test-GameData' }
-Add-Suite $s 'python' 'tests\game_profile_tests.py' 'build fingerprints, regions, DUPLEX alias, save and online identity: launcher and script tables agree'
+Add-Suite $s 'python' 'tests\game_profile_tests.py' 'build fingerprints, regions, complete package alias, save and online identity: launcher and script tables agree'
 Add-Suite $s 'python' 'tests\feature_parity_tests.py' 'feature matrix of the four builds against patch tables, tests and docs; Local co-op only where it exists'
 Add-Suite $s 'python' 'tests\patch_site_tests.py' 'patch sites, byte fingerprints and overlap against the real executables and stream.dat'
 Add-Exes $s @(, @('aln-image-format-tests', 'boot image and content profile contract'))
@@ -175,7 +175,7 @@ Add-Suite $s 'node' 'server\lobby (npm test)' 'the whole Worker suite: protocol,
 Add-Suite $s 'check' 'Worker protection wiring' 'every abuse-protection test file exists and npm test runs them; limiter binding, unique namespace, ping auto-response and edge gate in the sources' @{ Run = 'Test-WorkerWiring' }
 
 $s = 'Packaging and install'
-Add-Suite $s 'exe' 'aln-game-install-tests' 'Install game and Install update: EUR base and 1.06, DUPLEX repack, ASIA/KR base, refusals' @{ Packages = $true }
+Add-Suite $s 'exe' 'aln-game-install-tests' 'Install game and Install update: EUR base and 1.06, complete package, ASIA/KR base, refusals' @{ Packages = $true }
 Add-Suite $s 'exe' 'aln-update-tests' 'updater (no network)'
 Add-Suite $s 'exe' 'aln-update-network-tests' 'updater on a loopback server: no release yet (404), failures, stalls, redirects, retries, production address and asset names'
 Add-Suite $s 'exe' 'aln-update-helper-tests' 'update helper'

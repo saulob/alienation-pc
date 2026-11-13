@@ -172,8 +172,8 @@ def check_semantic_evidence():
         check(update is not None and update[0] == parity.DIFFERENT and 'refused before any change' in update[2],
               f'{name}: Install Update is not refused')
         check(remove is not None and remove[0] == parity.UNAVAILABLE, f'{name}: Remove Update is offered')
-    check('RefuseUpdateOverRepack(roots, hooks, builds, build)' in install and
-          'InstallStatus::kAlreadyContainsUpdate' in install, 'an update over a repack is not refused')
+    check('RefuseUpdateOverCompletePackage(roots, hooks, builds, build)' in install and
+          'InstallStatus::kAlreadyContainsUpdate' in install, 'an update over a complete package is not refused')
     check('== InstallProvenance::kUpdateLayers' in install, 'Remove update does not require official update layers')
 
 
@@ -246,13 +246,13 @@ def check_package_forms():
         for feature in form['differs']:
             check(feature in parity.FEATURES, f'{name}: {feature} is no feature')
     check('sha == identity.build->eboot_sha256 || (sha.empty() && !identity.alias)' in install,
-          'a repack package is not refused without a readable, matching eboot.bin')
-    check('identity.alias ? "eboot.bin of the repack is not the supported build\'s"' in files,
-          'an installed repack is not checked against the build\'s eboot.bin')
+          'a complete package is not refused without a readable, matching eboot.bin')
+    check('identity.alias ? "eboot.bin of the complete package is not the supported build\'s"' in files,
+          'an installed complete package is not checked against the build\'s eboot.bin')
 
 
 def check_identity():
-    """Runtime identity and installation provenance are separate: a repack runs as its build without its lineage."""
+    """Runtime identity and installation provenance are separate: a complete package runs as its build without its lineage."""
     check(set(parity.IDENTITY) == set(columns()), 'the identity table does not cover every column')
     for column in columns():
         runtime, provenance, online = parity.IDENTITY[column]
@@ -320,7 +320,7 @@ def check_platforms():
         check((linux == parity.UNAVAILABLE) == (feature in LINUX_UNAVAILABLE),
               f'{feature}: Linux leaves it out without a platform reason, or offers what it cannot')
         check(deck != parity.UNAVAILABLE or linux == parity.UNAVAILABLE, f'{feature}: the Steam Deck drops a Linux feature')
-    check(parity.platform_builds('Local co-op') == ['CUSA00062-1.06', 'DUPLEX'],
+    check(parity.platform_builds('Local co-op') == ['CUSA00062-1.06', 'COMPLETE'],
           'Local co-op is offered where the game has none')
 
     renderers = [feature for feature in parity.PLATFORM_FEATURES if 'renderer' in feature.lower()]

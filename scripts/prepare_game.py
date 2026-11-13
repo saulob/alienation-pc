@@ -140,10 +140,10 @@ def main():
     layers = []
     for index, (package, info) in enumerate(packages):
         identity = game_profiles.package_identity(info)
-        repack = game_profiles.alias_of(title, identity)
+        complete_package = game_profiles.alias_of(title, identity)
         owner = game_profiles.finishing_version(title, identity)
-        layers.append(root / 'extracted' / (repack[1]['extract_folder'] if repack else profile['versions'][owner]['folder']))
-        extract(package, layers[-1], only, f'layer {index}' + (f' ({repack[1]["name"]})' if repack else ''))
+        layers.append(root / 'extracted' / (complete_package[1]['extract_folder'] if complete_package else profile['versions'][owner]['folder']))
+        extract(package, layers[-1], only, f'layer {index}' + (f' ({complete_package[1]["name"]})' if complete_package else ''))
 
     view = root / 'prepared' / build['folder']
     stats = game_view.build_view(layers, view, f'{title} {version}')

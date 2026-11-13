@@ -556,30 +556,30 @@ std::optional<InstallResult> RefuseOlderUpdate(const GameRoots& roots, const Ins
     return result;
 }
 
-// An update is laid over its base package only. A build installed from a complete repack already contains every update
+// An update is laid over its base package only. A build installed from a complete package already contains every update
 // up to its own version and has no base layer to lay one over, whether it is active or its folder is the update's.
-std::optional<InstallResult> RefuseUpdateOverRepack(const GameRoots& roots, const InstallHooks& hooks,
+std::optional<InstallResult> RefuseUpdateOverCompletePackage(const GameRoots& roots, const InstallHooks& hooks,
                                                     std::span<const GameBuild> builds, const GameBuild& update) {
     if (hooks.expected != PackageKind::kUpdate || !IsUpdateBuild(update)) {
         return std::nullopt;
     }
-    const GameBuild* repack = nullptr;
+    const GameBuild* complete_package = nullptr;
     const GameBuild* active = LastPreparedBuild(roots, builds);
-    if (InstalledProvenance(BuildPaths(roots, update).app0, update) == InstallProvenance::kRepack) {
-        repack = &update;
+    if (InstalledProvenance(BuildPaths(roots, update).app0, update) == InstallProvenance::kCompletePackage) {
+        complete_package = &update;
     } else if (active && std::string_view(active->title_id) == update.title_id &&
-               InstalledProvenance(BuildPaths(roots, *active).app0, *active) == InstallProvenance::kRepack &&
+               InstalledProvenance(BuildPaths(roots, *active).app0, *active) == InstallProvenance::kCompletePackage &&
                std::string_view(FinishedLayer(update).app_ver) <= FinishedLayer(*active).app_ver) {
-        repack = active;
+        complete_package = active;
     }
-    if (!repack) {
+    if (!complete_package) {
         return std::nullopt;
     }
     InstallResult result = Failure(InstallStatus::kAlreadyContainsUpdate,
                                    std::string(update.label) + " is part of the complete package installed as " +
-                                       repack->label);
-    result.contained_version = repack->version;
-    result.installed_label = BuildDisplayName(*repack);
+                                       complete_package->label);
+    result.contained_version = complete_package->version;
+    result.installed_label = BuildDisplayName(*complete_package);
     return result;
 }
 
@@ -595,7 +595,7 @@ std::optional<InstallResult> RefuseForAction(const GameRoots& roots, const Insta
     if (std::optional<InstallResult> refused = RefuseUpdateOfOtherTitle(roots, hooks, builds, build)) {
         return refused;
     }
-    if (std::optional<InstallResult> refused = RefuseUpdateOverRepack(roots, hooks, builds, build)) {
+    if (std::optional<InstallResult> refused = RefuseUpdateOverCompletePackage(roots, hooks, builds, build)) {
         return refused;
     }
     return RefuseOlderUpdate(roots, hooks, builds, build);
@@ -619,7 +619,7 @@ std::optional<InstallResult> RejectForeignExecutable(Package& package, const Gam
     GameCheck check;
     check.state = GameFileState::kDifferentVersion;
     check.detail =
-        identity.alias ? "the repack's eboot.bin is not the supported build's" : "eboot.bin is not the supported build";
+        identity.alias ? "the complete package's eboot.bin is not the supported build's" : "eboot.bin is not the supported build";
     check.build = identity.build;
     return UnsupportedOrFailure(check, package.sfo(), sha);
 }
@@ -851,7 +851,7 @@ RemoveAllResult RemoveInstalledUpdatesOf(const GameRoots& roots, std::string_vie
     RemoveAllResult result;
     for (const GameBuild& build : builds) {
         if (!IsUpdateBuild(build) || title_id != build.title_id ||
-            InstalledProvenance(BuildPaths(roots, build).app0, build) == InstallProvenance::kRepack) {
+            InstalledProvenance(BuildPaths(roots, build).app0, build) == InstallProvenance::kCompletePackage) {
             continue;
         }
         const RemoveResult removed = RemoveInstalledUpdate(roots, build, builds);
@@ -955,7 +955,7 @@ InstallResult InstallFromPackage(const fs::path& package_file, const GameRoots& 
     const std::string recognition = PackageRecognition(source, identity, builds);
     const auto recognized = [&](InstallResult result) {
         result.recognition = recognition;
-        result.repack = identity.alias != nullptr;
+        result.complete_package = identity.alias != nullptr;
         return result;
     };
     if (std::optional<InstallResult> refused = RefuseForAction(roots, hooks, builds, build, identity.layer > 0)) {
@@ -1001,7 +1001,7 @@ InstallResult InstallFromFolder(const fs::path& source_dir, const GameRoots& roo
     const GameBuild& build = *check.build;
     if (std::optional<InstallResult> refused =
             RefuseForAction(roots, hooks, builds, build, IsUpdateBuild(build) && !check.alias)) {
-        refused->repack = check.alias != nullptr;
+        refused->complete_package = check.alias != nullptr;
         return *refused;
     }
     if (std::optional<InstallResult> reused = ReuseInstalledBuild(roots, builds, build, RepairActive(hooks))) {
@@ -1156,7 +1156,7 @@ InstallMessage DescribeInstall(const InstallResult& result) {
         message.title = Tr("A newer update is installed: ") + result.installed_label;
     } else if (result.status == InstallStatus::kAlreadyContainsUpdate) {
         message.title = Tr("This game already contains version ") + result.contained_version;
-    } else if (result.status == InstallStatus::kExpectedUpdatePackage && result.repack) {
+    } else if (result.status == InstallStatus::kExpectedUpdatePackage && result.complete_package) {
         message = {Tr("This is a complete game package"),
                    Tr("It holds the base game and its update together. Use Install game for it.")};
     }

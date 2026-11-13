@@ -20,7 +20,7 @@
 - **Windows is the primary tested platform.** The Linux x86_64 AppImage and Steam Deck support are **experimental**: they are checked headlessly, but have not been tested on Steam Deck hardware.
 - **Vulkan is the only supported release renderer.**
 - **Online 2-player** gameplay has been tested by hand. **3 and 4-player** online protocol and session paths are validated headlessly and have had less manual gameplay testing.
-- **Local co-op** exists on CUSA00062 1.06 / DUPLEX only.
+- **Local co-op** is available on CUSA00062 1.06 only.
 
 Release notes, including known issues: [docs/releases](docs/releases).
 
@@ -30,7 +30,7 @@ Release notes, including known issues: [docs/releases](docs/releases).
 - **Online co-op for 2 to 4 players** through the game's own squad menus, with no PlayStation Network account. See [Online Co-op](#online-co-op)
   - **Public Lobby** and public rooms, **Friends**, **Friend Codes** and **friend requests**, **invites** and **Accept and play**
   - **Direct P2P gameplay** with **automatic relay fallback**, and **Windows / Linux cross-platform** online play
-- **Local co-op for up to 4 players** on CUSA00062 1.06 / DUPLEX. See [Local Co-op](#local-co-op)
+- **Local co-op for up to 4 players** on CUSA00062 1.06. See [Local Co-op](#local-co-op)
 - **Built-in Bug Report page** with a previewed, filtered log. See [Bug Report](#bug-report)
 - **4K internal render resolution** (480p to 4K), separate from the window size
 - **True Ultrawide** (experimental) with 21:9 and 32:9
@@ -85,12 +85,14 @@ The built-in updater offers new releases from this repository and installs them 
 | Build | Title ID | Version | Packages | Content ID | eboot.bin SHA-256 |
 |---|---|---|---|---|---|
 | CUSA00062 1.00 · EUR | `CUSA00062` | 1.00 | base | `EP9000-CUSA00062_00-ALIENATIONGAMEEU` | `f5f41f870db752add56920c5538441bc3750b1442f69c1de3895ee282887d855` |
-| CUSA00062 1.06 · EUR | `CUSA00062` | 1.06 | base + update, or the DUPLEX single-package repack | `EP9000-CUSA00062_00-ALIENATIONGAMEEU` | `c65c18865691d7288055cae70af983aa86898d59936976ef12f5eb033eda7243` |
+| CUSA00062 1.06 · EUR | `CUSA00062` | 1.06 | base + official update, or the complete-package form | `EP9000-CUSA00062_00-ALIENATIONGAMEEU` | `c65c18865691d7288055cae70af983aa86898d59936976ef12f5eb033eda7243` |
 | CUSA04430 1.00 · ASIA/KR | `CUSA04430` | 1.00 | base | `HP9000-CUSA04430_00-ALIENATIONGAMEKR` | `11928457792fdba30aee3ceb9f5fb300bac720d0f3c1774825a8380a2dc9b72e` |
 
-The **USA release (CUSA04181) is not supported**: no game data of it was available to verify. The `HP` publisher prefix and `KR` suffix of CUSA04430's content ID identify an Asian (Korean) release, whatever name the package file has. Other builds are refused with a message saying what was found.
+The **USA release (CUSA04181) is not supported**: no game data of it was available to verify.
 
-Each build is installed in its own folder (`game\prepared\<TITLE_ID>-<version>`); choosing the package of an installed build again makes it the active one. The launcher checks the package's metadata and the executable's hash before installing, so an unsupported build is refused. The DUPLEX package is the official 1.06 game in one package: same executable and game data, installed with **Install game** and run as CUSA00062 1.06.
+The `HP` publisher prefix and `KR` suffix of CUSA04430's content ID identify an Asian (Korean) release, whatever name the package file has. Other builds are refused with a message saying what was found.
+
+Each build is installed in its own folder (`game\prepared\<TITLE_ID>-<version>`); choosing the package of an installed build again makes it the active one. The launcher checks the package's metadata and the executable's hash before installing, so an unsupported build is refused. The complete-package form holds the base game and the 1.06 update in one package: same executable and game data, installed with **Install game** and run as CUSA00062 1.06. It is not a separate build.
 
 Every build has the same port features, each on its own verified code. Menus confirm with Cross (A) and cancel with Circle (B) by default; **Asian Menu Buttons** (Controls page) switches CUSA00062 1.06 and CUSA04430 to Circle confirms and Cross cancels, the PS4 Asian convention, without changing gameplay buttons or prompt style. [docs/GAME_BUILDS.md](docs/GAME_BUILDS.md) has the parity table, how each entry is verified and what is still untested in game.
 
@@ -98,7 +100,7 @@ Every build has the same port features, each on its own verified code. Menus con
 
 Install the base game first (**Install game...**), then press **Install update...** on the Play page and select the update package. The launcher checks the package's metadata (title, update category, version), refuses a base package, another title's update or an older update before writing anything, lays the update over the installed base in a staging folder, checks it and builds its boot image, and only then switches to it. A failed or cancelled update leaves the installed game as it was. Saves and settings are never touched. **Remove update** returns to the base game.
 
-The DUPLEX package already holds the update: install it with **Install game**. Install update then refuses the official 1.06 update before changing anything ("This game already contains version 1.06"), and Remove update is not offered: there is no update layer.
+A complete 1.06 package already holds the update: install it with **Install game**. Install update then refuses the official 1.06 update before changing anything ("This game already contains version 1.06"), and Remove update is not offered: there is no separate update layer.
 
 ## Online Co-op
 
@@ -117,7 +119,7 @@ How it works:
 - The port's online service (running on Cloudflare) handles your online identity, Friend Codes and friends, who is online, squads, invitations and finding squads. The game's own network code runs unchanged.
 - Gameplay goes **directly between the players' PCs** (P2P). Only when two players cannot connect directly does the service relay that one connection, **automatically**.
 - **Windows and Linux players can play together.**
-- Only matching game builds meet: **CUSA00062 1.00**, **CUSA00062 1.06 (including DUPLEX)** and **CUSA04430 1.00** never meet each other, because the game needs the same executable on every PC.
+- Only matching game builds meet: **CUSA00062 1.00**, **CUSA00062 1.06** and **CUSA04430 1.00** never meet each other, because the game needs the same executable on every PC.
 
 ### Playing online
 
@@ -133,7 +135,7 @@ In game, the squad menus offer Create Squad, Join Squad, Friends only, Invite on
 
 ## Local Co-op
 
-**CUSA00062 1.06 and DUPLEX CUSA00062 1.06** have local co-op for **up to four players**: connect up to four controllers and press **OPTIONS** on another controller to join ("Join Local Co-op"). Each player gets their own class, gear and save. The first gamepad (or the keyboard) is player 1; further gamepads become players 2 to 4 in the order they connect.
+**CUSA00062 1.06**, installed from the official base + update or from a verified complete 1.06 package, has local co-op for **up to four players**: connect up to four controllers and press **OPTIONS** on another controller to join ("Join Local Co-op"). Each player gets their own class, gear and save. The first gamepad (or the keyboard) is player 1; further gamepads become players 2 to 4 in the order they connect.
 
 Local co-op plays **offline**: the game itself leaves online play when a local player joins. CUSA00062 1.00 and CUSA04430 1.00 do not have it.
 

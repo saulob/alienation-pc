@@ -25,7 +25,7 @@ struct PackageLayer {
     bool update;
 };
 
-// A complete single package of a build's finished game that is not one of its official packages (a repack). Its
+// A complete single package of a build's finished game that is not one of its official packages. Its
 // param.sfo alone never identifies the build: the package is accepted only with the build's own eboot.bin.
 struct PackageAlias {
     const char* name;
@@ -58,7 +58,7 @@ std::span<const GameBuild> SupportedBuilds();
 // The finished game's layer: its param.sfo is the one of the installed game.
 const PackageLayer& FinishedLayer(const GameBuild& build);
 
-// The finished package's APP_VER and VERSION, formatted for display (01.00 becomes 1.00); a repack's own when given.
+// The finished package's APP_VER and VERSION, formatted for display (01.00 becomes 1.00); a complete package's own when given.
 std::string BuildMetadataText(const GameBuild& build, const PackageAlias* alias = nullptr);
 
 // True for a build finished by an update package.

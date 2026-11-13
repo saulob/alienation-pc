@@ -69,8 +69,8 @@ gamepads), not yet played: online squads of 3 and 4 and local co-op with 3 or 4 
    minutes) and receives it as a session invitation event, exactly as a PS4 game started from an invitation.
 
 Only the same game build plays together: CUSA00062 1.00 (EUR), CUSA00062 1.06 (EUR, updated) and CUSA04430 1.00
-(ASIA/KR) never meet each other, because the game's lockstep simulation needs the same executable on every PC. The DUPLEX
-repack runs as CUSA00062 1.06 (same executable and game data) and meets official 1.06 players.
+(ASIA/KR) never meet each other, because the game's lockstep simulation needs the same executable on every PC. A complete 1.06
+package runs as CUSA00062 1.06 (same executable and game data).
 
 ## Bug reports
 
@@ -344,7 +344,7 @@ with these differences:
 
 ## Local co-op
 
-CUSA00062 1.06 (and DUPLEX) adds local co-op; 1.00 and the KR build have none (`tests/patch_site_tests.py` checks each
+CUSA00062 1.06 adds local co-op; 1.00 and the KR build have none (`tests/patch_site_tests.py` checks each
 build's menu bytecode). Up to four players: each controller is a local user, and the game's user manager opens a pad for
 every user it hears of (the initial user at start, then each LOGIN event). Another player joins by pressing OPTIONS on
 their controller ("Join Local Co-op" on the squad screen, "Switch Player" on the player screen); each local player has

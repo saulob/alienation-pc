@@ -147,9 +147,9 @@ PARITY = {
 
 # Package forms that are not builds of their own: each runs as its build, with the build's executable as the proof.
 PACKAGE_FORMS = {
-    'DUPLEX': {
+    'COMPLETE': {
         'build': 'CUSA00062-1.06',
-        'alias': 'single-package repack',
+        'alias': 'complete package',
         'eboot_sha256': 'c65c18865691d7288055cae70af983aa86898d59936976ef12f5eb033eda7243',
         'differs': {
             'Install Game': (SUPPORTED, HEADLESS, 'as CUSA00062 1.06, executable checked; ' + _INSTALL),
@@ -160,18 +160,18 @@ PACKAGE_FORMS = {
     },
 }
 
-# What a build runs as, and how its files got there: DUPLEX runs as 1.06 but was never an update laid over 1.00.
+# What a build runs as, and how its files got there: the complete package runs as 1.06 but was never an update laid over 1.00.
 IDENTITY = {
     'CUSA00062-1.00': ('CUSA00062-1.00', 'base package (gd, APP_VER 01.00)', 'CUSA00062-1.00'),
     'CUSA00062-1.06': ('CUSA00062-1.06', 'base 1.00 + official update layers (gp, APP_VER 01.06), removable',
                        'CUSA00062-1.06'),
-    'DUPLEX': ('CUSA00062-1.06', 'single-package repack (gd, APP_VER 01.00, VERSION 01.06), no update layer',
-               'CUSA00062-1.06'),
+    'COMPLETE': ('CUSA00062-1.06', 'complete package (gd, APP_VER 01.00, VERSION 01.06), no update layer',
+                 'CUSA00062-1.06'),
     'CUSA04430-1.00': ('CUSA04430-1.00', 'base package (gd, APP_VER 01.00)', 'CUSA04430-1.00'),
 }
 
 COLUMNS = (('CUSA00062-1.00', 'CUSA00062 1.00 · EUR'), ('CUSA00062-1.06', 'CUSA00062 1.06 · EUR'),
-           ('DUPLEX', 'DUPLEX (CUSA00062 1.06)'), ('CUSA04430-1.00', 'CUSA04430 1.00 · ASIA/KR'))
+           ('COMPLETE', 'CUSA00062 1.06 · EUR (complete package)'), ('CUSA04430-1.00', 'CUSA04430 1.00 · ASIA/KR'))
 
 
 WINDOWS, LINUX, DECK = 'Windows', 'Linux', 'Steam Deck'
@@ -194,7 +194,7 @@ PLATFORM_FEATURES = {
                      'own chooser (mouse, keyboard, controller)'),
     'Install update': (_S, _S, _S, 'Install Update', 'official CUSA00062 1.06 layers over 1.00'),
     'Remove update': (_S, _S, _S, 'Remove Update', 'official layers only'),
-    'DUPLEX package form': (_S, _S, _S, ALL_BUILDS, 'runs as CUSA00062 1.06; an update over it is refused'),
+    'Complete package form': (_S, _S, _S, ALL_BUILDS, 'runs as CUSA00062 1.06; an update over it is refused'),
     'Online Play': (_S, _S, _S, 'Online', 'one lobby protocol and online version on every platform'),
     'Friends and friend codes': (_S, _S, _S, 'Friends', 'the same lobby accounts'),
     'Invitations and Accept and play': (_S, _S, _S, 'Sessions and invitations', 'the same launcher online client'),
@@ -247,7 +247,8 @@ def platform_table():
     lines = [_row('Feature', list(PLATFORMS) + ['Builds', 'Notes']), '|' + '---|' * (len(PLATFORMS) + 3)]
     for feature, (windows, linux, deck, _, note) in PLATFORM_FEATURES.items():
         builds = platform_builds(feature)
-        shown = 'all' if len(builds) == len(COLUMNS) else ', '.join(names[key] for key in builds)
+        listed = [key for key in builds if key != 'COMPLETE' or 'CUSA00062-1.06' not in builds]
+        shown = 'all' if len(builds) == len(COLUMNS) else ', '.join(names[key] for key in listed)
         lines.append(_row(feature, [windows, linux, deck, shown, note]))
     return '\n'.join(lines)
 

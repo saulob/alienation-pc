@@ -22,9 +22,9 @@ PS4 package (.pkg). This port currently accepts these builds:
 
 To add the European 1.06 update, install the base game first, then click
 "Install update..." on the Play page and select the update package. "Remove
-update" returns to 1.00; saves are kept. The DUPLEX single-package repack of
-1.06 is installed with "Install game..." and runs as 1.06. Every build has the
-same port features; local co-op exists only in 1.06 (and DUPLEX).
+update" returns to 1.00; saves are kept. A complete CUSA00062 1.06 package is
+installed with "Install game..." and runs as 1.06. Every build has the same
+port features; local co-op exists only in 1.06.
 
 Any other build is refused, and the log names what was found.
 

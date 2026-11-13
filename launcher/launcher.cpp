@@ -1031,7 +1031,7 @@ private:
         }
     }
 
-    // Local co-op came with the 1.06 update (DUPLEX runs as 1.06); docs/GAME_BUILDS.md has the evidence.
+    // Local co-op came with the 1.06 update (complete package runs as 1.06); docs/GAME_BUILDS.md has the evidence.
     const char* LocalCoopText() const {
         if (!build_) return "Up to 4 controllers in CUSA00062 1.06: press OPTIONS on another controller to join.";
         if (BuildKey(*build_) == "CUSA00062-1.06") {

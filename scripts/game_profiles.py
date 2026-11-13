@@ -34,9 +34,9 @@ PROFILES = {
                 'folder': 'CUSA00062-1.06',
                 'data_files': ('audio.pck', 'stream.dat', 'video/intro.mp4', 'video/loading.mp4', 'video/splash.mp4',
                                'video/title.mp4'),
-                # DUPLEX: base and update in one package; accepted only with the eboot_sha256 above.
-                'package_aliases': ({'name': 'single-package repack', 'category': 'gd', 'app_ver': '01.00',
-                                     'sfo_version': '01.06', 'extract_folder': 'CUSA00062-1.06-repack'},),
+                # complete package: base and update in one package; accepted only with the eboot_sha256 above.
+                'package_aliases': ({'name': 'complete package', 'category': 'gd', 'app_ver': '01.00',
+                                     'sfo_version': '01.06', 'extract_folder': 'CUSA00062-1.06-complete'},),
             },
         },
         'entry': ENTRY,
@@ -106,12 +106,12 @@ def package_identity(info):
 
 
 def alias_identity(title, alias):
-    """The identity, as package_identity() names it, of a build's repack package."""
+    """The identity, as package_identity() names it, of a build's complete package."""
     return title, alias['app_ver'], alias['sfo_version'], alias['category'] == 'gp'
 
 
 def alias_of(title, identity):
-    """(profile version, alias) of the repack with this identity, or None. Its eboot.bin still has to be checked."""
+    """(profile version, alias) of the complete package with this identity, or None. Its eboot.bin still has to be checked."""
     for version, build in PROFILES[title]['versions'].items():
         for alias in build.get('package_aliases', ()):
             if alias_identity(title, alias) == identity:
@@ -129,7 +129,7 @@ def finishing_version(title, identity):
 
 
 def version_of(game):
-    """The profile version whose finished param.sfo (or a repack's) matches the game folder, or None."""
+    """The profile version whose finished param.sfo (or a complete package's) matches the game folder, or None."""
     try:
         sfo = parse_sfo((Path(game) / 'sce_sys' / 'param.sfo').read_bytes())
     except (OSError, ValueError):
@@ -147,7 +147,7 @@ def version_of(game):
 def package_layer(info):
     """(TITLE_ID, profile version, layer index) of the package of a supported build's finished game, or None.
 
-    `info` is what scripts/pkg_info.py reads. The index is the package's place in the build's layers; a repack is a
+    `info` is what scripts/pkg_info.py reads. The index is the package's place in the build's layers; a complete package is a
     complete build by itself (index 0) whose executable is checked when it is prepared.
     """
     identity = package_identity(info)

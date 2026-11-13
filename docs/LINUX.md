@@ -20,7 +20,7 @@ under SteamOS; it has not been tested on Steam Deck hardware.
 | Install game | SUPPORTED | EQUIVALENT | EQUIVALENT | all | Windows file dialog; Linux: zenity or kdialog, else the launcher's own chooser (mouse, keyboard, controller) |
 | Install update | SUPPORTED | SUPPORTED | SUPPORTED | CUSA00062 1.00 · EUR, CUSA00062 1.06 · EUR | official CUSA00062 1.06 layers over 1.00 |
 | Remove update | SUPPORTED | SUPPORTED | SUPPORTED | CUSA00062 1.06 · EUR | official layers only |
-| DUPLEX package form | SUPPORTED | SUPPORTED | SUPPORTED | all | runs as CUSA00062 1.06; an update over it is refused |
+| Complete package form | SUPPORTED | SUPPORTED | SUPPORTED | all | runs as CUSA00062 1.06; an update over it is refused |
 | Online Play | SUPPORTED | SUPPORTED | SUPPORTED | all | one lobby protocol and online version on every platform |
 | Friends and friend codes | SUPPORTED | SUPPORTED | SUPPORTED | all | the same lobby accounts |
 | Invitations and Accept and play | SUPPORTED | SUPPORTED | SUPPORTED | all | the same launcher online client |
@@ -28,7 +28,7 @@ under SteamOS; it has not been tested on Steam Deck hardware.
 | P2P with relay fallback | SUPPORTED | SUPPORTED | SUPPORTED | all | direct UDP, STUN, UPnP, the lobby relay when direct fails |
 | Cross-platform play | SUPPORTED | SUPPORTED | SUPPORTED | all | Windows and Linux players of the same build meet in one room |
 | Online status box | SUPPORTED | SUPPORTED | SUPPORTED | all | Online Off, Connecting, Connected, Unavailable |
-| Local co-op | SUPPORTED | SUPPORTED | SUPPORTED | CUSA00062 1.06 · EUR, DUPLEX (CUSA00062 1.06) | one to four controllers; only where the game has it |
+| Local co-op | SUPPORTED | SUPPORTED | SUPPORTED | CUSA00062 1.06 · EUR | one to four controllers; only where the game has it |
 | Frame rate (30, 60, 90, 120, 144, 165, 240, Unlimited) | SUPPORTED | SUPPORTED | SUPPORTED | all | above 60 the latest game frame is shown again (the game still runs at 60); Gamescope paces presentation itself: rates above the display's refresh may not show |
 | Frame counter, frame rate and render resolution in the title | SUPPORTED | SUPPORTED | SUPPORTED | all | the same overlay code |
 | Vulkan renderer | SUPPORTED | SUPPORTED | SUPPORTED | all | the only released renderer: v0.1.0 requires Vulkan, with no renderer setting |
@@ -43,7 +43,7 @@ under SteamOS; it has not been tested on Steam Deck hardware.
 | Skip Intro | SUPPORTED | SUPPORTED | SUPPORTED | all | the same guest patch |
 | Exit Game | SUPPORTED | SUPPORTED | SUPPORTED | all | the same menu patch |
 | Xbox and PlayStation prompts | SUPPORTED | SUPPORTED | SUPPORTED | all | the same patched assets |
-| Asian Menu Buttons | SUPPORTED | SUPPORTED | SUPPORTED | CUSA00062 1.06 · EUR, DUPLEX (CUSA00062 1.06), CUSA04430 1.00 · ASIA/KR | the same engine getters |
+| Asian Menu Buttons | SUPPORTED | SUPPORTED | SUPPORTED | CUSA00062 1.06 · EUR, CUSA04430 1.00 · ASIA/KR | the same engine getters |
 | Voice-Over Language text fix | SUPPORTED | SUPPORTED | SUPPORTED | CUSA04430 1.00 · ASIA/KR | the same stream.dat patch |
 | Controller and keyboard input | SUPPORTED | SUPPORTED | SUPPORTED | all | SDL3; Steam Input on the Steam Deck |
 | Save data | SUPPORTED | SUPPORTED | SUPPORTED | all | per user and title, in the data folder |
