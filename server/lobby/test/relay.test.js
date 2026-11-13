@@ -38,6 +38,13 @@ function join(client, room) {
   client.room = reply.room;
 }
 
+function fourInARoom(e) {
+  const [a, b, c, d] = [player(e), player(e), player(e), player(e)];
+  const room = openRoom(a);
+  for (const client of [b, c, d]) join(client, room);
+  return [a, b, c, d];
+}
+
 function threeInARoom(e) {
   const [a, b, c] = [player(e), player(e), player(e)];
   const room = openRoom(a);
@@ -251,34 +258,38 @@ test('rate limits drop a flood and then close the relay for the sender; normal r
     e.advance(1000 / 65);
   }
   assert.equal(b.binary.length, 70);
-  for (let i = 0; i < RELAY.connection.packets.burst * 2; i++) a.relay(frame);
+  for (let i = 0; i <= RELAY.connection.packets.burst + RELAY.overruns.burst; i++) a.relay(frame);
   assert.ok(b.binary.length < 70 + RELAY.connection.packets.burst + 10);
   assert.ok(e.logs.some((l) => l.includes('reason=rate_limit')));
-  for (let i = 0; i < RELAY.overrunsToClose; i++) a.relay(frame);
   assert.equal(a.events('relay.closed').length, 1);
   const forwarded = b.binary.length;
   e.advance(60000);
   a.relay(frame);
   assert.equal(b.binary.length, forwarded);
+  assert.equal(a.closedWith, null);
+  for (let i = 0; i < RELAY.stale.burst && !a.closedWith; i++) a.relay(frame);
+  assert.deepEqual(a.closedWith, { code: 1008, reason: 'relay abuse' });
+  assert.equal(b.closedWith, null);
 });
 
 test('the room budget is shared by its members', () => {
   const e = env();
-  const { a, b, c } = threeInARoom(e);
-  const senders = [a, b, c];
+  const senders = fourInARoom(e);
   const frame = (s, to) => frameTo(s, to.me, payload(100));
   let sent = 0;
   for (let round = 0; round < 700; round++) {
     for (const s of senders) {
-      const to = senders[(senders.indexOf(s) + 1) % 3];
+      const to = senders[(senders.indexOf(s) + 1) % senders.length];
       s.relay(frame(s, to));
       sent += 1;
     }
   }
-  const delivered = a.binary.length + b.binary.length + c.binary.length;
+  const delivered = senders.reduce((n, s) => n + s.binary.length, 0);
   assert.ok(sent > RELAY.room.packets.burst);
   assert.ok(delivered <= RELAY.room.packets.burst + 5);
   assert.ok(e.logs.some((l) => l.includes('reason=room_rate_limit')));
+  for (const s of senders) assert.equal(s.closedWith, null);
+  assert.equal(senders[0].events('relay.closed').length, 0);
 });
 
 test('a peer socket with a full buffer gets nothing; it gets frames again once it drains', () => {
@@ -327,28 +338,35 @@ test('the byte limits bind before the packet limits: per connection, then per ro
   assert.ok(forwarded < RELAY.connection.packets.burst);
   assert.ok(e.logs.some((l) => l.includes('reason=rate_limit')));
   const room = env();
-  const trio = threeInARoom(room);
+  const four = fourInARoom(room);
   let delivered = 0;
   for (let i = 0; i < 400; i++) {
-    for (const [from, to] of [[trio.a, trio.b], [trio.b, trio.c], [trio.c, trio.a]]) from.relay(big(from, to));
+    for (const [index, from] of four.entries()) from.relay(big(from, four[(index + 1) % four.length]));
   }
-  delivered = trio.a.binary.length + trio.b.binary.length + trio.c.binary.length;
+  delivered = four.reduce((n, s) => n + s.binary.length, 0);
   assert.ok(delivered * frameBytes <= RELAY.room.bytes.burst + frameBytes);
   assert.ok(room.logs.some((l) => l.includes('reason=room_rate_limit')));
   assert.equal(c.closedWith, null);
 });
 
-test('a closed relay stays closed for that connection and its state is released with the socket', () => {
+test('a suspended relay stays off in that room, works again in the next, and its state is released with the socket', () => {
   const e = env();
   const { a, b } = threeInARoom(e);
   const frame = frameTo(a, b.me, payload(50));
-  for (let i = 0; i < RELAY.connection.packets.burst + RELAY.overrunsToClose + 5; i++) a.relay(frame);
+  for (let i = 0; i < RELAY.connection.packets.burst + RELAY.overruns.burst + 5; i++) a.relay(frame);
   assert.equal(a.events('relay.closed').length, 1);
   assert.ok(e.lobby.relays.connections.size > 0 && e.lobby.relays.routes.size > 0);
   const delivered = b.binary.length;
   e.advance(120000);
   a.relay(frame);
   assert.equal(b.binary.length, delivered);
+  assert.equal(a.closedWith, null);
+  assert.equal(a.call('room.leave', { room: a.room.id }).code, 'ok');
+  assert.equal(b.call('room.leave', { room: b.room.id }).code, 'ok');
+  openRoom(a);
+  join(b, a.room);
+  a.relay(frameTo(a, b.me, payload(50)));
+  assert.equal(b.binary.length, delivered + 1);
   a.drop();
   b.drop();
   assert.equal(e.lobby.relays.routes.size, 0);

@@ -84,16 +84,22 @@ Every protection is invisible to a client that behaves; limits live in memory (`
 - **Requests**: 60 burst then 20/s per socket; room operations 30 then 1/s; `room.create` 6 then 1 per 20 s per account
   (20 then 1 per 6 s per address); `room.join` 20 then 1 per 5 s per account; `rooms.list` 6 then 1 per 5 s per account
   (60 then 3/s per address).
-- **Writes**: unchanged `udp`, `room.set_internal` and `room.set_external` write nothing. A change spends a budget of the
+- **Writes**: unchanged `udp`, `room.set_internal`, `room.set_external`, `session.create`, `invite.answer` and `invite.used`
+  write nothing. A change spends a budget of the
   socket, the account and the address (room data and endpoints 40 then 1/s; friend changes 20 then 1 per 3 s).
 - **Public endpoints**: each new advertised IPv4 of an IPv6 client costs a token of its address (8 then 1 per 30 s).
 - **Signaling hygiene**: LAN candidates reach only members behind the same observed address; only private, loopback and
   link-local IPv4 candidates are accepted; a client on IPv4 cannot advertise another address; endpoints go only to
   members of the same room.
-- **Relay**: per connection 400 frames/s and 128 KB/s, per room twice that, 1200-byte payloads, a 16-byte header whose
-  room token only members know; the lobby writes the sender's member itself, so a sender cannot impersonate another; 200
-  invalid frames then 5/s close the connection (1008).
-- **Refusals**: more than 30 refused or malformed requests on one socket, refilled 1 per 2 s, close it (1008).
+- **Relay**: per connection 400 frames/s and 128 KB/s, per room 1200 frames/s and 384 KB/s, 1200-byte payloads, a
+  16-byte header whose room token only members know; the lobby writes the sender's member itself, so a sender cannot
+  impersonate another. Past 256 frames over its own budget (refilled 4/s) a sender's relay is off in that room
+  (`relay.closed`); 16 malformed frames (1 per minute) or 200 stale ones (wrong token, missing member, left room,
+  relay off; 1/s) close the connection (1008). A full peer buffer or a busy room only drops frames.
+- **Before sign-in**: the fifth text or binary frame (the client sends one; `ping` never reaches the object) closes the
+  socket (1008).
+- **Refusals**: more than 30 refused, malformed or unknown-operation requests on one socket, refilled 1 per 2 s, close it
+  (1008). Per-socket counts live in the socket's attachment, so a hibernated object does not reset them.
 
 ## Usage statistics and the dashboard
 

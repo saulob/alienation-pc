@@ -35,7 +35,7 @@ $powershell = (Get-Process -Id $PID).Path
 
 function Invoke-ReleaseCheck([string]$Target) {
     $kind = if ($Target -like '*.zip') { '-Zip' } else { '-Folder' }
-    & $powershell -NoProfile -ExecutionPolicy Bypass -File $checker $kind $Target
+    & $powershell -NoProfile -ExecutionPolicy Bypass -File $checker $kind $Target | Out-Host
     return $LASTEXITCODE -eq 0
 }
 

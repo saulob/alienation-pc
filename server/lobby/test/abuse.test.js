@@ -443,7 +443,7 @@ test('a sender of malformed frames loses its connection after a bounded number',
   const env = makeLobby();
   const { a } = pair(env);
   const junk = new Uint8Array([1, 2, 3]);
-  for (let i = 0; i < RELAY.invalid.burst; i++) a.relay(junk);
+  for (let i = 0; i < RELAY.malformed.burst; i++) a.relay(junk);
   assert.equal(a.closedWith, null);
   a.relay(junk);
   assert.deepEqual(a.closedWith, { code: 1008, reason: 'relay abuse' });
@@ -467,16 +467,21 @@ test('frames with a bad token, to a missing member, from a sender without a room
     [env.connect('198.51.100.12'), encodeRelayFrame(token, 0x20, 1, payload)],
   ];
   for (const [sender, frame] of cases) {
-    for (let i = 0; i < RELAY.invalid.burst + 1; i++) sender.relay(frame);
+    for (let i = 0; i < RELAY.stale.burst + 1 && !sender.closedWith; i++) sender.relay(frame);
     assert.equal(sender.closedWith?.code, 1008);
   }
 });
 
 test('invalid frames are budgeted over time: an occasional stray one never closes a sender', () => {
   const env = makeLobby();
-  const { a } = pair(env);
+  const { a, token } = pair(env);
   for (let i = 0; i < 600; i++) {
     a.relay(new Uint8Array([9]));
+    a.relay(encodeRelayFrame(token, 0x30, i, payload));
+    env.advance(60_000);
+  }
+  for (let i = 0; i < 600; i++) {
+    a.relay(encodeRelayFrame(token, 0x30, i, payload));
     env.advance(1000);
   }
   assert.equal(a.closedWith, null);
@@ -497,20 +502,20 @@ test('a closed sender is ignored, and a connection that never greeted cannot rel
   const env = makeLobby();
   const { a, b, token } = pair(env);
   const junk = new Uint8Array([1]);
-  for (let i = 0; i <= RELAY.invalid.burst; i++) a.relay(junk);
+  for (let i = 0; i <= RELAY.malformed.burst; i++) a.relay(junk);
   assert.equal(a.closedWith?.code, 1008);
   a.relay(encodeRelayFrame(token, 0x20, 1, payload));
   assert.equal(b.binary.length, 0);
   const silent = env.connect('198.51.100.30');
-  for (let i = 0; i <= RELAY.invalid.burst; i++) silent.relay(encodeRelayFrame(token, 0x20, 1, payload));
-  assert.equal(silent.closedWith?.code, 1008);
+  for (let i = 0; i <= PROTECTION.preHelloFrames; i++) silent.relay(encodeRelayFrame(token, 0x20, 1, payload));
+  assert.deepEqual(silent.closedWith, { code: 1008, reason: 'sign in first' });
 });
 
-test('relay state of a connection that never greeted is released when it closes', () => {
+test('a connection that never greeted leaves no relay state behind', () => {
   const env = makeLobby();
   const silent = env.connect('198.51.100.30');
   silent.relay(new Uint8Array([1]));
-  assert.equal(env.lobby.relays.connections.size, 1);
+  assert.equal(env.lobby.relays.connections.size, 0);
   silent.drop();
   assert.equal(env.lobby.relays.connections.size, 0);
 });
@@ -530,6 +535,25 @@ test('a woken object that already knows its alarm does not set it again', () => 
   assert.equal(sets.length, 0);
   void new Lobby(env.host);
   assert.equal(sets.length, 1);
+});
+
+test('the alarm moves only for an earlier deadline: a seat grace pulls it in, a later one leaves it', () => {
+  const env = makeLobby();
+  const { a, b } = pair(env);
+  const sample = env.host.alarmAt;
+  const sets = [];
+  const setAlarm = env.host.setAlarm.bind(env.host);
+  env.host.setAlarm = (ms) => {
+    sets.push(ms);
+    setAlarm(ms);
+  };
+  b.drop();
+  assert.equal(sets.length, 1);
+  assert.ok(sets[0] < sample);
+  env.advance(1000);
+  a.drop();
+  assert.equal(sets.length, 1);
+  assert.equal(env.host.alarmAt, sets[0]);
 });
 
 test('diagnostics flush once per interval and an idle object schedules no further alarm', () => {

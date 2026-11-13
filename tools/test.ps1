@@ -1,19 +1,31 @@
 <#
 .SYNOPSIS
-The one focused validation command: builds the test targets and runs every headless suite. No game, launcher window,
-controller, audio device or production service is used.
+The one pre-commit validation command: runs every headless suite and ends with one PASS, FAIL and NOT RUN summary. No
+game, launcher window, controller, audio device, network or production service is used.
 
 .DESCRIPTION
-tools\build.ps1 must have configured build\cmake\clang64 first. The suites are grouped in sections, each prints PASS or
-FAIL, and a failing suite shows its real stdout and stderr. Every suite runs even after one fails; the exit code is
-non-zero when any suite failed, a binary or script is missing, or a dependency (the project .venv Python, Node.js, the
-prepared game builds) is not there. Nothing is silently skipped: parts a suite skips are listed in the summary.
+The suites are grouped in sections, each prints PASS, FAIL or NOT RUN, and a failing suite shows its real stdout and
+stderr. Every suite runs even after one fails; the exit code is non-zero when any suite failed or a script or dependency
+(the project .venv Python, Node.js with npm, the prepared game builds) is missing. Parts a suite skips are listed in the
+summary.
+
+Nothing is compiled or fetched by default. The C++ suites run the test binaries already in the build folder; a binary
+that is missing or older than its sources is NOT RUN, with the exact command to make it current (-Build). NOT RUN does not
+fail the gate, and the last line says when anything did not run.
 
 Local co-op (one to four controllers) runs on virtual SDL gamepads, online rooms of two to four players on a loopback
 development lobby with modelled peers, the launcher's Accept and play on the launcher's own online client. Real
 gameplay, real controllers, real network play and the visuals are still tested by hand.
 
 The git state is never changed: the checks only read it, and the run fails if a suite leaves the tree different.
+
+.PARAMETER Build
+Builds the test targets first (incremental; the first build takes several minutes) and fetches the video core
+dependencies in gpu\deps.txt when they are missing. This is the only mode that compiles or uses the network.
+
+.PARAMETER BuildDir
+Build folder of the C++ test binaries; default build\cmake\clang64 (tools\build.ps1 configures it). Without it the C++
+suites are NOT RUN.
 
 .PARAMETER Packages
 Folder with the player's real .pkg files (read only; also ALN_TEST_PACKAGES). Without it, Install game and Install
@@ -43,12 +55,14 @@ param(
     [switch]$Detail,
     [switch]$List,
     [string]$Filter = '',
-    [switch]$Release
+    [switch]$Release,
+    [switch]$Build,
+    [string]$BuildDir = ''
 )
 
 . (Join-Path $PSScriptRoot '_common.ps1')
 $root = $script:RepoRoot
-$buildDir = Join-Path $root 'build\cmake\clang64'
+$buildDir = if (-not $BuildDir) { Join-Path $root 'build\cmake\clang64' } elseif ([IO.Path]::IsPathRooted($BuildDir)) { $BuildDir } else { Join-Path $root $BuildDir }
 $binDir = Join-Path $buildDir 'bin'
 $hostExe = (Get-Process -Id $PID).Path
 $pwsh = Get-Command pwsh -ErrorAction SilentlyContinue
@@ -60,6 +74,10 @@ $gameBuilds = 'CUSA00062-1.00', 'CUSA00062-1.06', 'CUSA04430-1.00'
 $suites = New-Object System.Collections.Generic.List[object]
 function Add-Suite([string]$Section, [string]$Kind, [string]$Name, [string]$Description, [hashtable]$Options = @{}) {
     $suites.Add([pscustomobject]@{ Section = $Section; Kind = $Kind; Name = $Name; Description = $Description; Options = $Options })
+}
+$notRunSuites = New-Object System.Collections.Generic.List[object]
+function Add-NotRun([string]$Section, [string]$Name, [string]$Reason) {
+    $notRunSuites.Add([pscustomobject]@{ Section = $Section; Name = $Name; Status = 'NOT RUN'; Seconds = 0; Checks = 0; Summary = $Reason })
 }
 function Add-Exes([string]$Section, [object[]]$Rows) { foreach ($row in $Rows) { Add-Suite $Section 'exe' $row[0] $row[1] @{ MinChecks = $(if ($row.Count -gt 2) { $row[2] } else { 0 }) } } }
 
@@ -73,6 +91,8 @@ $scriptTests = 'build_script_tests.ps1', 'build_log_tests.ps1', 'angle_dependenc
 foreach ($name in $scriptTests) { Add-Suite $s 'script' "tests\$name" 'build script, log and ANGLE dependency contracts (stand-in commands, no network)' @{ Host = $hostExe } }
 if ($pwsh -and $pwsh.Source -ne $hostExe) {
     foreach ($name in $scriptTests) { Add-Suite $s 'script' "tests\$name" 'the same under PowerShell 7' @{ Host = $pwsh.Source; Label = ' (PowerShell 7)' } }
+} elseif (-not $pwsh) {
+    Add-NotRun $s 'build script tests under PowerShell 7' 'PowerShell 7 (pwsh) is not installed: winget install Microsoft.PowerShell'
 }
 
 $s = 'Core runtime'
@@ -144,11 +164,14 @@ Add-Exes $s @(
 Add-Suite $s 'script' 'tests\online_instance_tests.ps1' 'online instance script (static)' @{ Host = $hostExe }
 if ($pwsh -and $pwsh.Source -ne $hostExe) {
     Add-Suite $s 'script' 'tests\online_instance_tests.ps1' 'the same under PowerShell 7 (long path scenario)' @{ Host = $pwsh.Source; Label = ' (PowerShell 7)' }
+} elseif (-not $pwsh) {
+    Add-NotRun $s 'online instance script under PowerShell 7' 'PowerShell 7 (pwsh) is not installed: winget install Microsoft.PowerShell'
 }
 Add-Suite $s 'hle' 'aln-online-hle-tests' 'Matching2 rooms of 2, 3 and 4 players with a full mesh of peers, four-player invitations, launcher Accept and play, sessions, relay and DGRAM_P2P on a loopback lobby'
 
-$s = 'Backend'
-Add-Suite $s 'node' 'server\lobby\test' 'lobby protocol, friends, presence, rooms, sessions, invitations, relay, rate limits, build isolation, admin data (in memory, no network)'
+$s = 'Online Worker'
+Add-Suite $s 'node' 'server\lobby (npm test)' 'the whole Worker suite: protocol, friends, rooms, sessions, relay, edge and ingress abuse protection, hibernation, write budgets, diagnostics, admin data (in memory, no network)'
+Add-Suite $s 'check' 'Worker protection wiring' 'every abuse-protection test file exists and npm test runs them; limiter binding, unique namespace, ping auto-response and edge gate in the sources' @{ Run = 'Test-WorkerWiring' }
 
 $s = 'Packaging and install'
 Add-Suite $s 'exe' 'aln-game-install-tests' 'Install game and Install update: EUR base and 1.06, DUPLEX repack, ASIA/KR base, refusals' @{ Packages = $true }
@@ -162,9 +185,13 @@ if ($Release) {
     $s = 'Release artifacts'
     Add-Suite $s 'check' 'Windows package' 'dist\ folder verified again, ZIP entries equal to it, .zip.sha256 matches' @{ Run = 'Test-WindowsRelease' }
     Add-Suite $s 'check' 'Linux AppImage' 'AppImage type 2 header, .AppImage.sha256 matches, symbols kept outside' @{ Run = 'Test-LinuxRelease' }
+} else {
+    Add-NotRun 'Release artifacts' 'Windows package and Linux AppImage in dist' 'run tools\package-release.ps1, then tools\test.ps1 -Release'
 }
 
 $s = 'Final static checks'
+Add-Suite $s 'script' 'tests\gate_tests.ps1' 'this script: parses, derives every path from the repository, runs from any folder, propagates a failing npm test, reports a missing build folder' @{ Host = $hostExe }
+Add-Suite $s 'check' 'repository hygiene' 'no markers, local paths, secrets, logs, saves, game data or build output in tracked or new files' @{ Run = 'Test-Hygiene' }
 Add-Suite $s 'check' 'every test is wired in' 'each CMake test target, test script and test source is run by this script or excluded with a reason' @{ Run = 'Test-Coverage' }
 Add-Suite $s 'check' 'git diff --check' 'no whitespace errors or conflict markers in the changes, staged or not, nor in new files' @{ Run = 'Test-GitWhitespace' }
 Add-Suite $s 'check' 'working tree unchanged' 'the run changed no tracked or untracked file and no staged change' @{ Run = 'Test-TreeUnchanged' }
@@ -269,9 +296,15 @@ function Test-GameData {
 function Test-Coverage {
     $problems = New-Object System.Collections.Generic.List[string]
     $runTargets = @($allSuites | Where-Object { $_.Kind -in 'exe', 'hle' } | ForEach-Object { $_.Name })
-    $targets = Invoke-Process 'ninja' @('-C', $buildDir, '-t', 'targets', 'all') $root 120
-    if ($targets.Code -ne 0) { return New-Result 1 (@('ninja could not list the targets:') + $targets.Lines) }
-    $known = @($targets.Lines | ForEach-Object { if ($_ -match '^(aln-[A-Za-z0-9-]+-tests):') { $Matches[1] } } | Sort-Object -Unique)
+    $known = @()
+    $skipped = @()
+    if ($script:NinjaReady) {
+        $targets = Invoke-Process 'ninja' @('-C', $buildDir, '-t', 'targets', 'all') $root 120
+        if ($targets.Code -ne 0) { return New-Result 1 (@('ninja could not list the targets:') + $targets.Lines) }
+        $known = @($targets.Lines | ForEach-Object { if ($_ -match '^(aln-[A-Za-z0-9-]+-tests):') { $Matches[1] } } | Sort-Object -Unique)
+    } else {
+        $skipped = @('skipped: no configured build folder or toolchain, so the CMake test targets were not compared (tools\build.ps1 configures it)')
+    }
     foreach ($target in $known) {
         if ($runTargets -notcontains $target -and -not $excludedTargets.ContainsKey($target)) {
             $problems.Add("test target $target is not run by tools\test.ps1 (add it, or exclude it with a reason)")
@@ -285,10 +318,68 @@ function Test-Coverage {
     foreach ($file in @(Get-ChildItem -LiteralPath (Join-Path $root 'tests') -File | Where-Object { $_.Name -match '_tests\.(c|cpp)$' })) {
         if (-not $cmake.Contains("tests/$($file.Name)")) { $problems.Add("tests\$($file.Name) belongs to no CMake test target") }
     }
-    if (-not (Test-Path -LiteralPath (Join-Path $root 'server\lobby\test\lobby.test.js'))) { $problems.Add('server\lobby\test has no tests') }
     if ($problems.Count) { return New-Result 1 @($problems) }
     $excluded = @($known | Where-Object { $excludedTargets.ContainsKey($_) })
-    return New-Result 0 (@("$($known.Count - $excluded.Count) CMake test targets, all run") + ($excluded | ForEach-Object { "excluded $_ : $($excludedTargets[$_])" }))
+    $summary = if ($known.Count) { "$($known.Count - $excluded.Count) CMake test targets, all run" } else { 'test scripts and sources all run' }
+    return New-Result 0 (@($summary) + $skipped + ($excluded | ForEach-Object { "excluded $_ : $($excludedTargets[$_])" }))
+}
+
+function Test-WorkerWiring {
+    $lobby = Join-Path $root 'server\lobby'
+    $problems = New-Object System.Collections.Generic.List[string]
+    $package = Get-Content -Raw -LiteralPath (Join-Path $lobby 'package.json') | ConvertFrom-Json
+    if ($package.scripts.test -notmatch 'test/\*\.test\.js') { $problems.Add('server\lobby\package.json: "test" no longer runs test/*.test.js, so new test files would be skipped') }
+    foreach ($name in 'abuse', 'ingress', 'worker', 'relay', 'lobby', 'sessions', 'write_budget', 'metrics', 'public_lobby') {
+        if (-not (Test-Path -LiteralPath (Join-Path $lobby "test\$name.test.js") -PathType Leaf)) { $problems.Add("server\lobby\test\$name.test.js is missing") }
+    }
+    $toml = Get-Content -Raw -LiteralPath (Join-Path $lobby 'wrangler.toml')
+    $namespace = $null
+    if ($toml -notmatch 'name = "WS_UPGRADE_LIMITER"') { $problems.Add('wrangler.toml: the WS_UPGRADE_LIMITER rate limit binding is missing') }
+    if ($toml -notmatch 'simple = \{ limit = 30, period = 60 \}') { $problems.Add('wrangler.toml: the upgrade limit is not 30 per 60 seconds') }
+    if ($toml -match 'namespace_id = "(\d+)"') { $namespace = $Matches[1] } else { $problems.Add('wrangler.toml: the rate limit has no namespace_id') }
+    if ($namespace -in '1001', '2002', '3003') { $problems.Add("wrangler.toml: namespace_id $namespace belongs to another project's lobby") }
+    $worker = Get-Content -Raw -LiteralPath (Join-Path $lobby 'src\worker.js')
+    if (-not $worker.Contains("new WebSocketRequestResponsePair('ping', 'pong')")) { $problems.Add('worker.js: the ping/pong Hibernation auto-response is missing') }
+    if (-not $worker.Contains('handleUpgrade(request, env, stub)')) { $problems.Add('worker.js: upgrades no longer pass the edge limiter') }
+    if ($problems.Count) { return New-Result 1 @($problems) }
+    return New-Result 0 @("limiter 30 per 60 s, namespace $namespace, ping auto-response, edge gate and 9 protection test files present")
+}
+
+# Files that name the markers and paths on purpose: the release checkers and their tests, and docs of what they refuse.
+$hygieneNamedBy = 'docs/LINUX.md', 'docs/release.md', 'tests/release_contract_tests.py', 'tools/check-release-folder.ps1',
+    'tools/package-linux.sh', 'tools/test-release-check.ps1', 'tools/test.ps1', 'tests/gate_tests.ps1'
+
+function Test-Hygiene {
+    $problems = New-Object System.Collections.Generic.List[string]
+    $tracked = @((Get-GitLines @('ls-files')).Lines | Where-Object { $_ })
+    $untracked = @((Get-GitLines @('ls-files', '--others', '--exclude-standard')).Lines | Where-Object { $_ })
+    $files = @($tracked + $untracked | Sort-Object -Unique)
+    if (-not $files.Count) { return New-Result 1 @('git listed no files: is this a git checkout?') }
+    $forbidden = '(?i)^(game|user|cache|logs|build|dist|out)/|\.(log|pkg|prx|sprx|self|elf|cpk|psarc|trp|pem|pfx|sav)$|(^|/)(eboot\.bin|\.env|\.dev\.vars|stream\.dat)$|(^|/)(node_modules|\.wrangler)/'
+    foreach ($relative in $files) { if ($relative -match $forbidden) { $problems.Add("${relative}: game data, logs, saves, build output, secrets or tool state do not belong in the repository") } }
+    $textual = '.c', '.h', '.cpp', '.inc', '.py', '.ps1', '.sh', '.js', '.mjs', '.md', '.txt', '.json', '.cmake', '.toml', '.yml', '.in', '.desktop', '.xml'
+    $markers = 'DEBUG_SAULO', 'PRIVATE KEY-----'
+    $absolute = '(?i)\b[A-Z]:\\(Users|VisualStudio)\\'
+    $secret = 'ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{20,}|sk-[A-Za-z0-9]{32,}'
+    $checked = 0
+    foreach ($relative in $files) {
+        if ($textual -notcontains [IO.Path]::GetExtension($relative).ToLowerInvariant()) { continue }
+        $path = Join-Path $root $relative
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+        $checked++
+        $named = $hygieneNamedBy -contains $relative
+        $number = 0
+        foreach ($line in [IO.File]::ReadAllLines($path)) {
+            $number++
+            if (-not $named) {
+                foreach ($marker in $markers) { if ($line.Contains($marker)) { $problems.Add("${relative}:${number}: $marker") } }
+                if ($line -match $absolute) { $problems.Add("${relative}:${number}: a path of one machine: $($Matches[0])") }
+            }
+            if ($line -match $secret) { $problems.Add("${relative}:${number}: looks like a credential") }
+        }
+    }
+    if ($problems.Count) { return New-Result 1 @($problems | Select-Object -First 40) }
+    return New-Result 0 @("$checked text files and $($files.Count) paths clean")
 }
 
 function Get-ReleaseName {
@@ -420,12 +511,35 @@ function Stop-DevLobby($Lobby) {
     if ($Lobby.Process -and -not $Lobby.Process.HasExited) { $Lobby.Process.Kill(); $Lobby.Process.WaitForExit(5000) | Out-Null }
 }
 
-function Get-NodeProblem {
+function Get-NodeProblem([switch]$NeedNpm) {
     $node = Get-Command node -ErrorAction SilentlyContinue
     if (-not $node) { return 'Node.js 22.13 or later was not found. Install it (winget install OpenJS.NodeJS.LTS) and open a new terminal.' }
+    if ($NeedNpm -and -not (Get-Command npm -ErrorAction SilentlyContinue)) { return 'npm was not found next to Node.js. Reinstall Node.js (winget install OpenJS.NodeJS.LTS) and open a new terminal.' }
     $version = ((& $node.Source --version) -replace '^v', '').Trim()
     if ([version]$version -lt [version]'22.13.0') { return "Node.js $version is older than 22.13. Update it (winget upgrade OpenJS.NodeJS.LTS)." }
     if (-not (Test-Path -LiteralPath (Join-Path $root 'server\lobby\package.json'))) { return 'server\lobby\package.json is missing.' }
+    return $null
+}
+
+function New-NotRun([string]$Reason) { return [pscustomobject]@{ Code = 0; Lines = @($Reason); NotRun = $true } }
+
+# Test targets ninja would rebuild, from a dry run: nothing is compiled. StaleKnown stays false when the plan cannot be
+# trusted, which includes a build folder whose CMake files must run again.
+function Get-StaleTargets([string[]]$Targets) {
+    $script:StaleKnown = $false
+    if (-not $script:NinjaReady -or -not $Targets.Count) { return @() }
+    $plan = Invoke-Process 'ninja' (@('-C', $buildDir, '-n', '-k', '0') + $Targets) $root 300
+    if ($plan.Code -ne 0 -or @($plan.Lines | Where-Object { $_ -match 'Re-running CMake' }).Count) { return @() }
+    $script:StaleKnown = $true
+    return @($plan.Lines | Where-Object { $_ -match '^\[\d+/\d+\]' } | ForEach-Object { [regex]::Matches($_, 'aln-[A-Za-z0-9-]+-tests') } | ForEach-Object { $_.Value } | Sort-Object -Unique)
+}
+
+function Get-BinaryProblem([string]$Name) {
+    $exe = Join-Path $binDir "$Name.exe"
+    $how = if ($Build) { 'the target did not build; see the build failure above' } else { 'build it with: .\tools\test.ps1 -Build' }
+    if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { return "no test binary $exe ($how)" }
+    if (-not $Build -and -not $script:StaleKnown) { return "the build folder is out of date (CMake has to run again) or ninja could not plan it, so the binary cannot be trusted ($how)" }
+    if (-not $Build -and $script:StaleTargets -contains $Name) { return "the binary is older than its sources ($how)" }
     return $null
 }
 
@@ -434,7 +548,8 @@ function Invoke-SuiteRun($Suite) {
         'check' { return & $Suite.Options['Run'] }
         'exe' {
             $exe = Join-Path $binDir "$($Suite.Name).exe"
-            if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { return New-Result 127 @("missing binary: $exe (the target did not build; see the build failure above)") }
+            $unavailable = Get-BinaryProblem $Suite.Name
+            if ($unavailable) { return $(if ($Build) { New-Result 127 @($unavailable) } else { New-NotRun $unavailable }) }
             if ($Suite.Options['Packages']) {
                 $folder = $Packages
                 if (-not $folder -and (Test-Path -LiteralPath (Join-Path $root 'game') -PathType Container) -and
@@ -462,14 +577,14 @@ function Invoke-SuiteRun($Suite) {
             return Invoke-Process $Suite.Options['Host'] @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $script) $root
         }
         'node' {
-            $problem = Get-NodeProblem
+            $problem = Get-NodeProblem -NeedNpm
             if ($problem) { return New-Result 1 @($problem) }
-            $node = (Get-Command node).Source
-            return Invoke-Process $node @('--no-warnings', '--test', 'test/*.test.js') (Join-Path $root 'server\lobby') 600
+            return Invoke-Process 'npm' @('test') (Join-Path $root 'server\lobby') 600
         }
         'hle' {
             $exe = Join-Path $binDir "$($Suite.Name).exe"
-            if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { return New-Result 127 @("missing binary: $exe (the target did not build; see the build failure above)") }
+            $unavailable = Get-BinaryProblem $Suite.Name
+            if ($unavailable) { return $(if ($Build) { New-Result 127 @($unavailable) } else { New-NotRun $unavailable }) }
             $problem = Get-NodeProblem
             if ($problem) { return New-Result 1 @($problem) }
             $lobby = Start-DevLobby
@@ -504,13 +619,20 @@ function Build-TestTargets([string[]]$Targets) {
 # ---------------------------------------------------------------------------------------------------------------------
 # Run
 # ---------------------------------------------------------------------------------------------------------------------
-$tc = Resolve-Toolchain 'auto'
-$env:PATH = "$($tc.Bin);$env:PATH"
-if (-not (Test-Path -LiteralPath (Join-Path $buildDir 'build.ninja'))) { Stop-Tool 'Run tools\build.ps1 first: it configures the build.' }
+$configured = Test-Path -LiteralPath (Join-Path $buildDir 'build.ninja')
+if ($Build -and -not $configured) { Stop-Tool "Run tools\build.ps1 first: it configures the build ($buildDir has no build.ninja)." }
+$script:NinjaReady = $false
+if ($configured) {
+    $tc = $script:Toolchains.Keys | ForEach-Object { Get-ToolchainStatus $_ } | Where-Object { $_.Ready } | Select-Object -First 1
+    if ($tc) { $env:PATH = "$($tc.Bin);$env:PATH"; $script:NinjaReady = [bool](Get-Command ninja -ErrorAction SilentlyContinue) }
+}
+$script:StaleTargets = @()
+$script:StaleKnown = $false
 
 # Nothing may open a window or an audio device, and nothing may reach a real lobby by environment.
 $environment = [ordered]@{ SDL_VIDEODRIVER = 'dummy'; SDL_AUDIODRIVER = 'dummy'; ALN_LOBBY = $null; ALN_ONLINE = $null; ALN_ONLINE_NAME = $null;
-    ALN_UPNP = $null; ALN_UDP_PORT = $null; ALN_STUN = $null; ALN_TEST_LOBBY = $null }
+    ALN_UPNP = $null; ALN_UDP_PORT = $null; ALN_STUN = $null; ALN_TEST_LOBBY = $null;
+    NPM_CONFIG_UPDATE_NOTIFIER = 'false'; NPM_CONFIG_FUND = 'false'; NPM_CONFIG_AUDIT = 'false' }
 $savedEnvironment = @{}
 foreach ($name in $environment.Keys) { $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name) }
 
@@ -522,8 +644,13 @@ try {
     foreach ($name in $environment.Keys) { [Environment]::SetEnvironmentVariable($name, $environment[$name]) }
     $script:TreeBefore = Get-TreeFingerprint
 
-    Sync-GpuDependencies
-    Build-TestTargets @($suites | Where-Object { $_.Kind -in 'exe', 'hle' } | ForEach-Object { $_.Name } | Sort-Object -Unique)
+    $cppSuites = @($suites | Where-Object { $_.Kind -in 'exe', 'hle' } | ForEach-Object { $_.Name } | Sort-Object -Unique)
+    if ($Build) {
+        Sync-GpuDependencies
+        Build-TestTargets $cppSuites
+    } elseif ($configured -and $script:NinjaReady) {
+        $script:StaleTargets = @(Get-StaleTargets $cppSuites)
+    }
 
     $section = ''
     foreach ($suite in $suites) {
@@ -536,6 +663,11 @@ try {
 
         $lines = @($run.Lines)
         $status = if ($run.Code -eq 0) { 'PASS' } else { 'FAIL' }
+        if ($run.PSObject.Properties['NotRun']) {
+            $results.Add([pscustomobject]@{ Section = $section; Name = $label; Status = 'NOT RUN'; Seconds = 0; Checks = 0; Summary = $lines[0] })
+            Write-Host ('  NOT RUN  {0,-43} {1}' -f $label, $lines[0]) -ForegroundColor Yellow
+            continue
+        }
         $problem = $null
         $checks = 0
         foreach ($line in $lines) { if ($line -match '(\d+) checks') { $checks = [int]$Matches[1] } }
@@ -546,8 +678,13 @@ try {
         }
         $summary = ''
         if ($suite.Kind -eq 'node') {
-            $pass = @($lines | Where-Object { $_ -match '\bpass\s+(\d+)\s*$' })
-            if ($pass.Count -and $pass[-1] -match 'pass\s+(\d+)\s*$') { $summary = "$($Matches[1]) tests"; $checks = [int]$Matches[1] }
+            $count = @{}
+            foreach ($line in $lines) { if ($line -match '^\D*\b(tests|pass|fail|cancelled)\s+(\d+)\s*$') { $count[$Matches[1]] = [int]$Matches[2] } }
+            if ($count.ContainsKey('pass')) { $summary = "$($count['tests']) tests, $($count['pass']) pass"; $checks = $count['pass'] }
+            if ($status -eq 'PASS' -and (-not $count.ContainsKey('tests') -or $count['tests'] -eq 0 -or $count['fail'] -ne 0 -or $count['cancelled'] -ne 0 -or $count['pass'] -ne $count['tests'])) {
+                $status = 'FAIL'
+                $problem = 'exit code 0, but the test report shows no tests, or tests that failed, were cancelled or were skipped'
+            }
         } else {
             $last = @($lines | Where-Object { $_ -match '(\d+ checks?|\bOK\b|\bpassed\b|0 failures|0 failed)' })
             if ($last.Count) { $summary = $last[-1].Trim() }
@@ -583,16 +720,24 @@ try {
 # Summary
 # ---------------------------------------------------------------------------------------------------------------------
 $clock.Stop()
+if (-not $Filter) { foreach ($entry in $notRunSuites) { $results.Add($entry) } }
 $failed = @($results | Where-Object { $_.Status -eq 'FAIL' })
 $passed = @($results | Where-Object { $_.Status -eq 'PASS' })
+$notRun = @($results | Where-Object { $_.Status -eq 'NOT RUN' })
 $checkTotal = ($results | Measure-Object -Property Checks -Sum).Sum
 
 Write-Host '==> Summary' -ForegroundColor Cyan
 foreach ($group in ($results | Group-Object Section)) {
     $bad = @($group.Group | Where-Object { $_.Status -eq 'FAIL' }).Count
-    Write-Host ('  {0,-24} {1,3} suites  {2}' -f $group.Name, $group.Count, $(if ($bad) { "$bad FAILED" } else { 'all passed' })) -ForegroundColor $(if ($bad) { 'Red' } else { 'Gray' })
+    $skipped = @($group.Group | Where-Object { $_.Status -eq 'NOT RUN' }).Count
+    $text = if ($bad) { "$bad FAILED" } elseif ($skipped) { "$skipped NOT RUN" } else { 'all passed' }
+    Write-Host ('  {0,-24} {1,3} suites  {2}' -f $group.Name, $group.Count, $text) -ForegroundColor $(if ($bad) { 'Red' } elseif ($skipped) { 'Yellow' } else { 'Gray' })
 }
-Write-Host ('  total suites: {0}   passed: {1}   failed: {2}   checks counted: {3:N0}   time: {4:N0} s' -f $results.Count, $passed.Count, $failed.Count, $checkTotal, $clock.Elapsed.TotalSeconds)
+Write-Host ('  PASS: {0}   FAIL: {1}   NOT RUN: {2}   checks counted: {3:N0}   time: {4:N0} s' -f $passed.Count, $failed.Count, $notRun.Count, $checkTotal, $clock.Elapsed.TotalSeconds)
+if ($notRun.Count) {
+    Write-Host '  NOT RUN (not failures; each says what it needs):' -ForegroundColor Yellow
+    foreach ($entry in $notRun) { Write-Host "    $($entry.Name): $($entry.Summary)" -ForegroundColor Yellow }
+}
 if ($notes.Count) {
     Write-Host '  parts the suites skipped (not failures):' -ForegroundColor Yellow
     $notes | Select-Object -Unique | ForEach-Object { Write-Host "    $_" -ForegroundColor Yellow }
@@ -602,6 +747,10 @@ if ($failed.Count) {
     Write-Host ("FAILED: {0}" -f (($failed | ForEach-Object { $_.Name }) -join ', ')) -ForegroundColor Red
     exit 1
 }
-if (-not $results.Count) { Write-Host 'FAILED: no suite ran.' -ForegroundColor Red; exit 1 }
-Write-Host 'All focused suites passed. Real gameplay (online with 3 or 4 players, controllers, visuals) is still tested by hand.' -ForegroundColor Green
+if ($passed.Count -eq 0) { Write-Host 'FAILED: no suite ran.' -ForegroundColor Red; exit 1 }
+if ($notRun.Count) {
+    Write-Host ("PASSED, but {0} suite(s) did not run (see NOT RUN above). Real gameplay, controllers and visuals are still tested by hand." -f $notRun.Count) -ForegroundColor Yellow
+    exit 0
+}
+Write-Host 'All suites passed. Real gameplay (online with 3 or 4 players, controllers, visuals) is still tested by hand.' -ForegroundColor Green
 exit 0

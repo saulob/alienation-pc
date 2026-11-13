@@ -1024,7 +1024,14 @@ test('the Dashboard has none of the report detail controls and closing a report 
 });
 
 const anonymous = (env, ip = `198.18.0.${nextAddress++ % 250}`) => env.connect(ip);
-const lookup = (client, reports) => client.call('incident.status', { reports });
+// The launcher opens a socket for each lookup, from the same address, and closes it after the answer.
+function oneShot(client, op, body) {
+  const socket = new Client(client.lobby, client.host, client.ip);
+  const answer = socket.call(op, body);
+  socket.drop();
+  return answer;
+}
+const lookup = (client, reports) => oneShot(client, 'incident.status', { reports });
 const OTHER_RECEIPT = 'ab'.repeat(32);
 const LEGACY_TICKET = 'ALN-ABCDEF';
 
@@ -1079,7 +1086,7 @@ test('a status needs the right receipt: a wrong one, none, or another report\'s 
   assert.deepEqual(lookup(stranger, [{ ticket: a.ticket, receipt: b.receipt }]).reports, []);
   assert.equal(lookup(stranger, [{ ticket: a.ticket }]).code, 'bad_request');
   assert.equal(lookup(stranger, [{ ticket: a.ticket, receipt: '' }]).code, 'bad_request');
-  assert.equal(stranger.call('incident.read', { ticket: a.ticket }).code, 'bad_request');
+  assert.equal(oneShot(stranger, 'incident.read', { ticket: a.ticket }).code, 'bad_request');
 });
 
 test('malformed lookups are refused and a batch has a limit', () => {
@@ -1089,10 +1096,10 @@ test('malformed lookups are refused and a batch has a limit', () => {
   const good = { ticket, receipt };
   for (const reports of [undefined, 'x', {}, [null], [[]], [{ ...good, ticket: 'aln-abcdef' }], [{ ...good, receipt: 'AB'.repeat(32) }],
     [{ ...good, receipt: 'ab' }], [{ ...good, receipt: 7 }], [good, 'x']]) {
-    assert.equal(client.call('incident.status', { reports }).code, 'bad_request', JSON.stringify(reports));
+    assert.equal(oneShot(client, 'incident.status', { reports }).code, 'bad_request', JSON.stringify(reports));
     env.advance(HOUR_MS);
   }
-  assert.equal(client.call('incident.status', { reports: [good], extra: 1 }).code, 'bad_request');
+  assert.equal(oneShot(client, 'incident.status', { reports: [good], extra: 1 }).code, 'bad_request');
   env.advance(HOUR_MS);
   assert.equal(lookup(client, Array(INCIDENT.statusBatch + 1).fill(good)).code, 'bad_request');
   env.advance(HOUR_MS);
@@ -1110,8 +1117,8 @@ test('a batch shows only what its receipts prove: an unknown ticket and a wrong 
   const known = lookup(client, [{ ticket: other.ticket, receipt: OTHER_RECEIPT }]);
   const unknown = lookup(client, [{ ticket: 'ALN-ZZZZZZ', receipt: OTHER_RECEIPT }]);
   assert.deepEqual({ ...known, re: 0 }, { ...unknown, re: 0 });
-  const readKnown = client.call('incident.read', { ticket: other.ticket, receipt: OTHER_RECEIPT });
-  const readUnknown = client.call('incident.read', { ticket: 'ALN-ZZZZZZ', receipt: OTHER_RECEIPT });
+  const readKnown = oneShot(client, 'incident.read', { ticket: other.ticket, receipt: OTHER_RECEIPT });
+  const readUnknown = oneShot(client, 'incident.read', { ticket: 'ALN-ZZZZZZ', receipt: OTHER_RECEIPT });
   assert.equal(readKnown.code, 'not_found');
   assert.deepEqual({ ...readKnown, re: 0 }, { ...readUnknown, re: 0 });
 });
@@ -1131,8 +1138,8 @@ test('looking up costs no report quota and writes nothing, and it has a budget o
   assert.equal(file(client).code, 'ok');
 
   const reader = anonymous(env, '198.51.100.41');
-  for (let i = 0; i < PROTECTION.incidentReadAddress.burst; i++) assert.equal(reader.call('incident.read', first).code, 'ok');
-  assert.equal(reader.call('incident.read', first).code, 'limit');
+  for (let i = 0; i < PROTECTION.incidentReadAddress.burst; i++) assert.equal(oneShot(reader, 'incident.read', first).code, 'ok');
+  assert.equal(oneShot(reader, 'incident.read', first).code, 'limit');
 });
 
 test('a lookup never meets an account: no hello is sent and report filing still needs one', () => {
@@ -1140,7 +1147,7 @@ test('a lookup never meets an account: no hello is sent and report filing still 
   const { ticket, receipt } = file(greeted(env));
   const client = anonymous(env);
   assert.equal(lookup(client, [{ ticket, receipt }]).code, 'ok');
-  assert.equal(client.call('incident.read', { ticket, receipt }).code, 'ok');
+  assert.equal(oneShot(client, 'incident.read', { ticket, receipt }).code, 'ok');
   assert.equal(file(client).code, 'no_session');
   assert.equal(client.call('worlds').code, 'no_session');
 });
@@ -1158,7 +1165,7 @@ test('a report older than receipts cannot be claimed, whatever is tried, and the
   assert.equal(answer.status, 200);
   assert.equal((await answer.json()).status, 'investigating');
   assert.deepEqual(lookup(client, [{ ticket: LEGACY_TICKET, receipt: OTHER_RECEIPT }]).reports, []);
-  assert.equal(client.call('incident.read', { ticket: LEGACY_TICKET, receipt: OTHER_RECEIPT }).code, 'not_found');
+  assert.equal(oneShot(client, 'incident.read', { ticket: LEGACY_TICKET, receipt: OTHER_RECEIPT }).code, 'not_found');
   assert.equal(env.host.sql.get('SELECT receipt_hash FROM incident_tracking WHERE ticket = ?', LEGACY_TICKET).receipt_hash, '');
   assert.equal(env.lobby.incidentForAdmin(LEGACY_TICKET).status, 'investigating');
 });
@@ -1170,13 +1177,13 @@ test('the whole report comes back to its owner byte for byte, and only with the 
   const { ticket, receipt } = file(client, { log_text: logText });
   const other = file(client);
   const reader = anonymous(env);
-  const answer = reader.call('incident.read', { ticket, receipt });
+  const answer = oneShot(reader, 'incident.read', { ticket, receipt });
   assert.equal(answer.code, 'ok');
   assert.equal(answer.report.log_text, logText);
   assert.deepEqual(Object.keys(answer.report).sort(), [...Object.keys(report()), 'submitted_at', 'ticket'].sort());
   assert.equal(answer.report.submitted_at, env.clock.now);
   assert.ok(!JSON.stringify(answer).includes(client.account) && !JSON.stringify(answer).includes('198.51.100.77'));
-  assert.equal(reader.call('incident.read', { ticket, receipt: other.receipt }).code, 'not_found');
+  assert.equal(oneShot(reader, 'incident.read', { ticket, receipt: other.receipt }).code, 'not_found');
 });
 
 test('a status outlives the log it came with, and the status table has its own limit', async () => {
@@ -1186,7 +1193,7 @@ test('a status outlives the log it came with, and the status table has its own l
   env.host.sql.run('DELETE FROM incidents WHERE ticket = ?', ticket);
   const client = anonymous(env);
   assert.equal(lookup(client, [{ ticket, receipt }]).reports[0].fixed_version, '0.9.3');
-  assert.equal(client.call('incident.read', { ticket, receipt }).code, 'not_found');
+  assert.equal(oneShot(client, 'incident.read', { ticket, receipt }).code, 'not_found');
   assert.ok(env.lobby.incidents.taken(ticket));
 
   const kept = INCIDENT.statusKept;
@@ -1496,7 +1503,7 @@ test('a deleted report is gone for the admin and for its owner', async () => {
   assert.equal((await adminGet(env, `/admin/api/incidents/${gone.ticket}/log`)).status, 404);
   const owner = anonymous(env);
   assert.deepEqual(lookup(owner, [claimOf(gone)]).reports, []);
-  assert.equal(owner.call('incident.read', claimOf(gone)).code, 'not_found');
+  assert.equal(oneShot(owner, 'incident.read', claimOf(gone)).code, 'not_found');
   assert.deepEqual(lookup(owner, [claimOf(gone), claimOf(kept)]).reports.map((r) => r.ticket), [kept.ticket]);
 });
 
@@ -1518,7 +1525,7 @@ test('deleting one report leaves the others, their statuses, their receipts and 
   assert.equal(await (await adminGet(env, `/admin/api/incidents/${kept.ticket}/log`)).text(), 'Launcher: kept\n');
   const owner = anonymous(env);
   assert.equal(lookup(owner, [claimOf(kept)]).reports[0].player_message, 'Looking');
-  assert.equal(owner.call('incident.read', claimOf(kept)).report.description, 'Keep me');
+  assert.equal(oneShot(owner, 'incident.read', claimOf(kept)).report.description, 'Keep me');
 });
 
 test('deleting needs the admin token: a missing or wrong one is 401 and the report stays', async () => {

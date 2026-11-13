@@ -180,7 +180,7 @@ function Test-PackageGate {
     $output = (& $shell -NoProfile -ExecutionPolicy Bypass -File $script -VerifyOnly $folder 2>&1 | Out-String)
     Check ($LASTEXITCODE -ne 0) 'a release folder without ANGLE fails'
     foreach ($text in 'missing DLL: libEGL.dll', 'missing DLL: libGLESv2.dll', 'missing DLL: libc\+\+.dll', 'missing DLL: zlib1.dll',
-                      'missing or stale: licenses\\angleproject\\LICENSE', 'missing licence: licenses\\spirv-tools',
+                      'missing: licenses\\angleproject\\LICENSE', 'missing licence: licenses\\spirv-tools',
                       'missing licence: licenses\\vulkan-loader', 'missing licence: licenses\\VulkanMemoryAllocator', 'missing licence: licenses\\xxhash') {
         Check ($output -match $text) "the package gate reports $text"
     }

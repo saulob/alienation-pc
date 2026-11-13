@@ -237,3 +237,42 @@ test('the admin summary counts joinable rooms and rooms by players and build', (
   assert.deepEqual(live.room_players.map((r) => [r.value, r.count]).sort(), [['1/4', 2], ['2/2', 1]]);
   assert.deepEqual(live.room_build.map((r) => [r.value, r.count]).sort(), [[EU, 2], [EU_106, 1]]);
 });
+
+test('repeating a session or an answer that changes nothing writes nothing, tells nobody and keeps the answer', () => {
+  const env = makeLobby({ log: () => {} });
+  const host = player(env, 'Alpha');
+  const friend = player(env, 'Bravo');
+  friends(host, friend);
+  const { room, session } = squad(host, { priv: true });
+  const changes = () => env.host.sql.get('SELECT total_changes() AS n').n;
+
+  let before = changes();
+  for (let i = 0; i < 50; i++) {
+    env.advance(100);
+    assert.deepEqual(host.call('session.create', { private: true, max: 4, data: sessionData(room) }).session, session);
+  }
+  assert.equal(changes(), before);
+  assert.equal(host.call('session.create', { private: false, max: 4, data: sessionData(room) }).session, session);
+  assert.equal(changes(), before + 1);
+
+  const invitation = host.call('invite.send', { session, to: [friend.account] }) && friend.events('invite.received')[0].invitation;
+  const first = friend.call('invite.answer', { invitation, accept: true });
+  assert.equal(host.events('invite.answered').length, 1);
+  before = changes();
+  for (let i = 0; i < 50; i++) {
+    env.advance(100);
+    const again = friend.call('invite.answer', { invitation, accept: true });
+    assert.deepEqual({ ...again, re: 0 }, { ...first, re: 0 });
+  }
+  assert.equal(changes(), before);
+  assert.equal(host.events('invite.answered').length, 0);
+
+  assert.equal(friend.call('invite.used', { invitation }).code, 'ok');
+  before = changes();
+  for (let i = 0; i < 50; i++) {
+    env.advance(100);
+    assert.equal(friend.call('invite.used', { invitation }).code, 'ok');
+  }
+  assert.equal(changes(), before);
+  assert.equal(env.host.sql.get('SELECT state FROM invitations WHERE id = ?', invitation).state, 'used');
+});

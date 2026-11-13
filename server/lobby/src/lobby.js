@@ -65,6 +65,7 @@ const WRITE_BUDGETS = {
   state: { socket: 'wstate', account: 'stateWriteAccount', address: 'stateWriteAddress' },
   friend: { socket: 'wfriend', account: 'friendWriteAccount', address: 'friendWriteAddress' },
 };
+const UNKNOWN_OP = 'unknown op';
 const ROOM_OPS = new Set(['room.create', 'room.join', 'room.leave', 'room.search', 'room.resume']);
 // A receipt is the whole proof for these, so looking up a report never involves an account.
 const NO_SESSION_OPS = new Set(['hello', 'incident.status', 'incident.read']);
@@ -361,6 +362,8 @@ export class Lobby {
   message(conn, text) {
     const att = conn.attachment();
     if (!att || att.abusive) return;
+    this.diagnose('ws_text_messages');
+    if (!att.hello && !this.beforeHello(conn, att)) return;
     let seq = null;
     this.current = att;
     try {
@@ -377,15 +380,15 @@ export class Lobby {
       if (text.length > LIMITS.frameBytes && msg.op !== 'incident.file') fail('too_large');
       const now = this.host.now();
       const any = takeToken(att.ra, BUCKETS.any, now);
-      if (!any) fail('limit', 'slow down');
+      if (!any) this.slowDown();
       att.ra = any;
       if (att.lobby) att.lobby.seen = now;
       if (ROOM_OPS.has(msg.op)) {
         const room = takeToken(att.rr, BUCKETS.room, now);
-        if (!room) fail('limit', 'slow down');
+        if (!room) this.slowDown();
         att.rr = room;
       }
-      if (!Object.hasOwn(HANDLERS, msg.op)) fail('bad_request', 'unknown op');
+      if (!Object.hasOwn(HANDLERS, msg.op)) fail('bad_request', UNKNOWN_OP);
       if (!NO_SESSION_OPS.has(msg.op) && !att.hello) fail('no_session');
       this.index = null;
       const body = HANDLERS[msg.op].call(this, att, msg, conn, text) ?? {};
@@ -403,7 +406,7 @@ export class Lobby {
       } else {
         conn.send(JSON.stringify({ re: seq, code: error.code, ...error.body }));
       }
-      if (abusive) this.closeAbusive(conn);
+      if (abusive) this.closeAbusive(conn, att);
     } finally {
       this.current = null;
       this.index = null;
@@ -415,23 +418,39 @@ export class Lobby {
     this.relays.frame(conn, bytes);
   }
 
+  slowDown() {
+    this.diagnose('ws_control_limited');
+    fail('limit', 'slow down');
+  }
+
   // A refused or malformed request costs its sender nothing, so a socket that keeps producing them loses its connection.
   // True when this one was the last it gets.
   strike(att, error, seq) {
-    if (error.code !== 'limit' && error.code !== 'too_large' && seq !== null) return false;
+    const counted = error.code === 'limit' || error.code === 'too_large' || seq === null || error.message === UNKNOWN_OP;
+    if (!counted) return false;
     const left = takeToken(att.strikes, PROTECTION.refusedRequests, this.host.now());
-    if (left) {
-      att.strikes = left;
+    if (left) att.strikes = left;
+    return !left;
+  }
+
+  // Counted in the attachment, so a socket that never signs in cannot outlast the limit through hibernation.
+  beforeHello(conn, att) {
+    att.early = (att.early ?? 0) + 1;
+    if (att.early > PROTECTION.preHelloFrames) {
+      this.closeAbusive(conn, att, 'ws_preauth_closed', 'sign in first');
       return false;
     }
-    att.abusive = true;
+    conn.setAttachment(att);
     return true;
   }
 
-  closeAbusive(conn) {
-    this.diagnose('lobby_abuse_closed');
+  // Nothing the socket sends afterwards is handled, even what the runtime still delivers.
+  closeAbusive(conn, att, diagnostic = 'lobby_abuse_closed', reason = 'too many refused requests') {
+    att.abusive = true;
+    conn.setAttachment(att);
+    this.diagnose(diagnostic);
     try {
-      conn.close(1008, 'too many refused requests');
+      conn.close(1008, reason);
     } catch {
       // Already closing.
     }
@@ -1454,8 +1473,13 @@ const HANDLERS = {
     if (typeof msg.private !== 'boolean' || !isInt(msg.max, 1, LIMITS.sessionMaxUsers)) fail('bad_request', 'session');
     const data = hexBytes(msg.data ?? '', LIMITS.sessionDataBytes);
     if (data.length !== LIMITS.sessionDataBytes * 2) fail('bad_request', 'data');
-    this.limitWrite(att, 'state');
     const existing = this.roomSession(room.id);
+    const isPrivate = msg.private ? 1 : 0;
+    if (existing && existing.private === isPrivate && existing.max === msg.max && existing.data === data &&
+      existing.owner === att.account) {
+      return { session: existing.id };
+    }
+    this.limitWrite(att, 'state');
     if (existing) {
       this.host.sql.run('UPDATE room_sessions SET private = ?, max = ?, data = ?, owner = ? WHERE id = ?', msg.private ? 1 : 0,
         msg.max, data, att.account, existing.id);
@@ -1552,17 +1576,22 @@ const HANDLERS = {
     const row = this.host.sql.get('SELECT * FROM invitations WHERE id = ? AND target = ?', msg.invitation, att.account);
     if (!row) fail('not_found');
     const view = this.invitationView(row, att);
-    this.host.sql.run('UPDATE invitations SET state = ? WHERE id = ?', msg.accept ? 'accepted' : 'declined', row.id);
+    const answer = msg.accept ? { session: row.session, joinable: view.joinable, build: view.build } : {};
+    const state = msg.accept ? 'accepted' : 'declined';
+    if (row.state === state) return answer;
+    this.limitWrite(att, 'friend');
+    this.host.sql.run('UPDATE invitations SET state = ? WHERE id = ?', state, row.id);
     this.tally('activity', msg.accept ? 'invites_accepted' : 'invites_declined');
     this.later(() => this.notifyAccount(row.sender, { ev: 'invite.answered', invitation: row.id, account: att.account,
       name: att.name, accept: msg.accept }));
-    return msg.accept ? { session: row.session, joinable: view.joinable, build: view.build } : {};
+    return answer;
   },
 
   // PUT /v1/users/{id}/invitations/{id} {"usedFlag":true}.
   'invite.used'(att, msg) {
     if (typeof msg.invitation !== 'string' || !INVITATION_ID.test(msg.invitation)) fail('bad_request', 'invitation');
-    this.host.sql.run(`UPDATE invitations SET state = 'used' WHERE id = ? AND target = ?`, msg.invitation, att.account);
+    this.host.sql.run(`UPDATE invitations SET state = 'used' WHERE id = ? AND target = ? AND state <> 'used'`, msg.invitation,
+      att.account);
     return {};
   },
 
