@@ -81,7 +81,7 @@ Working in the launcher:
 - **Frame rate** (Gameplay page): 30, 60 (Original, default), 90, 120, 144, 165, 240 or Unlimited frames per second
   reaching the window. 60 is the original game rate: the game makes 60 new frames a second at its original speed
   whatever the setting, so gameplay, online play and local co-op never change. 30 shows every second frame; faster
-  rates show the last frame again until the next one (repeated frames, no interpolation, Vulkan only), up to the
+  rates show the last frame again until the next one (repeated frames, no interpolation), up to the
   display's refresh with VSync on and up to 480 a second for Unlimited. Frame rate in title shows every presentation,
   with the game's new frames in brackets while frames are repeated: `FPS: 144.00 (game 60.00)`
 - Keyboard mapping, Xbox and PlayStation controllers, up to four local players' controllers

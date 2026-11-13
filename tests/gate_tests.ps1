@@ -85,7 +85,52 @@ try {
     }
 
     $run = Invoke-Gate @('-Filter', 'aln-log-tests', '-BuildDir', (Join-Path $work 'no-build'))
-    Check ($run.Text -match 'NOT RUN' -and $run.Text.Contains('.\tools\test.ps1 -Build') -and $run.Text.Contains('FAILED: no suite ran')) 'a missing build folder is NOT RUN with the command that fixes it, and a run with nothing run fails'
+    Check ($run.Code -ne 0 -and $run.Text.Contains('.\tools\test.ps1 -Build') -and $run.Text.Contains('FAILED: aln-log-tests')) 'a missing build folder fails the C++ suite with the command that fixes it'
+    Check ($text -notmatch 'New-NotRun') 'no C++ suite can be reported as NOT RUN'
+
+    # A stand-in build folder whose manifest, like CMake's with CONFIGURE_DEPENDS globs, has an always dirty regeneration
+    # edge that does nothing; the one test binary is the real one, copied.
+    $realBinary = Join-Path $root 'build\cmake\clang64\bin\aln-log-tests.exe'
+    $ninja = Get-Command ninja -ErrorAction SilentlyContinue
+    if (-not $ninja) {
+        $toolchainNinja = 'C:\msys64\clang64\bin\ninja.exe'
+        if (Test-Path -LiteralPath $toolchainNinja) { $ninja = [pscustomobject]@{ Source = $toolchainNinja } }
+    }
+    if ((Test-Path -LiteralPath $realBinary) -and $ninja) {
+        function New-StandInBuild([string]$Name, [bool]$WithBinary, [bool]$Stale) {
+            $folder = Join-Path $work $Name
+            New-Item -ItemType Directory -Force -Path (Join-Path $folder 'bin') | Out-Null
+            Set-Content -LiteralPath (Join-Path $folder 'build.ninja') -Encoding ascii -Value @(
+                'rule RERUN', '  command = cmd /c rem', '  description = Re-running CMake...', '  generator = 1', '  restat = 1',
+                'rule MAKE', '  command = cmd /c rem', '  description = MAKE $out', '  generator = 1',
+                'build build.ninja: RERUN force', 'build force: phony',
+                'build bin/aln-log-tests.exe: MAKE source.txt', 'build aln-log-tests: phony bin/aln-log-tests.exe')
+            $source = Join-Path $folder 'source.txt'
+            Set-Content -LiteralPath $source -Value 'source' -Encoding ascii
+            (Get-Item -LiteralPath $source).LastWriteTime = (Get-Date).AddHours(-2)
+            if ($WithBinary) {
+                $binary = Join-Path $folder 'bin\aln-log-tests.exe'
+                Copy-Item -LiteralPath $realBinary -Destination $binary
+                (Get-Item -LiteralPath $binary).LastWriteTime = (Get-Date).AddHours($(if ($Stale) { -3 } else { -1 }))
+            }
+            return $folder
+        }
+
+        $current = New-StandInBuild 'current' $true $false
+        $dry = & $ninja.Source -C $current -n -k 0 aln-log-tests 2>&1 | Out-String
+        Check ($dry.Contains('Re-running CMake') -and -not ($dry -match '(?m)^\[\d+/\d+\].*aln-log-tests')) 'the stand-in reproduces a dry run that only shows the CMake regeneration'
+        $run = Invoke-Gate @('-Filter', 'aln-log-tests', '-BuildDir', $current)
+        Check ($run.Code -eq 0 -and $run.Text -match 'PASS\s+aln-log-tests' -and $run.Text -notmatch 'NOT RUN\s+aln-log-tests') 'a current binary runs although the dry run only shows the CMake regeneration'
+        Check (-not (Test-Path -LiteralPath (Join-Path $current 'build.plan.ninja'))) 'the gate leaves no plan file behind'
+
+        $missing = New-StandInBuild 'missing' $false $false
+        $run = Invoke-Gate @('-Filter', 'aln-log-tests', '-BuildDir', $missing)
+        Check ($run.Code -ne 0 -and $run.Text.Contains('no test binary') -and $run.Text.Contains('.\tools\test.ps1 -Build') -and $run.Text -notmatch 'NOT RUN\s+aln-log-tests') 'a missing test binary fails the gate and names -Build'
+
+        $stale = New-StandInBuild 'stale' $true $true
+        $run = Invoke-Gate @('-Filter', 'aln-log-tests', '-BuildDir', $stale)
+        Check ($run.Code -ne 0 -and $run.Text.Contains('older than its sources') -and $run.Text.Contains('.\tools\test.ps1 -Build')) 'a binary older than its sources fails the gate and names -Build'
+    }
 } finally {
     $temp = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\', '/')
     $full = [IO.Path]::GetFullPath($work)

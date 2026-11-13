@@ -143,7 +143,7 @@ constexpr char kFrameRateHelp[] =
     "60 FPS is the original game rate. The game always makes 60 new frames a second at its original speed, so no "
     "setting changes gameplay, online play or local co-op. 30 shows every second frame. Faster rates show the last "
     "frame again until the next one (no interpolation), up to the display's refresh with VSync on; Unlimited repeats "
-    "up to 480 a second. Vulkan only above 60.";
+    "up to 480 a second.";
 constexpr char kShowFpsTitleHelp[] =
     "Shows the frame rate in the window title: Alienation | FPS: 60.00. Above 60 the new game frames follow in "
     "brackets: FPS: 144.00 (game 60.00)";

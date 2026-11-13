@@ -10,8 +10,9 @@ stderr. Every suite runs even after one fails; the exit code is non-zero when an
 summary.
 
 Nothing is compiled or fetched by default. The C++ suites run the test binaries already in the build folder; a binary
-that is missing or older than its sources is NOT RUN, with the exact command to make it current (-Build). NOT RUN does not
-fail the gate, and the last line says when anything did not run.
+that is missing, older than its sources or cannot be trusted fails its suite, with the exact command to make it current
+(-Build). A C++ suite is never NOT RUN: NOT RUN is only for optional parts (PowerShell 7, the release artifacts without
+-Release), does not fail the gate, and the last line says when anything did not run.
 
 Local co-op (one to four controllers) runs on virtual SDL gamepads, online rooms of two to four players on a loopback
 development lobby with modelled peers, the launcher's Accept and play on the launcher's own online client. Real
@@ -25,7 +26,7 @@ dependencies in gpu\deps.txt when they are missing. This is the only mode that c
 
 .PARAMETER BuildDir
 Build folder of the C++ test binaries; default build\cmake\clang64 (tools\build.ps1 configures it). Without it the C++
-suites are NOT RUN.
+suites fail.
 
 .PARAMETER Packages
 Folder with the player's real .pkg files (read only; also ALN_TEST_PACKAGES). Without it, Install game and Install
@@ -521,14 +522,22 @@ function Get-NodeProblem([switch]$NeedNpm) {
     return $null
 }
 
-function New-NotRun([string]$Reason) { return [pscustomobject]@{ Code = 0; Lines = @($Reason); NotRun = $true } }
-
-# Test targets ninja would rebuild, from a dry run: nothing is compiled. StaleKnown stays false when the plan cannot be
-# trusted, which includes a build folder whose CMake files must run again.
+# Test targets ninja would rebuild; nothing is compiled. A dry run stops at an unfinished manifest check (the
+# CONFIGURE_DEPENDS globs make it always dirty) and plans nothing, so the manifest is brought up to date first (a real
+# check that only reruns CMake when the globs or CMake files changed) and the plan is read from a copy of it that no
+# edge regenerates. StaleKnown stays false when no plan could be made.
 function Get-StaleTargets([string[]]$Targets) {
     $script:StaleKnown = $false
     if (-not $script:NinjaReady -or -not $Targets.Count) { return @() }
-    $plan = Invoke-Process 'ninja' (@('-C', $buildDir, '-n', '-k', '0') + $Targets) $root 300
+    $manifest = Invoke-Process 'ninja' @('-C', $buildDir, 'build.ninja') $root 600
+    if ($manifest.Code -ne 0) { return @() }
+    $planFile = Join-Path $buildDir 'build.plan.ninja'
+    try {
+        Copy-Item -LiteralPath (Join-Path $buildDir 'build.ninja') -Destination $planFile -Force
+        $plan = Invoke-Process 'ninja' (@('-C', $buildDir, '-f', 'build.plan.ninja', '-n', '-k', '0') + $Targets) $root 300
+    } finally {
+        Remove-Item -LiteralPath $planFile -Force -ErrorAction SilentlyContinue
+    }
     if ($plan.Code -ne 0 -or @($plan.Lines | Where-Object { $_ -match 'Re-running CMake' }).Count) { return @() }
     $script:StaleKnown = $true
     return @($plan.Lines | Where-Object { $_ -match '^\[\d+/\d+\]' } | ForEach-Object { [regex]::Matches($_, 'aln-[A-Za-z0-9-]+-tests') } | ForEach-Object { $_.Value } | Sort-Object -Unique)
@@ -549,7 +558,7 @@ function Invoke-SuiteRun($Suite) {
         'exe' {
             $exe = Join-Path $binDir "$($Suite.Name).exe"
             $unavailable = Get-BinaryProblem $Suite.Name
-            if ($unavailable) { return $(if ($Build) { New-Result 127 @($unavailable) } else { New-NotRun $unavailable }) }
+            if ($unavailable) { return New-Result 127 @($unavailable) }
             if ($Suite.Options['Packages']) {
                 $folder = $Packages
                 if (-not $folder -and (Test-Path -LiteralPath (Join-Path $root 'game') -PathType Container) -and
@@ -584,7 +593,7 @@ function Invoke-SuiteRun($Suite) {
         'hle' {
             $exe = Join-Path $binDir "$($Suite.Name).exe"
             $unavailable = Get-BinaryProblem $Suite.Name
-            if ($unavailable) { return $(if ($Build) { New-Result 127 @($unavailable) } else { New-NotRun $unavailable }) }
+            if ($unavailable) { return New-Result 127 @($unavailable) }
             $problem = Get-NodeProblem
             if ($problem) { return New-Result 1 @($problem) }
             $lobby = Start-DevLobby
@@ -663,11 +672,6 @@ try {
 
         $lines = @($run.Lines)
         $status = if ($run.Code -eq 0) { 'PASS' } else { 'FAIL' }
-        if ($run.PSObject.Properties['NotRun']) {
-            $results.Add([pscustomobject]@{ Section = $section; Name = $label; Status = 'NOT RUN'; Seconds = 0; Checks = 0; Summary = $lines[0] })
-            Write-Host ('  NOT RUN  {0,-43} {1}' -f $label, $lines[0]) -ForegroundColor Yellow
-            continue
-        }
         $problem = $null
         $checks = 0
         foreach ($line in $lines) { if ($line -match '(\d+) checks') { $checks = [int]$Matches[1] } }
