@@ -141,14 +141,15 @@ def check_desktop_and_metainfo(current):
 
 def check_packagers():
     windows = read('tools/package.ps1')
+    checker = read('tools/check-release-folder.ps1')
     linux = read('tools/package-linux.sh')
-    names_windows = set(re.findall(r"'([\w.]+)'", re.search(r'\$ForbiddenNames = @\((.*?)\)', windows, re.S).group(1)))
+    names_windows = set(re.findall(r"'([\w.-]+)'", re.search(r'\$ForbiddenNames = @\((.*?)\)', checker, re.S).group(1)))
     names_linux = set(n.replace('\\', '') for n in
                       re.search(r"forbidden_names='\^\((.*?)\)\$'", linux).group(1).split('|'))
     check(names_windows == names_linux, f'the packagers forbid different names: {sorted(names_windows ^ names_linux)}')
     check('alienation.ini' in names_windows, 'the settings file is not forbidden in a package')
     for word in ('DEBUG_SAULO', 'VisualStudio'):
-        check(word in windows and word in linux, f'a packager does not search for {word}')
+        check(word in checker and word in linux, f'a packager does not search for {word}')
     built_windows = set(re.findall(r"^\s+'([\w-]+)'\s+= '", re.search(r'\$BuiltInLicenses = \[ordered\]@\{(.*?)\n\}',
                                                                      windows, re.S).group(1), re.M))
     built_linux = set(re.findall(r'\[([\w-]+)\]=', re.search(r'declare -A built_in=\((.*?)\)\n', linux, re.S).group(1)))
@@ -164,6 +165,45 @@ def check_packagers():
         text = read(script)
         check(not re.search(r'build\.sh[^\n]*\s--run\b', text) and not re.search(r'build\.ps1[^\n]*\s-Run\b', text) and
               "@{ Run = $true }" not in text, f'{script} starts the game')
+
+
+def check_update_infrastructure():
+    paths = read('launcher/updater/update_paths.cpp')
+    check('IsLinkReparsePoint' in paths and 'IsReparseTagNameSurrogate' in paths,
+          'ordinary cloud-folder reparse points must not stop an update')
+    check('constexpr std::string_view kPrefix = "AlienationPC-v";' in paths and
+          'constexpr std::string_view kSuffix = "-x86_64.AppImage";' in paths,
+          'the AppImage target check does not match the artifact name')
+    platform = read('launcher/updater/update_platform.cpp')
+    check('IsRunningAppImage(candidate, appdir, CurrentExecutablePath())' in platform,
+          'the AppImage updater does not check APPDIR')
+    check('IsSafeRelativePath(path' not in read('launcher/updater/update_zip.cpp'),
+          'staging paths are checked before their separators are normalized')
+    config = read('launcher/update_config.cpp')
+    check('UpdateRestartArguments(trg::update::CurrentProcessArguments())' in config, 'the restart arguments are not filtered')
+    restart = read('launcher/update_restart_arguments.h')
+    loader = read('src/loader.c')
+    check('"--aln-skip-launcher"' in restart and '"--launcher"' in restart, 'the restart arguments name other launcher flags')
+    check('"--aln-skip-launcher"' in loader and '"--launcher"' in loader, 'the loader does not accept the flags the updater uses')
+    names = ['ALN_UPDATE_TEST', 'ALN_UPDATE_TEST_CURRENT_VERSION', 'ALN_UPDATE_TEST_RELEASE_JSON', 'ALN_UPDATE_TEST_ASSET_SHA256']
+    check('Environment("ALN_UPDATE_TEST")' in config and 'if (!TestMode())' in config and
+          re.findall(r'"(ALN_UPDATE_TEST[A-Z0-9_]*)"', config) == names,
+          'the updater test variables are not the master switch plus three overrides')
+    for variable in names:
+        check(f'L"{variable}"' in platform and f'"{variable}"' in platform,
+              f'{variable} is not removed from the environment of the restarted program')
+    cmake = read('launcher/CMakeLists.txt')
+    check(re.search(r'add_executable\(trg-updater WIN32 .*?target_link_options\(trg-updater PRIVATE -static\)', cmake, re.S),
+          'trg-updater is not linked statically')
+    checker = read('tools/check-release-folder.ps1')
+    check('trg-updater.exe imports' in checker, 'the release checker does not verify the helper imports')
+    packager = read('tools/package.ps1')
+    check('check-release-folder.ps1' in packager and "'-Zip'" in packager and "'-Folder'" in packager,
+          'tools/package.ps1 does not check the staged folder and the ZIP')
+    check('tools\\test-release-check.ps1' in read('tools/test.ps1'), 'the release checker test is not run by tools/test.ps1')
+    release = read('docs/release.md')
+    for text in names + ['trg-updater.log', 'AlienationPC-v<version>-windows-x64.zip']:
+        check(text in release, f'docs/release.md does not mention {text}')
 
 
 def check_ffmpeg():
@@ -209,6 +249,7 @@ def main():
     check_updater(current)
     check_desktop_and_metainfo(current)
     check_packagers()
+    check_update_infrastructure()
     check_ffmpeg()
     check_release_notes(current)
     for text in failures:

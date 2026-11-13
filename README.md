@@ -35,7 +35,7 @@ Options menu in game. The Linux and Steam Deck build is checked headlessly but h
 hardware yet; see [docs/LINUX.md](docs/LINUX.md).
 
 The built-in updater offers new releases from this repository and installs them without touching the game, saves or
-settings.
+settings. How releases are built, checked and installed: [docs/release.md](docs/release.md).
 
 ## Supported builds
 

@@ -17,4 +17,9 @@ bool PathIsWithin(const std::filesystem::path& path, const std::filesystem::path
 bool IsRegularFile(const std::filesystem::path& path);
 bool HasReparseAncestor(const std::filesystem::path& path, const std::filesystem::path& root);
 
+// Whether appimage is the AppImage the running program was started from: a regular Alienation AppImage outside its
+// own mount, with the running program inside `appdir`.
+bool IsRunningAppImage(const std::filesystem::path& appimage, const std::filesystem::path& appdir,
+                       const std::filesystem::path& executable);
+
 }  // namespace trg::update

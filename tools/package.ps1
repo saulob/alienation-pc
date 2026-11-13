@@ -6,17 +6,19 @@
   Builds with tools\build.ps1 (the one RelWithDebInfo configuration) unless -SkipBuild, then stages alienation.exe
   and trg-updater.exe without their debug information, the MSYS2 DLLs it loads (found by walking its imports), README.txt, LICENSE.txt and
   the licence texts. The debug information goes to dist\<name>-symbols\, which is not packaged.
-  The staging folder is checked for game data, user files, local paths and anything unexpected before the ZIP is
-  written. The version is the project VERSION in CMakeLists.txt.
+  The staging folder is checked by tools\check-release-folder.ps1 before the ZIP is written, and the finished ZIP and
+  its .zip.sha256 are checked again through an extraction into a temporary folder. The version is the project VERSION in
+  CMakeLists.txt.
 .PARAMETER SkipBuild
   Packages the existing build\cmake\clang64\bin\alienation.exe and trg-updater.exe.
 .PARAMETER Clean
   Passes -Clean to tools\build.ps1.
 .PARAMETER VerifyOnly
-  Only checks an existing staged folder, then exits.
+  Only checks an existing staged folder or ZIP with tools\check-release-folder.ps1, then exits.
 .EXAMPLE
   .\tools\package.ps1
   .\tools\package.ps1 -VerifyOnly dist\AlienationPC-v0.7.0-windows-x64
+  .\tools\package.ps1 -VerifyOnly dist\AlienationPC-v0.7.0-windows-x64.zip
 #>
 [CmdletBinding()]
 param(
@@ -28,6 +30,19 @@ param(
 . (Join-Path $PSScriptRoot '_common.ps1')
 
 $root = $script:RepoRoot
+$checker = Join-Path $PSScriptRoot 'check-release-folder.ps1'
+$powershell = (Get-Process -Id $PID).Path
+
+function Invoke-ReleaseCheck([string]$Target) {
+    $kind = if ($Target -like '*.zip') { '-Zip' } else { '-Folder' }
+    & $powershell -NoProfile -ExecutionPolicy Bypass -File $checker $kind $Target
+    return $LASTEXITCODE -eq 0
+}
+
+if ($VerifyOnly) {
+    if (-not (Invoke-ReleaseCheck $VerifyOnly)) { exit 1 }
+    return
+}
 $loader = Join-Path $root 'build\cmake\clang64\bin\alienation.exe'
 $updater = Join-Path $root 'build\cmake\clang64\bin\trg-updater.exe'
 $tc = Resolve-Toolchain 'auto'
@@ -73,29 +88,6 @@ $DllPackages = @('sdl3', 'freetype', 'libpng', 'zydis', 'xxhash', 'libc++', 'lib
 # ANGLE's own files come from gpu\angle-runtime.txt: SDL loads them by name, so no import table leads to them.
 $AnglePin = Read-AnglePin
 $AngleLicence = 'licenses\angleproject\LICENSE'
-$AngleLicenceSha256 = ($AnglePin.Files | Where-Object { $_.Name -eq 'LICENSE' }).Sha256
-# The licence folders of what libGLESv2.dll has compiled in.
-$AngleLinkedLicences = @('spirv-tools', 'vulkan-loader', 'VulkanMemoryAllocator', 'xxhash')
-
-$RootFiles = @('alienation.exe', 'trg-updater.exe', 'README.txt', 'LICENSE.txt')
-$AssetFiles = @('assets\launcher\header-art.png', 'assets\launcher\sponsor-heart.png')
-$ForbiddenNames = @('game', 'user', 'logs', 'cache', 'build', 'prepared', 'extracted', 'image', 'trophy', 'sce_sys', 'sce_module',
-    'eboot.bin', 'param.sfo', 'alienation.ini', 'boot.bin', 'content.bin', 'image.json', 'imports.json', 'symbols')
-$ForbiddenPatterns = @('*.pkg', '*.pdb', '*.debug', '*.log', '*.dmp', '*.ini', '*.bin', '*.self', '*.sprx', '*.prx',
-    '*.elf', '*.cpk', '*.sfo', '*.json', '*.spv', '*.pipeline_cache', '*.obj', '*.o', '*.a', '*.lib', '*.tmp', '*.bak',
-    '*.sav', '*.py', '*.ps1', '*.c', '*.cpp', '*.h')
-# File signatures of PS4 packages, SELF/ELF executables and CRI archives.
-$ForbiddenMagic = @{ '7F434E54' = 'PS4 package'; '4F153D1D' = 'PS4 SELF'; '7F454C46' = 'ELF executable'; '43504B20' = 'CPK archive' }
-
-$Latin1 = [Text.Encoding]::GetEncoding(28591)
-$LocalText = New-Object System.Collections.Generic.List[string]
-foreach ($path in @($root, $env:USERPROFILE)) {
-    if ($path) { $LocalText.Add($path); $LocalText.Add($path.Replace('\', '/')) }
-}
-foreach ($word in @('VisualStudio', 'DEBUG_SAULO', 'gow3', 'God of War', 'referencias-ps4', 'build\cmake', 'build/cmake')) {
-    $LocalText.Add($word)
-}
-$LocalNeedles = foreach ($text in $LocalText) { $text; $Latin1.GetString([Text.Encoding]::Unicode.GetBytes($text)) }
 
 # Adds what ANGLE's DLLs in $AngleDir load from $Dir.
 function Add-AngleDlls($Found, [string]$AngleDir, [string]$Dir) {
@@ -127,97 +119,8 @@ function Get-PackageInfo([string]$Short) {
     }
 }
 
-function Test-ReleaseFolder([string]$Dir) {
-    $problems = New-Object System.Collections.Generic.List[string]
-    if (-not (Test-Path -LiteralPath $Dir -PathType Container)) { Stop-Tool "Not a folder: $Dir" }
-    $base = (Resolve-Path -LiteralPath $Dir).Path.TrimEnd('\')
-    $exe = Join-Path $base 'alienation.exe'
-    $updaterExe = Join-Path $base 'trg-updater.exe'
-    $dlls = if (Test-Path -LiteralPath $exe) { Get-DllClosure $exe $base $objdump } else { [ordered]@{} }
-    if (Test-Path -LiteralPath $updaterExe) {
-        $updaterDlls = Get-DllClosure $updaterExe $base $objdump
-        foreach ($dllName in $updaterDlls.Keys) { if (-not $dlls.Contains($dllName)) { $dlls[$dllName] = $updaterDlls[$dllName] } }
-    }
-    foreach ($file in Get-AngleDlls $AnglePin) {
-        $path = Join-Path $base $file.Name
-        if (Test-Path -LiteralPath $path -PathType Leaf) { $dlls[$file.Name.ToLowerInvariant()] = $path }
-    }
-    Add-AngleDlls $dlls $base $base
-    foreach ($problem in Get-AngleRuntimeProblems $base $AnglePin { param($path) Get-Imports $path $objdump }) { $problems.Add($problem) }
-    if (-not (Test-Sha256 (Join-Path $base $AngleLicence) $AngleLicenceSha256)) { $problems.Add("missing or stale: $AngleLicence") }
-    foreach ($folder in $AngleLinkedLicences) {
-        if (-not (Get-ChildItem -LiteralPath (Join-Path $base "licenses\$folder") -File -ErrorAction SilentlyContinue)) { $problems.Add("missing licence: licenses\$folder") }
-    }
-    if (Test-Path -LiteralPath $exe) {
-        foreach ($name in (Get-DllClosure $exe $dllDirs $objdump).Keys) {
-            if (-not $dlls.Contains($name)) { $problems.Add("missing DLL: $name") }
-        }
-    }
-    if (Test-Path -LiteralPath $updaterExe) {
-        foreach ($name in (Get-DllClosure $updaterExe $dllDirs $objdump).Keys) {
-            if (-not $dlls.Contains($name)) { $problems.Add("missing DLL: $name") }
-        }
-    }
-    foreach ($item in Get-ChildItem -LiteralPath $base -Recurse -Force) {
-        $relative = $item.FullName.Substring($base.Length + 1)
-        $parts = $relative -split '\\'
-        if ($ForbiddenNames -contains $item.Name) { $problems.Add("forbidden name: $relative") }
-        # Licence texts have names such as COPYING.LIB; the folder is still checked for programs and content below.
-        foreach ($pattern in $ForbiddenPatterns) {
-            if ($parts[0] -ne 'licenses' -and $item.Name -like $pattern) { $problems.Add("forbidden file type: $relative") }
-        }
-        if ($parts.Count -eq 1) {
-            if ($item.PSIsContainer) {
-                if ($item.Name -notin @('licenses', 'assets')) { $problems.Add("unexpected folder: $relative") }
-            } elseif ($RootFiles -notcontains $item.Name -and -not $dlls.Contains($item.Name.ToLowerInvariant())) {
-                $problems.Add("unexpected file: $relative")
-            }
-        } elseif ($parts[0] -eq 'assets') {
-            if ($item.PSIsContainer) {
-                if ($relative -ne 'assets\launcher') { $problems.Add("unexpected folder: $relative") }
-            } elseif ($AssetFiles -notcontains $relative) {
-                $problems.Add("unexpected item: $relative")
-            }
-        } elseif ($parts[0] -ne 'licenses' -or $item.Name -like '*.exe' -or $item.Name -like '*.dll') {
-            $problems.Add("unexpected item: $relative")
-        }
-        if ($item.PSIsContainer) { continue }
-        $bytes = [IO.File]::ReadAllBytes($item.FullName)
-        if ($bytes.Length -ge 4) {
-            $magic = -join ($bytes[0..3] | ForEach-Object { $_.ToString('X2') })
-            if ($ForbiddenMagic.ContainsKey($magic)) { $problems.Add("$($ForbiddenMagic[$magic]): $relative") }
-        }
-        $text = $Latin1.GetString($bytes)
-        foreach ($needle in $LocalNeedles) {
-            if ($text.IndexOf($needle, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
-                $problems.Add("local path or stale name in $relative"); break
-            }
-        }
-    }
-    foreach ($leaf in $RootFiles + @('licenses\THIRD-PARTY-LICENSES.txt', 'licenses\MSYS2-PACKAGES.txt', 'licenses\NotoSansTC\LICENSE-NotoSansTC.txt')) {
-        if (-not (Test-Path -LiteralPath (Join-Path $base $leaf) -PathType Leaf)) { $problems.Add("missing: $leaf") }
-    }
-    foreach ($asset in $AssetFiles) {
-        if (-not (Test-Path -LiteralPath (Join-Path $base $asset) -PathType Leaf)) { $problems.Add("missing: $asset") }
-    }
-    return $problems
-}
-
-function Write-Problems($Problems) {
-    Write-Host ''
-    Write-Host 'RELEASE CHECK FAILED' -ForegroundColor Red
-    foreach ($problem in $Problems) { Write-Host "  $problem" -ForegroundColor Red }
-}
-
 function Write-Text([string]$Path, [string]$Text) {
     [IO.File]::WriteAllText($Path, ($Text -replace "\r?\n", "`r`n"), (New-Object Text.UTF8Encoding $false))
-}
-
-if ($VerifyOnly) {
-    $problems = @(Test-ReleaseFolder $VerifyOnly)
-    if ($problems.Count) { Write-Problems $problems; exit 1 }
-    Write-Ok "Release folder is clean: $VerifyOnly"
-    return
 }
 
 $cmake = Get-Content -LiteralPath (Join-Path $root 'CMakeLists.txt') -Raw
@@ -349,8 +252,7 @@ foreach ($image in @('header-art.png', 'sponsor-heart.png')) {
 }
 
 Write-Step 'Checking the release folder'
-$problems = @(Test-ReleaseFolder $stage)
-if ($problems.Count) { Write-Problems $problems; Stop-Tool 'The staging folder holds files that must not be released' }
+if (-not (Invoke-ReleaseCheck $stage)) { Stop-Tool 'The staging folder holds files that must not be released' }
 
 Write-Step 'Writing the ZIP'
 Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
@@ -374,6 +276,9 @@ if (Compare-Object $expected $entries) { Stop-Tool 'The ZIP does not hold exactl
 if ($entries | Where-Object { $_ -match '^[\\/]|\.\.|:|\\' }) { Stop-Tool 'The ZIP holds an unsafe entry name' }
 $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
 Write-Text $shaFile "$hash  $name.zip`n"
+
+Write-Step 'Checking the ZIP through a temporary extraction'
+if (-not (Invoke-ReleaseCheck $zip)) { Stop-Tool 'The ZIP does not hold a clean release' }
 
 function Format-Size([long]$Bytes) { '{0:N1} MB' -f ($Bytes / 1MB) }
 $dllBytes = ($dlls.Values | ForEach-Object { (Get-Item -LiteralPath $_).Length } | Measure-Object -Sum).Sum

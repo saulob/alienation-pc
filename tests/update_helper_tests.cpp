@@ -1,6 +1,8 @@
-// Real trg-updater flow: parent wait, install, restart quoting and child environment cleanup.
-// Run: aln-update-helper-tests
+// Real trg-updater flow, run from an isolated copy: static imports, parent wait, install, restart quoting, child
+// environment cleanup and protected data.
+// Run: aln-update-helper-tests [trg-updater.exe]
 
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
@@ -152,21 +154,109 @@ bool SameFile(const std::filesystem::path& left, const std::filesystem::path& ri
   return ReadFile(left) == ReadFile(right);
 }
 
+std::vector<std::string> ImportedLibraries(const std::filesystem::path& executable) {
+  std::vector<std::string> names;
+  const std::string image = ReadFile(executable);
+  const auto* base = reinterpret_cast<const unsigned char*>(image.data());
+  if (image.size() < sizeof(IMAGE_DOS_HEADER)) {
+    return names;
+  }
+  const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+  if (dos->e_magic != IMAGE_DOS_SIGNATURE || size_t(dos->e_lfanew) + sizeof(IMAGE_NT_HEADERS64) > image.size()) {
+    return names;
+  }
+  const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
+  const IMAGE_DATA_DIRECTORY imports = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+  const IMAGE_SECTION_HEADER* sections = IMAGE_FIRST_SECTION(nt);
+  auto to_offset = [&](DWORD rva) -> size_t {
+    for (WORD i = 0; i < nt->FileHeader.NumberOfSections; ++i) {
+      const IMAGE_SECTION_HEADER& section = sections[i];
+      if (rva >= section.VirtualAddress && rva < section.VirtualAddress + section.Misc.VirtualSize) {
+        return size_t(section.PointerToRawData + (rva - section.VirtualAddress));
+      }
+    }
+    return image.size();
+  };
+  for (size_t at = to_offset(imports.VirtualAddress); imports.Size && at + sizeof(IMAGE_IMPORT_DESCRIPTOR) <= image.size();
+       at += sizeof(IMAGE_IMPORT_DESCRIPTOR)) {
+    const auto* descriptor = reinterpret_cast<const IMAGE_IMPORT_DESCRIPTOR*>(base + at);
+    if (descriptor->Name == 0) {
+      break;
+    }
+    const size_t name = to_offset(descriptor->Name);
+    if (name < image.size()) {
+      names.emplace_back(image.c_str() + name);
+    }
+  }
+  return names;
+}
+
+bool IsSystemLibrary(std::string name) {
+  for (char& c : name) {
+    c = char(std::tolower(static_cast<unsigned char>(c)));
+  }
+  static const char* kSystem[] = {"kernel32.dll", "shell32.dll", "user32.dll", "advapi32.dll", "ntdll.dll",
+                                  "shlwapi.dll", "ole32.dll", "bcrypt.dll"};
+  if (name.rfind("api-ms-win-", 0) == 0) {
+    return true;
+  }
+  for (const char* system : kSystem) {
+    if (name == system) {
+      return true;
+    }
+  }
+  return false;
+}
+
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
   std::setvbuf(stdout, nullptr, _IONBF, 0);
+  const std::filesystem::path updater =
+      argc > 1 ? std::filesystem::path(argv[1]) : std::filesystem::path(ALN_UPDATER_EXE);
   ScopedEnvironment environment;
   TempDir temp;
-  const std::filesystem::path install = temp.path / "install";
-  const std::filesystem::path staging = temp.path / "staging";
-  const std::filesystem::path backup = temp.path / "backup";
-  const std::filesystem::path manifest = temp.path / "manifest.txt";
-  const std::filesystem::path job = temp.path / "job.txt";
-  const std::filesystem::path log = temp.path / "trg-updater.log";
+  const std::filesystem::path helper_dir = temp.path / "helper dir";
+  const std::filesystem::path helper = helper_dir / "trg-updater.exe";
+  const std::filesystem::path standalone = temp.path / "standalone dir";
+  const std::filesystem::path install = temp.path / "install dir";
+  const std::filesystem::path staging = temp.path / "staging dir";
+  const std::filesystem::path backup = temp.path / "backup dir";
+  const std::filesystem::path workspace = temp.path / "update workspace";
+  const std::filesystem::path manifest = workspace / "manifest.txt";
+  const std::filesystem::path job = workspace / "job.txt";
+  const std::filesystem::path log = workspace / "trg-updater.log";
   const std::filesystem::path marker_output = temp.path / "marker output.txt";
   const std::filesystem::path parent_output = temp.path / "parent output.txt";
   const std::filesystem::path marker = ALN_MARKER_EXE;
+
+  std::error_code ec;
+  std::filesystem::create_directories(helper_dir, ec);
+  std::filesystem::copy_file(updater, helper, std::filesystem::copy_options::overwrite_existing, ec);
+  CHECK(!ec);
+  for (const auto& entry : std::filesystem::directory_iterator(helper_dir, ec)) {
+    CHECK(entry.is_regular_file());
+    CHECK(entry.path().extension() == ".exe");
+  }
+
+  const std::vector<std::string> imports = ImportedLibraries(helper);
+  CHECK(!imports.empty());
+  for (const std::string& library : imports) {
+    if (!IsSystemLibrary(library)) {
+      std::printf("  helper imports %s\n", library.c_str());
+    }
+    CHECK(IsSystemLibrary(library));
+  }
+
+  std::filesystem::create_directories(standalone, ec);
+  DWORD standalone_exit = 1;
+  std::string standalone_error;
+  CHECK(RunHelper(helper, standalone / "missing job.txt", standalone, standalone_exit, standalone_error));
+  CHECK(standalone_exit == 2);
+  const std::string standalone_log = ReadFile(standalone / "trg-updater.log");
+  CHECK(standalone_log.find("trg-updater starting") != std::string::npos);
+  CHECK(standalone_log.find("job read failed") != std::string::npos);
+  CHECK(standalone_log.find("exit code: 2") != std::string::npos);
 
   std::wstring parent_command = Quote(marker.wstring()) + L" --hold 750 " + Quote(parent_output.wstring());
   STARTUPINFOW parent_startup{};
@@ -176,14 +266,16 @@ int main() {
                        temp.path.c_str(), &parent_startup, &parent));
   CHECK(parent.dwProcessId != 0);
 
+  std::filesystem::create_directories(workspace);
   std::filesystem::create_directories(install);
   std::filesystem::create_directories(staging);
   WriteFile(install / "app.exe", "DEVELOPMENT_BUILD");
   WriteFile(install / "user" / "alienation.ini", "player settings");
   WriteFile(install / "game" / "eboot.bin", "game files");
+  WriteFile(install / "game" / "prepared" / "CUSA04430" / "sce_sys" / "param.sfo", "game assets");
+  WriteFile(install / "user" / "trophy" / "NPWR00000_00" / "trophy.dat", "trophies");
   WriteFile(install / "logs" / "session.log", "log");
   WriteFile(install / "notes.txt", "keep me");
-  std::error_code ec;
   std::filesystem::copy_file(marker, staging / "app.exe", std::filesystem::copy_options::overwrite_existing, ec);
   CHECK(!ec);
   WriteFile(manifest, "app.exe\n");
@@ -203,7 +295,7 @@ int main() {
 
   DWORD exit_code = 1;
   std::string error;
-  CHECK(RunHelper(ALN_UPDATER_EXE, job, temp.path, exit_code, error));
+  CHECK(RunHelper(helper, job, workspace, exit_code, error));
   if (!error.empty()) {
     std::printf("  helper: %s\n", error.c_str());
   }
@@ -225,11 +317,14 @@ int main() {
 
   CHECK(ReadFile(install / "user" / "alienation.ini") == "player settings");
   CHECK(ReadFile(install / "game" / "eboot.bin") == "game files");
+  CHECK(ReadFile(install / "game" / "prepared" / "CUSA04430" / "sce_sys" / "param.sfo") == "game assets");
+  CHECK(ReadFile(install / "user" / "trophy" / "NPWR00000_00" / "trophy.dat") == "trophies");
   CHECK(ReadFile(install / "logs" / "session.log") == "log");
   CHECK(ReadFile(install / "notes.txt") == "keep me");
 
   const std::string helper_log = ReadFile(log);
   CHECK(helper_log.find("install root: " + install.string()) != std::string::npos);
+  CHECK(helper_log.find("staging root: " + staging.string()) != std::string::npos);
   CHECK(helper_log.find("waiting for parent pid ") != std::string::npos);
   CHECK(helper_log.find("parent exited") != std::string::npos);
   CHECK(helper_log.find("manifest entries: 1") != std::string::npos);
@@ -237,8 +332,13 @@ int main() {
   CHECK(helper_log.find("backup complete") != std::string::npos);
   CHECK(helper_log.find("replacement complete") != std::string::npos);
   CHECK(helper_log.find("verification complete") != std::string::npos);
+  CHECK(helper_log.find("restart executable: " + (install / "app.exe").string()) != std::string::npos);
   CHECK(helper_log.find("restart complete") != std::string::npos);
   CHECK(helper_log.find("exit code: 0") != std::string::npos);
+
+  CHECK(!std::filesystem::exists(job));
+  CHECK(!std::filesystem::exists(backup));
+  CHECK(!std::filesystem::exists(staging));
 
   std::printf("%d checks, %d failures\n", g_checks, g_failures);
   return g_failures == 0 ? 0 : 1;

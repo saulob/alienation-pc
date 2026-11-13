@@ -1,6 +1,7 @@
 // Updater tests: semantic versions, release parsing, SHA-256, ZIP path safety, staging validation and rollback.
 // Run: aln-update-tests
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
@@ -11,6 +12,7 @@
 #include <utility>
 #include <vector>
 
+#include "update_restart_arguments.h"
 #include "updater/github_release.h"
 #include "updater/install_transaction.h"
 #include "updater/sha256.h"
@@ -231,7 +233,10 @@ void TestZipAndStaging() {
   CHECK(wrapped_root == wrapped_staging / "AlienationPC-v0.7.0-windows-x64");
   CHECK(ReadFile(wrapped_root / "alienation.exe") == "launcher");
   CHECK(ValidateStaging(wrapped_root, {"alienation.exe", "assets/launcher/header-art.png"}, error));
-  CHECK(ListStagingFiles(wrapped_root, error).size() == 3);
+  const std::vector<std::string> listed = ListStagingFiles(wrapped_root, error);
+  CHECK(listed.size() == 3);
+  CHECK(std::find(listed.begin(), listed.end(), "assets/launcher/header-art.png") != listed.end());
+  CHECK(std::all_of(listed.begin(), listed.end(), [](const std::string& entry) { return entry.find('\\') == std::string::npos; }));
 
   const std::filesystem::path flat_archive = temp.path / "flat.zip";
   WriteFile(flat_archive, MakeZip({{"alienation.exe", "launcher"},
@@ -254,6 +259,13 @@ void TestZipAndStaging() {
   WriteFile(flat_root / "logs" / "a.log", "log");
   CHECK(!ValidateStaging(flat_root, {"alienation.exe"}, error));
   std::filesystem::remove_all(flat_root / "logs");
+
+  for (const char* folder : {"game", "user", "logs", "cache", "settings", "saves", "profiles", "online-instances"}) {
+    WriteFile(flat_root / folder / "nested" / "note.txt", "x");
+    CHECK(!ValidateStaging(flat_root, {"alienation.exe"}, error));
+    CHECK(ListStagingFiles(flat_root, error).empty() && !error.empty());
+    std::filesystem::remove_all(flat_root / folder);
+  }
 
   CHECK(!ValidateStaging(flat_root, {"missing.exe"}, error));
 
@@ -524,11 +536,74 @@ void TestPaths() {
   CHECK(IsProtectedRelativePath("sce_sys/param.sfo"));
   CHECK(IsProtectedRelativePath("DLC/a.bin"));
   CHECK(IsProtectedRelativePath("game.pkg"));
+  CHECK(IsProtectedRelativePath("saves/a.txt"));
+  CHECK(IsProtectedRelativePath("settings/a.txt"));
+  CHECK(IsProtectedRelativePath("profiles/a.txt"));
+  CHECK(IsProtectedRelativePath("achievements/a.txt"));
+  CHECK(IsProtectedRelativePath("online-instances/a/user/alienation.ini"));
+  CHECK(IsProtectedRelativePath("game/prepared/CUSA04430/eboot.bin"));
+  CHECK(IsProtectedRelativePath("USER/Alienation.INI"));
   CHECK(!IsProtectedRelativePath("alienation.exe"));
   CHECK(!IsProtectedRelativePath("trg-updater.exe"));
   CHECK(!IsProtectedRelativePath("rexruntime.dll"));
+  CHECK(!IsProtectedRelativePath("SDL3.dll"));
+  CHECK(!IsProtectedRelativePath("libGLESv2.dll"));
+  CHECK(!IsProtectedRelativePath("avcodec-62.dll"));
   CHECK(!IsProtectedRelativePath("assets/launcher/header-art.png"));
+  CHECK(!IsProtectedRelativePath("assets/launcher/sponsor-heart.png"));
   CHECK(!IsProtectedRelativePath("licenses/THIRD-PARTY-LICENSES.txt"));
+  CHECK(!IsProtectedRelativePath("licenses/angleproject/LICENSE"));
+  CHECK(!IsProtectedRelativePath("README.txt"));
+  CHECK(!IsProtectedRelativePath("LICENSE.txt"));
+}
+
+void TestRestartArguments() {
+  std::printf("restart arguments\n");
+  const std::vector<std::string> cleaned = aln::UpdateRestartArguments(
+      {"--user", "C:/with space", "--aln-skip-launcher", "--launcher", "--launcher=0", "--log", "a.log"});
+  const std::vector<std::string> expected = {"--user", "C:/with space", "--log", "a.log", "--launcher"};
+  CHECK(cleaned == expected);
+  CHECK(aln::UpdateRestartArguments({}) == std::vector<std::string>{"--launcher"});
+  CHECK(!aln::IsLauncherVisibilityArgument("--launcher-width"));
+  CHECK(!aln::IsLauncherVisibilityArgument("--aln-skip-launcher-x"));
+  CHECK(aln::IsLauncherVisibilityArgument("--aln-skip-launcher"));
+}
+
+void TestAppImageTarget() {
+  std::printf("the updater replaces only the AppImage the running program was started from\n");
+  TempDir dir;
+  const std::filesystem::path root = dir.path;
+  const std::filesystem::path appimage = root / "AlienationPC-v0.7.0-x86_64.AppImage";
+  WriteFile(appimage, "appimage");
+  const std::filesystem::path mount = root / "mount";
+  const std::filesystem::path program = mount / "usr" / "bin" / "alienation";
+  WriteFile(program, "program");
+  CHECK(IsRunningAppImage(appimage, mount, program));
+
+  const std::filesystem::path extracted = root / ".extract" / "squashfs-root";
+  const std::filesystem::path extracted_program = extracted / "usr" / "bin" / "alienation";
+  WriteFile(extracted_program, "program");
+  CHECK(IsRunningAppImage(appimage, extracted, extracted_program));
+
+  const std::filesystem::path build = root / "build" / "alienation";
+  WriteFile(build, "program");
+  CHECK(!IsRunningAppImage(appimage, mount, build));
+
+  for (const char* name : {"Other-v1.0.0-x86_64.AppImage", "AlienationPC-v-x86_64.AppImage",
+                           "AlienationPC-vx-x86_64.AppImage", "AlienationPC-v0.7.0-aarch64.AppImage"}) {
+    const std::filesystem::path other = root / name;
+    WriteFile(other, "other");
+    CHECK(!IsRunningAppImage(other, mount, program));
+  }
+
+  const std::filesystem::path inside = mount / "AlienationPC-v0.7.0-x86_64.AppImage";
+  WriteFile(inside, "appimage");
+  CHECK(!IsRunningAppImage(inside, mount, program));
+
+  CHECK(!IsRunningAppImage({}, mount, program));
+  CHECK(!IsRunningAppImage(appimage, {}, program));
+  CHECK(!IsRunningAppImage(appimage, mount, {}));
+  CHECK(!IsRunningAppImage(appimage, root / "not-a-mount", program));
 }
 
 }  // namespace
@@ -545,6 +620,8 @@ int main() {
   TestRollback();
   TestPackagingNames();
   TestPaths();
+  TestRestartArguments();
+  TestAppImageTarget();
   std::printf("%d checks, %d failures\n", g_checks, g_failures);
   return g_failures == 0 ? 0 : 1;
 }

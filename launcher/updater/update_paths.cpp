@@ -50,10 +50,21 @@ bool SameComponent(const std::filesystem::path& left, const std::filesystem::pat
 #endif
 }
 
-bool IsReparsePoint([[maybe_unused]] const std::filesystem::path& path) {
+// Only links (symbolic links, junctions) count: OneDrive and other cloud folders put reparse points on ordinary
+// files and folders.
+bool IsLinkReparsePoint([[maybe_unused]] const std::filesystem::path& path) {
 #if defined(_WIN32)
   const DWORD attributes = GetFileAttributesW(path.c_str());
-  return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+  if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0) {
+    return false;
+  }
+  WIN32_FIND_DATAW data;
+  const HANDLE find = FindFirstFileW(path.c_str(), &data);
+  if (find == INVALID_HANDLE_VALUE) {
+    return true;
+  }
+  FindClose(find);
+  return IsReparseTagNameSurrogate(data.dwReserved0);
 #else
   return false;
 #endif
@@ -183,9 +194,9 @@ bool IsSafeRelativePath(std::string_view path, std::string* reason) {
 
 bool IsProtectedRelativePath(std::string_view normalized_path) {
   static constexpr const char* kProtectedNames[] = {
-      "game", "user", "user_data", "user_data.migrating", "logs", "cache", "content", "savedata", "trophy",
-      "trophies", "screenshot", "screenshots", "sce_sys", "sce_module", "prepared", "extracted", "image", "dlc",
-      "cusa04430", "cusa00062"};
+      "game", "user", "user_data", "user_data.migrating", "logs", "cache", "content", "save", "saves", "savedata",
+      "settings", "profiles", "achievements", "trophy", "trophies", "screenshot", "screenshots", "online-instances",
+      "sce_sys", "sce_module", "prepared", "extracted", "image", "dlc", "cusa04430", "cusa00062"};
   static constexpr const char* kProtectedFiles[] = {
       "alienation.ini", "keys.json", "last_run.log", "last_run.prev.log", "eboot.bin", "param.sfo", "boot.bin",
       "content.bin", "image.json", "imports.json", "param.bin", "memory.dat", "trophy_key.bin"};
@@ -255,7 +266,31 @@ bool IsRegularFile(const std::filesystem::path& path) {
   if (ec || status.type() != std::filesystem::file_type::regular) {
     return false;
   }
-  return !IsReparsePoint(path);
+  return !IsLinkReparsePoint(path);
+}
+
+bool IsRunningAppImage(const std::filesystem::path& appimage, const std::filesystem::path& appdir,
+                       const std::filesystem::path& executable) {
+  if (appimage.empty() || appdir.empty() || executable.empty()) {
+    return false;
+  }
+  std::error_code ec;
+  const std::filesystem::path file = std::filesystem::weakly_canonical(appimage, ec);
+  if (ec || file.empty()) {
+    return false;
+  }
+  const std::string name = file.filename().string();
+  constexpr std::string_view kPrefix = "AlienationPC-v";
+  constexpr std::string_view kSuffix = "-x86_64.AppImage";
+  if (name.size() <= kPrefix.size() + kSuffix.size() || !std::string_view(name).starts_with(kPrefix) ||
+      !std::string_view(name).ends_with(kSuffix)) {
+    return false;
+  }
+  const std::string version = name.substr(kPrefix.size(), name.size() - kPrefix.size() - kSuffix.size());
+  if (!std::all_of(version.begin(), version.end(), [](char c) { return c == '.' || (c >= '0' && c <= '9'); })) {
+    return false;
+  }
+  return IsRegularFile(file) && !PathIsWithin(file, appdir) && PathIsWithin(executable, appdir);
 }
 
 bool HasReparseAncestor(const std::filesystem::path& path, const std::filesystem::path& root) {
@@ -278,11 +313,11 @@ bool HasReparseAncestor(const std::filesystem::path& path, const std::filesystem
     if (!std::filesystem::exists(status)) {
       continue;
     }
-    if (std::filesystem::is_symlink(status) || IsReparsePoint(current)) {
+    if (std::filesystem::is_symlink(status) || IsLinkReparsePoint(current)) {
       return true;
     }
   }
-  return IsReparsePoint(root);
+  return IsLinkReparsePoint(root);
 }
 
 }  // namespace trg::update

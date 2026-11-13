@@ -156,6 +156,7 @@ Add-Suite $s 'exe' 'aln-update-tests' 'updater (no network)'
 Add-Suite $s 'exe' 'aln-update-network-tests' 'updater on a loopback server: no release yet (404), failures, stalls, redirects, retries, production address and asset names'
 Add-Suite $s 'exe' 'aln-update-helper-tests' 'update helper'
 Add-Suite $s 'python' 'tests\release_contract_tests.py' 'one version source, updater address and asset names, desktop entry, AppStream metadata, packager lists, LGPL FFmpeg pin, release notes'
+Add-Suite $s 'script' 'tools\test-release-check.ps1' 'release checker: a clean folder and ZIP pass; game data, player data, logs, updater leftovers, debug markers and local paths are refused' @{ Host = $hostExe }
 
 if ($Release) {
     $s = 'Release artifacts'

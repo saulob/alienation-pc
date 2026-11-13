@@ -64,6 +64,16 @@ PLAYING
   OPTIONS on another controller to join.
 
 
+UPDATES
+-------
+The launcher checks this project's GitHub releases once per start. When a
+newer release exists, a banner in the header offers UPDATE NOW. The download
+is verified against its SHA-256 and installed only after you press RESTART TO
+UPDATE; the launcher then closes, trg-updater.exe replaces the program's own
+files and the launcher opens again. The "game", "user" and "logs" folders are
+never touched, and a failed update puts the previous files back.
+
+
 WHERE THINGS ARE
 ----------------
 - Game files:     the "game" folder next to alienation.exe

@@ -678,8 +678,15 @@ void TestAppImageReplacementAndRelaunch() {
 
   const char* previous = std::getenv("APPIMAGE");
   const std::string saved = previous ? previous : "";
+  const char* previous_dir = std::getenv("APPDIR");
+  const std::string saved_dir = previous_dir ? previous_dir : "";
   setenv("APPIMAGE", installed.c_str(), 1);
+  unsetenv("APPDIR");
   std::filesystem::path found;
+  CHECK(!HasOriginalAppImage(found));
+  setenv("APPDIR", (temp.path / "elsewhere").c_str(), 1);
+  CHECK(!HasOriginalAppImage(found));
+  setenv("APPDIR", CurrentExecutablePath().parent_path().c_str(), 1);
   CHECK(HasOriginalAppImage(found));
   CHECK(found == std::filesystem::weakly_canonical(installed));
   const UpdateConfig config = aln::MakeUpdateConfig(temp.path / "mount" / "usr" / "bin");
@@ -724,6 +731,11 @@ void TestAppImageReplacementAndRelaunch() {
     setenv("APPIMAGE", saved.c_str(), 1);
   } else {
     unsetenv("APPIMAGE");
+  }
+  if (previous_dir) {
+    setenv("APPDIR", saved_dir.c_str(), 1);
+  } else {
+    unsetenv("APPDIR");
   }
   CHECK(!HasOriginalAppImage(found) || previous);
 }

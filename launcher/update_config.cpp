@@ -1,6 +1,5 @@
 #include "update_config.h"
 
-#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <optional>
@@ -8,6 +7,7 @@
 #include <string_view>
 #include <vector>
 
+#include "update_restart_arguments.h"
 #include "updater/update_paths.h"
 #include "updater/update_platform.h"
 
@@ -52,17 +52,6 @@ std::optional<std::string> TestVariable(const char* name) {
     return Environment(name);
 }
 
-std::vector<std::string> RestartArguments() {
-    std::vector<std::string> arguments = trg::update::CurrentProcessArguments();
-    arguments.erase(std::remove_if(arguments.begin(), arguments.end(),
-                                   [](const std::string& argument) {
-                                       return argument.rfind("--aln-skip-launcher", 0) == 0;
-                                   }),
-                    arguments.end());
-    arguments.emplace_back("--launcher");
-    return arguments;
-}
-
 } // namespace
 
 trg::update::UpdateConfig MakeUpdateConfig(const std::filesystem::path& install_dir) {
@@ -75,7 +64,7 @@ trg::update::UpdateConfig MakeUpdateConfig(const std::filesystem::path& install_
     config.download_url_prefix = kDownloadUrlPrefix;
     config.user_agent = std::string("AlienationPC-Updater/") + ALN_PORT_VERSION;
     config.install_dir = install_dir;
-    config.restart_arguments = RestartArguments();
+    config.restart_arguments = UpdateRestartArguments(trg::update::CurrentProcessArguments());
 
 #if defined(_WIN32)
     config.package_kind = UpdatePackageKind::kZip;
