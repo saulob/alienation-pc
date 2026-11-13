@@ -140,6 +140,14 @@ The released upstream runtime stops when FUSE fails, so the project builds its o
   and refuses a result that does not match the pinned SHA-256; it rebuilds only when the pins, the patches or the script
   change (a fingerprint stamp). `--check FILE` verifies a runtime or a finished AppImage, and `tools/package-linux.sh`
   checks the written AppImage with it.
+- The reviewed runtime has SHA-256 `9e458da0…4ab8`, the same file Dragon's Crown Pro, Odin Sphere and 13 Sentinels pin.
+  The chroot build resolves Alpine packages when it runs, so it stops reproducing that file once they move on (a newer
+  `zlib` alone gives another binary of the same size); a rebuilt result is therefore never a reason to change the pin.
+  `ALN_APPIMAGE_RUNTIME=FILE` makes the build script use an existing copy, and only if its SHA-256 is the pinned one.
+  `tools/package-release.ps1` keeps that copy in the ignored `cache/appimage-runtime/runtime-x86_64`, copies it from a
+  WSL packaging cache (`tools/import-appimage-runtime.sh`) when missing and deletes any file with another hash.
+  `tools/package-linux.sh` then checks that the bytes in front of the written AppImage's file system equal the pinned
+  runtime, apart from the sections `appimagetool` fills (`.digest_md5`, `.upd_info`, `.sha256_sig`, `.sig_key`).
 
 ### Updates
 

@@ -145,6 +145,11 @@ of each Ubuntu package is in licenses/system/<package>/copyright. licenses/SYSTE
 with where it comes from. glibc, the Vulkan loader, the graphics drivers, X11/Wayland and the
 audio libraries come from the player's system and are not part of the AppImage.
 
+The AppImage runtime, the program at the front of the file, is AppImage/type2-runtime (MIT) at the commit pinned in
+patches/appimage-runtime/baseline.env with that folder's patch, statically linked with musl (MIT), libfuse
+(LGPL-2.1), squashfuse (BSD-2-Clause), zstd (BSD-3-Clause), zlib (Zlib) and mimalloc (MIT).
+tools/build-appimage-runtime.sh rebuilds it from those public sources.
+
 
 ========================================================================
 AMD GCN register headers (gpu/third_party/gcn/include/gcn)

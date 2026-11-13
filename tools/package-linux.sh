@@ -125,6 +125,30 @@ check_appdir() { # dir [the AppImage file, whose runtime is an ELF too]
     echo 'AppDir is clean'
 }
 
+# The runtime at the front of the AppImage is the reviewed one: its bytes up to the file system equal the runtime file,
+# apart from the sections appimagetool fills (digest, update information, signature).
+verify_embedded_runtime() { # appimage runtime
+    local appimage=$1 runtime=$2 size offset work section start length masked=0
+    size=$(stat -c %s -- "$runtime")
+    offset=$("$appimage" --appimage-offset)
+    [[ $offset == "$size" ]] || die "the AppImage's file system starts at $offset, the pinned runtime is $size bytes"
+    work=$(mktemp -d)
+    head -c "$size" -- "$appimage" > "$work/embedded"
+    cp -- "$runtime" "$work/pinned"
+    # readelf -S -W: name, type, address, then the file offset and size in hexadecimal.
+    while read -r section start length; do
+        for copy in embedded pinned; do
+            dd if=/dev/zero of="$work/$copy" bs=1 seek=$((16#$start)) count=$((16#$length)) conv=notrunc status=none
+        done
+        masked=$((masked + 1))
+    done < <(readelf -S -W -- "$work/pinned" | awk '{for (i = 1; i < NF - 3; i++) if ($i == ".digest_md5" || $i == ".upd_info" ||
+        $i == ".sha256_sig" || $i == ".sig_key") print $i, $(i + 3), $(i + 4)}')
+    ((masked > 0)) || { rm -rf -- "$work"; die 'the pinned runtime has none of the sections appimagetool fills'; }
+    cmp -s -- "$work/embedded" "$work/pinned" || { rm -rf -- "$work"; die 'the runtime embedded in the AppImage is not the pinned runtime'; }
+    rm -rf -- "$work"
+    echo "Embedded runtime: the pinned runtime ($(sha256sum -- "$runtime" | cut -d' ' -f1)), $size bytes"
+}
+
 if [[ -n $verify_dir ]]; then
     check_appdir "$verify_dir"
     exit 0
@@ -288,6 +312,7 @@ if [[ ! -x $tool ]]; then
     chmod +x "$tool.part"
     mv "$tool.part" "$tool"
 fi
+echo "$appimagetool_sha256  $tool" | sha256sum -c --status - || die 'appimagetool does not match the pinned checksum'
 # appimagetool would otherwise download the unpinned "continuous" runtime.
 runtime=$work/runtime-aln-x86_64
 bash tools/build-appimage-runtime.sh "$runtime" "$work/appimage-runtime"
@@ -295,6 +320,7 @@ ARCH=x86_64 "$tool" --appimage-extract-and-run --runtime-file "$runtime" "$appdi
     >"$work/appimagetool.log" 2>&1 || { cat "$work/appimagetool.log" >&2; die 'appimagetool failed'; }
 chmod 755 "$dist/$name.AppImage.new"
 bash tools/build-appimage-runtime.sh --check "$dist/$name.AppImage.new"
+verify_embedded_runtime "$dist/$name.AppImage.new" "$runtime"
 
 step 'Checking the contents of the written AppImage'
 rm -rf "$work/written"

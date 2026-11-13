@@ -10,6 +10,10 @@
 
   The Linux side needs the WSL2 distribution AlnFocalBuild: Ubuntu 20.04, the AppImage's glibc baseline, prepared once
   by packaging/linux/ci-deps.sh (docs/LINUX.md). Nothing is installed or changed in WSL.
+
+  The reviewed AppImage runtime is kept in the ignored cacheppimage-runtimeuntime-x86_64 (toolselease-inputs.ps1):
+  used only with the SHA-256 pinned in patchesppimage-runtimeaseline.env and, when missing, copied from a WSL
+  packaging cache that holds the same file. Any other file is deleted, so nothing unreviewed is packaged.
 .PARAMETER Clean
   Clean build for both platforms.
 .PARAMETER SkipBuild
@@ -27,6 +31,7 @@ param(
 )
 
 . (Join-Path $PSScriptRoot '_common.ps1')
+. (Join-Path $PSScriptRoot 'release-inputs.ps1')
 
 $root = $script:RepoRoot
 $cmake = Get-Content -LiteralPath (Join-Path $root 'CMakeLists.txt') -Raw
@@ -101,10 +106,23 @@ if (-not $wsl) {
         if ($LASTEXITCODE -ne 0 -or -not $repoWsl) {
             $linuxProblems += 'wslpath could not convert the repository path.'
         } else {
+            $importRuntime = {
+                param($File, $Sha256)
+                $target = (& wsl.exe @wslArgs --exec /usr/bin/wslpath -a -u $File | Out-String).Trim()
+                & wsl.exe @wslArgs --exec /bin/bash "$repoWsl/tools/import-appimage-runtime.sh" $Sha256 $target | Out-Host
+            }
+            $runtime = Resolve-ReviewedRuntime $root $importRuntime
+            $runtimeWsl = ''
+            if ($runtime) {
+                $runtimeWsl = (& wsl.exe @wslArgs --exec /usr/bin/wslpath -a -u $runtime | Out-String).Trim()
+                Write-Host "AppImage runtime: $runtime (the pinned SHA-256 $(Get-PinnedRuntimeSha256 $root))"
+            } else {
+                Write-Warn 'AppImage runtime: no reviewed copy found; tools/build-appimage-runtime.sh builds one and refuses it unless it has the pinned SHA-256.'
+            }
             $linuxArgs = @()
             if ($Clean) { $linuxArgs += '--clean' }
             if ($SkipBuild) { $linuxArgs += '--skip-build' }
-            & wsl.exe @wslArgs --exec /bin/bash "$repoWsl/tools/package-release-linux.sh" @linuxArgs
+            & wsl.exe @wslArgs --exec /usr/bin/env "ALN_APPIMAGE_RUNTIME=$runtimeWsl" /bin/bash "$repoWsl/tools/package-release-linux.sh" @linuxArgs
             if ($LASTEXITCODE -ne 0) {
                 $linuxProblems += "tools/package-release-linux.sh failed (exit $LASTEXITCODE). If it listed missing tools, prepare WSL once with: wsl -d $WslDistro -u root --exec /bin/bash $repoWsl/packaging/linux/ci-deps.sh"
             } else {

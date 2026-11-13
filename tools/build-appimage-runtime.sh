@@ -7,6 +7,9 @@
 #   tools/build-appimage-runtime.sh OUT [WORK_DIR]   build when OUT is missing or the pins or patches changed, write OUT
 #   tools/build-appimage-runtime.sh --check FILE     verify a runtime
 #
+# ALN_APPIMAGE_RUNTIME=FILE takes an existing build of the reviewed runtime instead of building one (the chroot build
+# stops reproducing it when the Alpine packages move on); FILE is used only if its SHA-256 is the pinned RUNTIME_SHA256.
+#
 # Needs root (it builds in a chroot inside a private mount namespace; passwordless sudo is used when not root), git, tar, unshare,
 # curl or wget, and network access for the source, the Alpine root file system and its packages, and the libfuse and
 # squashfuse sources upstream's scripts download (those carry their own SHA-256 checks). WORK_DIR holds the fetched source
@@ -146,6 +149,17 @@ case "${1:-}" in
     if [ -f "$OUT" ] && [ -f "$STAMP" ] && [ "$(cat "$STAMP")" = "$(fingerprint)" ] && check_runtime "$OUT" >/dev/null 2>&1 &&
       [ "$(sha256sum "$OUT" | cut -d' ' -f1)" = "$RUNTIME_SHA256" ]; then
       echo "AppImage runtime: current ($(fingerprint))"
+    elif [ -n "${ALN_APPIMAGE_RUNTIME:-}" ]; then
+      mkdir -p "$(dirname "$OUT")"
+      cp "$ALN_APPIMAGE_RUNTIME" "$OUT.new"
+      chmod 755 "$OUT.new"
+      GIVEN="$(sha256sum "$OUT.new" | cut -d' ' -f1)"
+      [ "$GIVEN" = "$RUNTIME_SHA256" ] || { rm -f "$OUT.new";
+        fail "ALN_APPIMAGE_RUNTIME has SHA-256 $GIVEN, not the reviewed $RUNTIME_SHA256 (patches/appimage-runtime/baseline.env)"; }
+      check_runtime "$OUT.new"
+      mv -f "$OUT.new" "$OUT"
+      fingerprint > "$STAMP"
+      echo "AppImage runtime: the reviewed runtime from $ALN_APPIMAGE_RUNTIME, sha256 $GIVEN"
     else
       rm -f "$STAMP"
       build_runtime "$OUT" "$WORK"
