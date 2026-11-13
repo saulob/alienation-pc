@@ -157,13 +157,22 @@ else()
     target_link_libraries(alienation PRIVATE aln_launcher alngpu SDL3::SDL3 Freetype::Freetype ZLIB::ZLIB Threads::Threads ${CMAKE_DL_LIBS} m)
 endif()
 
-# The launcher reads its images next to the executable.
-add_custom_command(TARGET alienation POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:alienation>/assets/launcher"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_CURRENT_SOURCE_DIR}/assets/launcher/sponsor-heart.png"
-        "$<TARGET_FILE_DIR:alienation>/assets/launcher/sponsor-heart.png"
-    VERBATIM)
+# The launcher reads its images next to the executable; each copy is a build output, so an image-only change syncs.
+set(ALN_LAUNCHER_ASSET_DIR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/assets/launcher")
+set(ALN_LAUNCHER_ASSET_COPIES)
+foreach(asset header-art.png sponsor-heart.png)
+    set(asset_source "${CMAKE_CURRENT_SOURCE_DIR}/assets/launcher/${asset}")
+    set(asset_copy "${ALN_LAUNCHER_ASSET_DIR}/${asset}")
+    add_custom_command(OUTPUT "${asset_copy}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${ALN_LAUNCHER_ASSET_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${asset_source}" "${asset_copy}"
+        COMMAND ${CMAKE_COMMAND} -E touch_nocreate "${asset_copy}"
+        DEPENDS "${asset_source}"
+        VERBATIM)
+    list(APPEND ALN_LAUNCHER_ASSET_COPIES "${asset_copy}")
+endforeach()
+add_custom_target(aln_launcher_assets DEPENDS ${ALN_LAUNCHER_ASSET_COPIES})
+add_dependencies(alienation aln_launcher_assets)
 
 if (WIN32)
     # GUI-subsystem processes start with closed standard streams; the log must still work. Not part of the default build.

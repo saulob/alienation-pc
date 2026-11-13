@@ -96,7 +96,7 @@ check_appdir() { # dir [the AppImage file, whose runtime is an ELF too]
     done < <(find "$dir" -mindepth 1 -print0)
     for leaf in AppRun "$desktop_file" "usr/share/applications/$desktop_file" "$metainfo" alienation-pc.png \
                 usr/share/icons/hicolor/256x256/apps/alienation-pc.png usr/bin/alienation \
-                usr/bin/assets/launcher/sponsor-heart.png \
+                usr/bin/assets/launcher/header-art.png usr/bin/assets/launcher/sponsor-heart.png \
                 usr/share/licenses/AlienationPC/THIRD-PARTY-LICENSES.txt \
                 usr/share/licenses/AlienationPC/NotoSansTC/LICENSE-NotoSansTC.txt usr/share/doc/AlienationPC/README.txt; do
         [[ -e $dir/$leaf ]] || problem "missing: $leaf"
@@ -167,6 +167,7 @@ chmod 755 "$appdir/usr/bin/alienation"
 
 step 'Staging the launcher images'
 install -d "$appdir/usr/bin/assets/launcher"
+install -m644 assets/launcher/header-art.png "$appdir/usr/bin/assets/launcher/header-art.png"
 install -m644 assets/launcher/sponsor-heart.png "$appdir/usr/bin/assets/launcher/sponsor-heart.png"
 
 step 'Staging the libraries it loads'

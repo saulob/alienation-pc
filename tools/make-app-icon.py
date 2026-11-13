@@ -3,7 +3,7 @@
 
 Developer tool: the generated files are committed, so building the port needs no SVG converter.
 Needs Microsoft Edge or Chrome for the rasterization; the rest is the Python standard library.
-Refuses to run when the SVG does not use the launcher accent (kAccent in launcher/launcher.cpp).
+Refuses to run when the SVG does not use the launcher accent (src/aln_accent.h) and action edge (launcher/launcher.cpp).
 --check only verifies the committed ICO and PNGs.
 
   python tools/make-app-icon.py
@@ -42,12 +42,17 @@ def find_browser(requested):
     sys.exit("No Edge or Chrome found: pass --browser")
 
 
-def launcher_accent():
-    source = (ROOT / "launcher" / "launcher.cpp").read_text(encoding="utf-8")
-    match = re.search(r"kAccent = ImVec4\(([\d.]+)f, ([\d.]+)f, ([\d.]+)f", source)
-    if not match:
-        sys.exit("kAccent not found in launcher/launcher.cpp")
-    return "#" + "".join(f"{int(float(channel) * 255 + 0.5):02X}" for channel in match.groups())
+def launcher_colours():
+    accent_source = (ROOT / "src" / "aln_accent.h").read_text(encoding="utf-8")
+    channels = [re.search(rf"kAccent{name} = (\w+);", accent_source) for name in ("Red", "Green", "Blue")]
+    if not all(channels):
+        sys.exit("kAccentRed/Green/Blue not found in src/aln_accent.h")
+    accent = "#" + "".join(f"{int(match.group(1), 0):02X}" for match in channels)
+    launcher = (ROOT / "launcher" / "launcher.cpp").read_text(encoding="utf-8")
+    edge = re.search(r"kActionEdge = Rgb\(0x(\w\w), 0x(\w\w), 0x(\w\w)\)", launcher)
+    if not edge:
+        sys.exit("kActionEdge not found in launcher/launcher.cpp")
+    return accent, "#" + "".join(edge.groups()).upper()
 
 
 def wait_for_file(path, seconds=30):
@@ -194,9 +199,9 @@ def main():
         sys.exit("\n".join(problems) if problems else 0)
     browser = find_browser(args.browser)
     svg = (ICONS / "app-icon.svg").read_bytes()
-    accent = launcher_accent()
-    if accent.lower() not in svg.decode("utf-8").lower():
-        sys.exit(f"app-icon.svg does not use the launcher accent {accent}")
+    for colour in launcher_colours():
+        if colour.lower() not in svg.decode("utf-8").lower():
+            sys.exit(f"app-icon.svg does not use the launcher colour {colour}")
     with tempfile.TemporaryDirectory() as work:
         pngs = {size: render(browser, svg, size, pathlib.Path(work)) for size in PNG_SIZES}
     for size, png in pngs.items():

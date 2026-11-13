@@ -233,8 +233,8 @@ Application icon: Game Console Ecommerce
 
 Source: SVG Repo (www.svgrepo.com). The file's own header reads "Uploaded to: SVG Repo, www.svgrepo.com, Generator:
 SVG Repo Mixer Tools". The source file was named game-console-ecommerce-svgrepo-com.svg.
-Modified to use the launcher accent color and a lighter tint of it (shape unchanged): the fills rgb(25,144,167) and
-rgb(144,224,239) became #E0BB32 and #F2E3AA. packaging/icons/app-icon.svg is the only copy kept.
+Modified to use the launcher accent and action edge colors (shape unchanged): the fills rgb(144,224,239) and
+rgb(25,144,167) became #19B7A5 and #F05A3C. packaging/icons/app-icon.svg is the only copy kept.
 The ICO and PNG icon files are renderings of the modified SVG (tools/make-app-icon.py).
 
 License: CC0 (public domain dedication), as svgrepo.com/svg/425126, collection "Ecommerce Duotone Filled Icons".

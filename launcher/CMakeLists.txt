@@ -34,7 +34,7 @@ target_link_libraries(aln_imgui_sdl PUBLIC SDL3::SDL3)
 find_package(ZLIB REQUIRED)
 find_package(PNG REQUIRED)
 add_library(aln_launcher_core STATIC boot_image.cpp file_browser.cpp game_files.cpp game_install.cpp game_process.cpp
-    game_profile.cpp incident_report.cpp log_scrubber.cpp report_history.cpp online_client.cpp online_settings.cpp
+    game_profile.cpp header_art.cpp incident_report.cpp log_scrubber.cpp report_history.cpp online_client.cpp online_settings.cpp
     online_view.cpp options.cpp page_icons.cpp paths.cpp frame_rate.c menu_buttons.c pkg_extract.cpp resolution.c settings.cpp
     controller_prompts.cpp controller_prompts_style.c controller_prompts_data.c
     controller_prompts_glyphs_data.c exit_game_script.c exit_game_stream.cpp online_status_script.c text_fix.c text_fix_stream.cpp

@@ -35,6 +35,7 @@
 #include "game_files.h"
 #include "game_install.h"
 #include "game_process.h"
+#include "header_art.h"
 #include "host.h"
 #include "incident_page.h"
 #include "launcher_quit.h"
@@ -69,7 +70,13 @@ namespace {
 
 const char* TranslateLauncherText(const char* english) { return Tr(english); }
 
-const ImVec4 kAccent = ImVec4(kAccentRed / 255.0f, kAccentGreen / 255.0f, kAccentBlue / 255.0f, 1.0f);
+ImVec4 Rgb(int red, int green, int blue) { return ImVec4(red / 255.0f, green / 255.0f, blue / 255.0f, 1.0f); }
+
+const ImVec4 kAccent = Rgb(kAccentRed, kAccentGreen, kAccentBlue);
+const ImVec4 kActionHover = Rgb(0x28, 0xCF, 0xBB);
+const ImVec4 kActionPressed = Rgb(0x12, 0x84, 0x77);
+const ImVec4 kActionEdge = Rgb(0xF0, 0x5A, 0x3C);
+const ImVec4 kActionLink = Rgb(0x72, 0xE6, 0xD9);
 constexpr double kPlayFeedbackSeconds = 0.4;
 constexpr char kPortTitle[] = "Alienation PC";
 constexpr char kInstallTitle[] = "Select your Alienation base game package";
@@ -168,16 +175,33 @@ std::vector<std::string> ListGpuNames() {
 }
 
 trg::Theme LauncherTheme() {
-    trg::Theme theme = trg::Theme::Midnight().WithAccent(kAccent);
-    // Warnings stay red-orange so they are never mistaken for the gold accent.
+    trg::Theme theme = trg::Theme::Midnight().WithAccent(kAccent).WithAction(kAccent, kActionEdge, kActionLink);
+    theme.accent_hot = kActionHover;
+    theme.action_hot = kActionHover;
+    theme.action_active = kActionPressed;
+    // Warnings stay red-orange so they are never mistaken for the accent.
     theme.warn = ImVec4(0.47f, 0.18f, 0.10f, 1.0f);
     theme.warn_dot = ImVec4(1.0f, 0.45f, 0.30f, 1.0f);
     return theme;
 }
 
-trg::HeaderPainter LauncherHeader() {
-    return trg::headers::Gradient(IM_COL32(10, 20, 18, 255), IM_COL32(24, 52, 30, 255), IM_COL32(8, 30, 40, 255),
-                                  IM_COL32(8, 10, 14, 255));
+trg::HeaderPainter LauncherHeader(std::function<ImTextureID(int, int)> art, float art_aspect) {
+    const trg::HeaderPainter gradient = trg::headers::Gradient(
+        IM_COL32(7, 18, 23, 255), IM_COL32(12, 58, 60, 255), IM_COL32(11, 37, 41, 255), IM_COL32(5, 9, 12, 255));
+    return [gradient, art = std::move(art), art_aspect](const trg::HeaderContext& c) {
+        gradient(c);
+        const HeaderArtRect rect = PlaceHeaderArt(c.min.y, c.max.x, c.max.y, art_aspect);
+        const float framebuffer = std::max(ImGui::GetIO().DisplayFramebufferScale.x, 1.0f);
+        const ImTextureID texture = art(static_cast<int>((rect.max_x - rect.min_x) * framebuffer + 0.5f),
+                                        static_cast<int>((rect.max_y - rect.min_y) * framebuffer + 0.5f));
+        if (texture == ImTextureID{}) {
+            return;
+        }
+        for (const HeaderArtStrip& strip : SplitHeaderArt(rect)) {
+            c.draw->AddImage(ImTextureRef(texture), ImVec2(strip.min_x, rect.min_y), ImVec2(strip.max_x, rect.max_y),
+                             ImVec2(strip.min_u, 0.0f), ImVec2(strip.max_u, 1.0f));
+        }
+    };
 }
 
 __attribute__((format(printf, 1, 2))) void Log(const char* format, ...) {
@@ -306,6 +330,9 @@ public:
         placement_ = PlacementTracker(host_.Restored());
         fonts_ = trg::LoadSystemFonts(trg::layout::kTextBody);
         sponsor_icon_ = LoadSponsorIcon(host_);
+        if (LoadLauncherImage("header-art.png", header_art_image_)) {
+            header_art_aspect_ = float(header_art_image_.width) / float(header_art_image_.height);
+        }
         trophy_page_ = std::make_unique<TrophyPage>(host_, UserDir());
         online_page_ = std::make_unique<OnlinePage>(UserDir());
         incident_page_ = std::make_unique<IncidentPage>(IncidentPlaces());
@@ -582,7 +609,8 @@ private:
             {"v" ALN_PORT_VERSION "   \xC2\xB7   ", ""},
             {"BY SAULOB", kAuthorUrl},
         };
-        c.branding.background = LauncherHeader();
+        c.branding.background = LauncherHeader([this](int width, int height) { return HeaderArtTexture(width, height); },
+                                               header_art_aspect_);
         c.sponsor = {"Sponsor on GitHub", kSponsorUrl, sponsor_icon_};
         c.note = "Play applies the changes. Save keeps them without starting.";
         for (const PageId page : kPageOrder) {
@@ -604,6 +632,18 @@ private:
             return trg::PlayCheck{};
         };
         return c;
+    }
+
+    ImTextureID HeaderArtTexture(int width, int height) {
+        if (width != header_art_width_ || height != header_art_height_) {
+            header_art_width_ = width;
+            header_art_height_ = height;
+            host_.DestroyTexture(header_art_);
+            const std::vector<uint8_t> rgba = ScaleArtRgba(header_art_image_.rgba.data(), header_art_image_.width,
+                                                           header_art_image_.height, width, height);
+            header_art_ = rgba.empty() ? ImTextureID{} : host_.CreateTexture(rgba.data(), width, height);
+        }
+        return header_art_;
     }
 
     ImTextureID PageIconTexture(PageId page, int pixels) {
@@ -1157,6 +1197,11 @@ private:
     const PackageAlias* alias_ = nullptr;
     LauncherHost host_;
     ImTextureID sponsor_icon_{};
+    AlnPng::Image header_art_image_;
+    ImTextureID header_art_{};
+    int header_art_width_ = 0;
+    int header_art_height_ = 0;
+    float header_art_aspect_ = kHeaderArtAspect;
     std::map<std::pair<PageId, int>, ImTextureID> page_icons_;
     std::vector<Display> displays_;
     std::vector<std::string> gpu_names_;

@@ -1,10 +1,10 @@
-// The accent colour of the launcher and the frame counter (#E0BB32).
+// The accent colour of the launcher and the frame counter (#19B7A5).
 #pragma once
 
 namespace aln {
 
-inline constexpr int kAccentRed = 224;
-inline constexpr int kAccentGreen = 187;
-inline constexpr int kAccentBlue = 50;
+inline constexpr int kAccentRed = 0x19;
+inline constexpr int kAccentGreen = 0xB7;
+inline constexpr int kAccentBlue = 0xA5;
 
 } // namespace aln
