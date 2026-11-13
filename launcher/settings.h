@@ -35,8 +35,8 @@ inline constexpr char kNativeResolution[] = "native";
 inline constexpr char kAspectRatioKey[] = "aspect_ratio";
 inline constexpr char kDefaultAspectRatio[] = "16:9";
 inline constexpr char kGraphicsCardKey[] = "graphics_card";
-// Which renderer runs the game (gpu/shim/aln_renderer.h, the same keys); read when the game starts.
-inline constexpr char kRendererKey[] = "renderer";
+// Written by earlier versions; ignored, and removed from the file on the next save.
+inline constexpr char kObsoleteRendererKey[] = "renderer";
 inline constexpr char kAntiAliasingKey[] = "smaa";
 inline constexpr char kAnisotropyKey[] = "anisotropy";
 // How often frames reach the window (30, 60, 90, 120, 144, 165, 240; 0 is Unlimited). Presentation only: the game keeps
@@ -74,21 +74,6 @@ inline constexpr PresentationChoice kPresentationChoices[] = {
     {"stretch", "Stretch"},
 };
 inline constexpr char kDefaultPresentation[] = "letterbox";
-
-struct RendererChoice {
-    std::string_view key;
-    std::string_view name;
-};
-
-inline constexpr RendererChoice kRendererChoices[] = {
-    {"auto", "Auto"},
-    {"vulkan", "Vulkan"},
-    {"opengl", "OpenGL (experimental)"},
-#ifdef _WIN32
-    {"d3d11", "Direct3D 11 (experimental)"},
-#endif
-};
-inline constexpr char kDefaultRenderer[] = "vulkan";
 
 using Values = std::map<std::string, std::string, std::less<>>;
 

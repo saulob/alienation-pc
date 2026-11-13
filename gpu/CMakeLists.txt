@@ -124,6 +124,11 @@ target_include_directories(alngpu PRIVATE shim shadps4 ../src ${SHADER_INCLUDE} 
     third_party/half/include third_party/imgui third_party/imgui/backends third_party/xbyak)
 target_compile_definitions(alngpu PRIVATE BOOST_ASIO_STANDALONE NDEBUG IMGUI_IMPL_VULKAN_NO_PROTOTYPES
     ALN_FONT_PATH="${CMAKE_CURRENT_SOURCE_DIR}/third_party/fonts/DejaVuSans.ttf")
+# Development only: lets ALN_DEV_RENDERER=opengl|d3d11 pick a backend that releases never offer.
+option(ALN_DEV_RENDERERS "Allow the ALN_DEV_RENDERER override of the OpenGL and Direct3D 11 backends" OFF)
+if(ALN_DEV_RENDERERS)
+    target_compile_definitions(alngpu PRIVATE ALN_DEV_RENDERERS)
+endif()
 # The real <GLES3/gl3.h> is not a build dependency: this folder gives imgui's ES3 backend the same names.
 set_source_files_properties(shim/imgui_impl_gles3.cpp PROPERTIES
     INCLUDE_DIRECTORIES ${CMAKE_CURRENT_SOURCE_DIR}/shim/gles3_shim)

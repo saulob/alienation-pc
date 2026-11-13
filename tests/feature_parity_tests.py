@@ -288,7 +288,7 @@ WINDOWS_ONLY_SUITES = {
 }
 LINUX_ONLY_SUITES = ('aln-runtime-tests', 'aln-sigpipe-tests')
 # Linux has no Windows API for these; everything else must be offered on Linux too.
-LINUX_UNAVAILABLE = ('Direct3D 11 renderer (experimental)', 'Allow overlay programs')
+LINUX_UNAVAILABLE = ('Allow overlay programs',)
 
 
 def windows_suites():
@@ -323,10 +323,11 @@ def check_platforms():
     check(parity.platform_builds('Local co-op') == ['CUSA00062-1.06', 'DUPLEX'],
           'Local co-op is offered where the game has none')
 
-    settings = read('launcher/settings.h')
-    check(re.search(r'#ifdef _WIN32\s*\n\s*\{"d3d11", ', settings) is not None and settings.count('"d3d11"') == 1,
-          'Direct3D 11 is offered outside Windows')
-    check(re.search(r'\{"opengl", ', settings) and re.search(r'\{"vulkan", ', settings), 'a renderer is missing')
+    renderers = [feature for feature in parity.PLATFORM_FEATURES if 'renderer' in feature.lower()]
+    check(renderers == ['Vulkan renderer'], f'Vulkan must be the only released renderer, the table lists {renderers}')
+    check(not re.search(r'opengl|direct3d|d3d11', ' '.join(parity.PLATFORM_FEATURES) + ' ' +
+                        ' '.join(entry[4] for entry in parity.PLATFORM_FEATURES.values()), re.I),
+          'the platform table advertises OpenGL or Direct3D 11')
     process = read('launcher/game_process.h')
     check(re.search(r'#ifdef _WIN32\s*\n(?:.*\n)*?inline constexpr bool kSeparateGameProcessAvailable = true;\s*\n#else\s*\n'
                     r'inline constexpr bool kSeparateGameProcessAvailable = false;', process) is not None,
@@ -336,10 +337,8 @@ def check_platforms():
     shown = ['Unlimited' if mode.strip() == '0' else mode.strip() for mode in modes.split(',')]
     check(named == f'Frame rate ({", ".join(shown)})', f'the Frame rate modes are {shown}, the table says {named}')
     check(f'for (const int fps : {{{modes}}})' in read('launcher/launcher.cpp'), 'the launcher offers other Frame rates')
-    check('CanRepeatFrames() const override { return true; }' in read('gpu/shadps4/video_core/renderer_vulkan/vk_presenter.h')
-          and 'CanRepeatFrames() const override { return false; }' in
-          read('gpu/shadps4/video_core/renderer_opengl/gl_presenter.h'),
-          'the Frame rate note no longer matches which presenters repeat frames')
+    check('CanRepeatFrames() const override { return true; }' in read('gpu/shadps4/video_core/renderer_vulkan/vk_presenter.h'),
+          'the Vulkan presenter no longer repeats frames')
     present = read('gpu/shim/aln_present.h')
     check('GAMESCOPE_WAYLAND_DISPLAY' in present and 'return !windows && gamescope_wayland_display' in present,
           'Gamescope detection changed')

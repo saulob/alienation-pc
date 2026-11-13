@@ -37,7 +37,6 @@ constexpr ManagedSetting kBaseSettings[] = {
     {kRenderResolutionKey, kNativeResolution},
     {kAspectRatioKey, kDefaultAspectRatio},
     {kGraphicsCardKey, ""},
-    {kRendererKey, kDefaultRenderer},
     {kAntiAliasingKey, "0"},
     {kAnisotropyKey, "0"},
     {kFrameRateKey, "60"},
@@ -70,6 +69,29 @@ constexpr std::string_view kPlacementKeys[] = {kLauncherXKey,         kLauncherY
 constexpr char kFileHeader[] =
     "# Alienation user settings (written by the launcher; F11 saves the display mode).\n"
     "# Remove a line to use the default.\n";
+
+void RemoveObsoleteSettings(const std::filesystem::path& file) {
+    std::vector<std::string> lines;
+    bool found = false;
+    {
+        std::ifstream in(file, std::ios::binary);
+        for (std::string line; std::getline(in, line);) {
+            std::string key, value;
+            if (trg::ParseSettingLine(line, false, key, value) && key == kObsoleteRendererKey) {
+                found = true;
+                continue;
+            }
+            lines.push_back(std::move(line));
+        }
+    }
+    if (!found) {
+        return;
+    }
+    std::ofstream out(file, std::ios::binary | std::ios::trunc);
+    for (const std::string& line : lines) {
+        out << line << '\n';
+    }
+}
 
 } // namespace
 
@@ -110,10 +132,6 @@ bool IsValidSetting(std::string_view key, std::string_view value) {
     if (key == kPresentationKey) {
         return std::any_of(std::begin(kPresentationChoices), std::end(kPresentationChoices),
                            [&](const PresentationChoice& choice) { return value == choice.key; });
-    }
-    if (key == kRendererKey) {
-        return std::any_of(std::begin(kRendererChoices), std::end(kRendererChoices),
-                           [&](const RendererChoice& choice) { return value == choice.key; });
     }
     if (key == kRenderResolutionKey) {
         return std::any_of(std::begin(aln_resolutions), std::end(aln_resolutions),
@@ -207,6 +225,7 @@ bool LauncherSettings::WriteFile(const Values& changes) {
     if (!std::filesystem::exists(file_, ec)) {
         std::ofstream(file_) << kFileHeader;
     }
+    RemoveObsoleteSettings(file_);
     trg::TextFileSettings file(Utf8(file_));
     for (const auto& [key, value] : changes) {
         file.Set(key, value);

@@ -17,11 +17,11 @@ debug information is split off), stages the allowlisted files into `dist\Alienat
 extracts the ZIP into a temporary folder and checks it again.
 
 The ZIP holds one folder, `AlienationPC-v<version>-windows-x64`, with `alienation.exe`, `trg-updater.exe`, the DLLs they
-load (SDL3, the LGPL FFmpeg, the pinned ANGLE files and the MSYS2 libraries listed in
+load (SDL3, the LGPL FFmpeg and the MSYS2 libraries listed in
 `licenses\MSYS2-PACKAGES.txt`), `README.txt`, `LICENSE.txt`, `licenses\` and `assets\launcher\header-art.png` and
 `sponsor-heart.png`. Nothing else: no game files, PS4 packages, `eboot.bin`, `user`, `user_data`, saves, profiles, logs,
 caches, dumps, symbols, RenderDoc or Vulkan layers, updater workspaces or `trg-updater.log`, developer paths or
-`DEBUG_SAULO` text. The checker also refuses a DLL that nothing imports, a stale ANGLE file, an `alienation.exe` whose
+`DEBUG_SAULO` text. The checker also refuses a DLL that nothing imports, ANGLE (`libEGL.dll`, `libGLESv2.dll`: nothing in the release loads them), an `alienation.exe` whose
 version differs from the folder name, and a `trg-updater.exe` that imports anything but Windows.
 
 `trg-updater.exe` is built by the same MSYS2 CLANG64 CMake build as the game, linked `-static`: its only imports are

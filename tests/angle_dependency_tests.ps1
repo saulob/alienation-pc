@@ -170,7 +170,7 @@ function Test-Staging {
     Check ((Get-Content -LiteralPath $target -Raw) -eq 'two') 'a changed one is'
 }
 
-# The real package.ps1 gate over a folder with no ANGLE in it, then one with a stale copy.
+# The real package.ps1 gate: the release ships no ANGLE, and refuses any that is put in.
 function Test-PackageGate {
     $shell = (Get-Process -Id $PID).Path
     $folder = Join-Path $work 'release'
@@ -178,17 +178,19 @@ function Test-PackageGate {
     $script = Join-Path $root 'tools\package.ps1'
     $ErrorActionPreference = 'Continue'
     $output = (& $shell -NoProfile -ExecutionPolicy Bypass -File $script -VerifyOnly $folder 2>&1 | Out-String)
-    Check ($LASTEXITCODE -ne 0) 'a release folder without ANGLE fails'
-    foreach ($text in 'missing DLL: libEGL.dll', 'missing DLL: libGLESv2.dll', 'missing DLL: libc\+\+.dll', 'missing DLL: zlib1.dll',
-                      'missing: licenses\\angleproject\\LICENSE', 'missing licence: licenses\\spirv-tools',
-                      'missing licence: licenses\\vulkan-loader', 'missing licence: licenses\\VulkanMemoryAllocator', 'missing licence: licenses\\xxhash') {
+    Check ($output -notmatch 'libEGL.dll|libGLESv2.dll|angleproject') 'an empty release folder is not asked for ANGLE'
+    foreach ($text in 'missing licence: licenses\\VulkanMemoryAllocator', 'missing licence: licenses\\xxhash') {
         Check ($output -match $text) "the package gate reports $text"
     }
-    # A real DLL under each name: only its hash is wrong.
     foreach ($name in 'libEGL.dll', 'libGLESv2.dll') { Copy-Item -LiteralPath (Join-Path $tc.Bin 'zlib1.dll') (Join-Path $folder $name) }
     $output = (& $shell -NoProfile -ExecutionPolicy Bypass -File $script -VerifyOnly $folder 2>&1 | Out-String)
     $ErrorActionPreference = 'Stop'
-    Check ($output -match 'stale ANGLE file: libGLESv2.dll') 'the package gate rejects a stale ANGLE'
+    Check ($LASTEXITCODE -ne 0) 'a release folder holding ANGLE fails'
+    Check ($output -match 'forbidden file type: libGLESv2.dll') 'the package gate rejects an ANGLE DLL'
+    $package = Read-Source 'tools/package.ps1'
+    Check ($package -notmatch 'Sync-AngleRuntime|Get-AngleDlls|angleproject') 'package.ps1 stages no ANGLE'
+    $checker = Read-Source 'tools/check-release-folder.ps1'
+    Check ($checker -notmatch 'Read-AnglePin|Get-AngleDlls') 'the release checker expects no ANGLE'
 }
 
 function Test-Boundaries {
@@ -198,7 +200,6 @@ function Test-Boundaries {
     Check ($build -match 'Sync-AngleRuntime \$tc\.Bin') 'the normal build prepares ANGLE'
     Check ($build.IndexOf('Sync-AngleRuntime') -lt $build.IndexOf("Write-Step 'Building'")) 'before it builds'
     Check ($build -match 'Install-GameRuntime \$loader \$angleRuntime \$tc\.Bin') 'and stages it beside the game'
-    Check ($package -match 'Sync-AngleRuntime \$bin') 'the package takes the same verified files'
     Check ($common -notmatch 'angleproject\}') 'ANGLE is not a toolchain package'
     Check ($package -notmatch '\$DllPackages = [^)]*angleproject') 'and pacman does not have to own it'
     foreach ($source in 'tools/build.ps1', 'tools/setup.ps1', 'tools/package.ps1') {

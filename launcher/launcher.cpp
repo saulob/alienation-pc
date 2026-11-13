@@ -117,16 +117,6 @@ constexpr char kWindowSizeHelp[] =
 constexpr char kGraphicsCardHelp[] =
     "Selects which graphics card renders the game. If the selected card is no longer available, the first available "
     "card is used.";
-#ifdef _WIN32
-constexpr char kRendererHelp[] =
-    "Vulkan is the supported renderer. OpenGL and Direct3D 11 are experimental and render only part of the game's "
-    "features. Direct3D 11 is intended mainly for Windows systems where Vulkan or OpenGL has problems. Auto uses Vulkan, "
-    "and OpenGL when this system cannot run Vulkan. It takes effect the next time the game starts.";
-#else
-constexpr char kRendererHelp[] =
-    "Vulkan is the supported renderer. OpenGL is experimental and renders only part of the game's features. Auto uses "
-    "Vulkan, and OpenGL when this system cannot run Vulkan. It takes effect the next time the game starts.";
-#endif
 constexpr char kMonitorHelp[] = "The display the game opens on.";
 constexpr char kVSyncHelp[] = "On prevents tearing. Off allows it, for the lowest latency and G-Sync/FreeSync.";
 constexpr char kPresentationHelp[] =
@@ -911,11 +901,6 @@ private:
             const int height = settings_.GetInt(kWindowHeightKey, kDefaultWindowHeight);
             settings_.SetInt(kWindowWidthKey, WindowSizeOf(height, SavedAspectRatio()).width);
         }
-        std::vector<trg::Option> renderers;
-        for (const RendererChoice& choice : kRendererChoices) {
-            renderers.push_back({std::string(choice.key), std::string(choice.name)});
-        }
-        ui.Combo("Renderer", kRendererHelp, kRendererKey, kDefaultRenderer, renderers);
         ui.Row("Graphics card", kGraphicsCardHelp);
         GraphicsCardCombo();
         ui.Toggle("VSync", kVSyncHelp, kVSyncKey, true, "Off", "On");

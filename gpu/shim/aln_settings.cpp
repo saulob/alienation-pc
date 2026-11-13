@@ -3,7 +3,6 @@
 #include "aln_frame_pacing.h"
 #include "aln_graphics.h"
 #include "aln_keys.h"
-#include "aln_renderer.h"
 
 #include <algorithm>
 #include <climits>
@@ -73,8 +72,6 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.smaa = ParseBool(value, v.smaa);
     } else if (key == "graphics_card") {
         v.graphics_card = value == "automatic" ? std::string() : value;
-    } else if (key == "renderer") {
-        v.renderer = AlnRenderer::ParseChoice(value);
     } else if (key == "render_resolution") {
         v.render_resolution = AlnGraphics::ParseRenderResolution(value);
     } else if (key == "aspect_ratio") {
@@ -120,6 +117,10 @@ bool WriteEntries(const Entries& entries) {
         lines.assign(std::begin(FileHeader), std::end(FileHeader));
     }
     std::vector<bool> written(entries.size(), false);
+    std::erase_if(lines, [](const std::string& line) {
+        std::string key, value;
+        return ParseLine(line, key, value) && key == "renderer";
+    });
     for (std::string& line : lines) {
         std::string key, value;
         if (!ParseLine(line, key, value)) {

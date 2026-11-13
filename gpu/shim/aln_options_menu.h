@@ -17,7 +17,6 @@
 #include "aln_frame_pacing.h"
 #include "aln_graphics.h"
 #include "aln_menu_input.h"
-#include "aln_renderer.h"
 #include "aln_settings.h"
 
 namespace AlnOptions {
@@ -72,7 +71,7 @@ constexpr const char* PageNote(Page page) {
     case Page::Display:
         return "Window size, Monitor and Graphics card are launcher-only: change them before pressing Play.";
     case Page::Graphics:
-        return "Renderer, render resolution and texture filtering apply after a restart.";
+        return "Render resolution and texture filtering apply after a restart.";
     case Page::Gameplay:
         return "";
     case Page::Controls:
@@ -95,22 +94,6 @@ struct Choice {
 
 inline constexpr Choice kOffOn[] = {{"0", "Off"}, {"1", "On"}};
 inline constexpr Choice kHiddenShown[] = {{"0", "Hidden"}, {"1", "Shown"}};
-inline constexpr Choice kRenderers[] = {
-    {"auto", "Auto"},
-    {"vulkan", "Vulkan"},
-    {"opengl", "OpenGL (experimental)"},
-#ifdef _WIN32
-    {"d3d11", "Direct3D 11 (experimental)"},
-#endif
-};
-#ifdef _WIN32
-inline constexpr char kRendererHelp[] =
-    "Vulkan is the supported renderer. OpenGL and Direct3D 11 are experimental. Direct3D 11 is intended mainly for "
-    "Windows systems where Vulkan or OpenGL has problems. Auto uses OpenGL only when Vulkan cannot run.";
-#else
-inline constexpr char kRendererHelp[] =
-    "Vulkan is the supported renderer. OpenGL is experimental. Auto uses OpenGL only when Vulkan cannot run.";
-#endif
 inline constexpr Choice kRenderResolutions[] = {{"native", "Native"}, {"480p", "480p"},   {"720p", "720p"},
                                                 {"1440p", "1440p"},           {"1800p", "1800p"}, {"4K", "4K"}};
 inline constexpr Choice kAspectRatios[] = {{"16:9", "16:9 Original"},
@@ -136,7 +119,6 @@ enum class Id {
     DisplayMode,
     VSync,
     AspectRatio,
-    Renderer,
     RenderResolution,
     Presentation,
     Upscaling,
@@ -170,9 +152,6 @@ inline constexpr Setting kSettings[] = {
     {Id::AspectRatio, Page::Display, "aspect_ratio", "Aspect Ratio",
      "The shape the game renders in. The saved window width follows it.", Apply::Restart,
      kAspectRatios, AlnSettings::RenderResolution},
-    {Id::Renderer, Page::Graphics, "renderer", "Renderer",
-     kRendererHelp,
-     Apply::Restart, kRenderers},
     {Id::RenderResolution, Page::Graphics, "render_resolution", "Render resolution",
      "The resolution the game renders at. It is separate from the window size: the picture is scaled to the window. "
      "1440p and above need a powerful graphics card.",
@@ -235,8 +214,6 @@ inline std::string Current(const AlnSettings::Values& v, Id id) {
                                                                           int(AlnGraphics::DisplayModeCount) - 1))]);
     case Id::VSync: return flag(v.vsync);
     case Id::AspectRatio: return std::string(AlnGraphics::ParseAspectRatio(v.aspect_ratio).key);
-    case Id::Renderer:
-        return std::string(AlnRenderer::ChoiceKeys[size_t(std::clamp(v.renderer.load(), 0, int(AlnRenderer::ChoiceCount) - 1))]);
     case Id::RenderResolution: return std::string(AlnGraphics::ParseRenderResolution(v.render_resolution));
     case Id::Presentation:
         return std::string(AlnGraphics::PresentationKeys[size_t(std::clamp(v.presentation.load(), 0,
@@ -276,7 +253,6 @@ inline void ApplyLive(AlnSettings::Values& v, Id id, std::string_view value) {
     case Id::ResolutionInTitle: v.show_resolution_title = on; break;
     case Id::FrameCounter: v.show_fps = on; break;
     case Id::AspectRatio:
-    case Id::Renderer:
     case Id::RenderResolution:
     case Id::TextureFiltering:
     case Id::SkipIntro: break;

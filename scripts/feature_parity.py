@@ -179,8 +179,7 @@ PLATFORMS = (WINDOWS, LINUX, DECK)
 EQUIVALENT = 'EQUIVALENT'
 ALL_BUILDS = 'all'
 _S, _E, _U = SUPPORTED, EQUIVALENT, UNAVAILABLE
-_REPEATS = ('above 60 the latest game frame is shown again on Vulkan (the game still runs at 60); OpenGL and '
-            'Direct3D 11 show only the game\'s own frames')
+_REPEATS = 'above 60 the latest game frame is shown again (the game still runs at 60)'
 _GAMESCOPE = 'Gamescope paces presentation itself: rates above the display\'s refresh may not show'
 
 # feature: (Windows, Linux, Steam Deck, builds, note). builds is ALL_BUILDS or the build feature whose SUPPORTED
@@ -206,16 +205,13 @@ PLATFORM_FEATURES = {
     'Local co-op': (_S, _S, _S, 'Local co-op', 'one to four controllers; only where the game has it'),
     'Frame rate (30, 60, 90, 120, 144, 165, 240, Unlimited)': (_S, _S, _S, 'Frame rate', _REPEATS + '; ' + _GAMESCOPE),
     'Frame counter, frame rate and render resolution in the title': (_S, _S, _S, ALL_BUILDS, 'the same overlay code'),
-    'Vulkan renderer': (_S, _S, _S, ALL_BUILDS, 'the supported renderer'),
-    'OpenGL renderer (experimental)': (_S, _S, _S, ALL_BUILDS, 'renders part of the game\'s features'),
-    'Direct3D 11 renderer (experimental)':
-        (_S, _U, _U, ALL_BUILDS, 'Direct3D is a Windows API: ANGLE\'s Direct3D 11 back end exists only there'),
+    'Vulkan renderer': (_S, _S, _S, ALL_BUILDS, 'the only released renderer: v0.1.0 requires Vulkan, with no renderer setting'),
     'Render resolution': (_S, _S, _S, 'Render Resolution', 'the same guest patch'),
     'Aspect ratio': (_S, _S, _S, 'Aspect Ratio', 'the same guest patch'),
     'True Ultrawide': (_S, _S, _S, 'True Ultrawide', 'mission map markers may be misplaced (known issue)'),
     'SMAA': (_S, _S, _S, 'SMAA', 'Vulkan post-processing'),
     'FSR 1 and RCAS': (_S, _S, _S, 'FSR', 'Vulkan post-processing'),
-    'Texture filtering': (_S, _S, _S, 'Texture filtering', 'the same renderer setting'),
+    'Texture filtering': (_S, _S, _S, 'Texture filtering', 'the same Vulkan sampler setting'),
     'VSync': (_S, _S, _E, ALL_BUILDS, _GAMESCOPE),
     'Display mode, monitor and graphics card': (_S, _S, _E, ALL_BUILDS, 'Gamescope owns the Steam Deck\'s output and '
                                                 'shows the game full screen'),

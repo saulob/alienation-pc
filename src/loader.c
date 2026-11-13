@@ -167,12 +167,9 @@ static int cpu_usable(char *cause, size_t cause_size, char *advice, size_t advic
     snprintf(advice,advice_size,"The game needs an Intel Core 4th generation (Haswell), AMD FX or newer processor.");
     return 0;
 }
-#ifndef _WIN32
-static const char *renderer_settings_file;
 static int system_usable(char *cause, size_t cause_size, char *advice, size_t advice_size) {
-    return cpu_usable(cause,cause_size,advice,advice_size) && aln_check_renderer(renderer_settings_file,cause,cause_size,advice,advice_size);
+    return cpu_usable(cause,cause_size,advice,advice_size) && aln_check_vulkan(cause,cause_size,advice,advice_size);
 }
-#endif
 #ifdef _WIN32
 static int annotate_address(char *out, size_t size, uintptr_t address) {
     if (image && address-(uintptr_t)image<0x20000000) { snprintf(out,size,"guest offset 0x%" PRIxPTR,address-(uintptr_t)image); return 1; }
@@ -587,13 +584,10 @@ int main(int argc, char **argv) {
 #endif
     } else log_cpu();
     if (!cpu_only && !check_imports && !game_child) {
-        AlnGraphicsCheck check_graphics=cpu_usable;
+        AlnGraphicsCheck check_graphics=system_usable;
         int game_process=0;
 #ifdef _WIN32
         game_process=1;
-#else
-        renderer_settings_file=settings_file;
-        check_graphics=system_usable;
 #endif
         AlnLauncherConfig launcher={app0,paths.image_dir,user_dir,settings_file,log_folder,skip_launcher,force_launcher,check_graphics,
                                     game_process,log_started ? log_path : NULL};

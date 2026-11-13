@@ -77,28 +77,12 @@ $BuiltInLicenses = [ordered]@{
     'nanosvg'       = 'launcher\third_party\nanosvg\LICENSE.txt'
     'xbyak'         = 'gpu\third_party\xbyak\COPYRIGHT'
 }
-# MSYS2 packages compiled in as headers or static libraries; spirv-tools and vulkan-loader only for their licences:
-# ANGLE's libGLESv2.dll links its own copies.
-$StaticPackages = @('fmt', 'boost', 'robin-map', 'vulkan-memory-allocator', 'vulkan-headers', 'compiler-rt',
-    'spirv-tools', 'vulkan-loader')
+# MSYS2 packages compiled in as headers or static libraries.
+$StaticPackages = @('fmt', 'boost', 'robin-map', 'vulkan-memory-allocator', 'vulkan-headers', 'compiler-rt')
 # The packages whose DLLs may ship, each listed in packaging\licenses\THIRD-PARTY-LICENSES.txt. A DLL from any other
 # package stops the packaging until its licence has been reviewed and added there.
 $DllPackages = @('sdl3', 'freetype', 'libpng', 'zydis', 'xxhash', 'libc++', 'libwinpthread', 'zlib', 'bzip2',
     'harfbuzz', 'brotli', 'graphite2', 'pcre2', 'glib2', 'gettext-runtime', 'libiconv')
-# ANGLE's own files come from gpu\angle-runtime.txt: SDL loads them by name, so no import table leads to them.
-$AnglePin = Read-AnglePin
-$AngleLicence = 'licenses\angleproject\LICENSE'
-
-# Adds what ANGLE's DLLs in $AngleDir load from $Dir.
-function Add-AngleDlls($Found, [string]$AngleDir, [string]$Dir) {
-    foreach ($file in Get-AngleDlls $AnglePin) {
-        $path = Join-Path $AngleDir $file.Name
-        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
-        $closure = Get-DllClosure $path $Dir $objdump
-        foreach ($dllName in $closure.Keys) { if (-not $Found.Contains($dllName)) { $Found[$dllName] = $closure[$dllName] } }
-    }
-}
-
 function Get-PackageInfo([string]$Short) {
     $name = $packagePrefix + $Short
     $query = & $pacman -Q $name 2>$null
@@ -167,11 +151,9 @@ if ($LASTEXITCODE -ne 0) { Stop-Tool 'llvm-objcopy --only-keep-debug failed on t
 if ($LASTEXITCODE -ne 0) { Stop-Tool 'llvm-objcopy --strip-debug failed on trg-updater.exe' }
 
 Write-Step 'Staging the DLLs it loads'
-$angleRuntime = Sync-AngleRuntime $bin
 $dlls = Get-DllClosure $loader $dllDirs $objdump
 $updaterDlls = Get-DllClosure $updater $dllDirs $objdump
 foreach ($dllName in $updaterDlls.Keys) { if (-not $dlls.Contains($dllName)) { $dlls[$dllName] = $updaterDlls[$dllName] } }
-Add-AngleDlls $dlls $angleRuntime $bin
 $owners = [ordered]@{}
 $ffmpegDlls = @()
 foreach ($dll in $dlls.Values) {
@@ -191,7 +173,6 @@ foreach ($dll in $dlls.Values) {
     $owners[$short] += Split-Path $dll -Leaf
     Copy-Item -LiteralPath $dll $stage
 }
-foreach ($file in Get-AngleDlls $AnglePin) { Copy-Item -LiteralPath (Join-Path $angleRuntime $file.Name) $stage }
 
 Write-Step 'Staging the licences'
 Copy-Item -LiteralPath (Join-Path $root 'LICENSE') (Join-Path $stage 'LICENSE.txt')
@@ -219,13 +200,6 @@ foreach ($short in @($owners.Keys) + $StaticPackages) {
     $manifest.Add("  Licence: $($info.License)")
     $manifest.Add("  Source:  $($info.Source)")
 }
-New-Item -ItemType Directory -Force (Split-Path (Join-Path $stage $AngleLicence) -Parent) | Out-Null
-Copy-Item -LiteralPath (Join-Path $angleRuntime 'LICENSE') (Join-Path $stage $AngleLicence)
-$manifest.Add('')
-$manifest.Add("angleproject $($AnglePin.version) ($((Get-AngleDlls $AnglePin | ForEach-Object { $_.Name }) -join ', '))")
-$manifest.Add('  Licence: BSD-3-Clause')
-$manifest.Add("  Source:  https://repo.msys2.org/mingw/sources/mingw-w64-angleproject-$($AnglePin.version).src.tar.zst")
-$manifest.Add("  Upstream revision: $($AnglePin.revision)")
 if ($ffmpegDlls.Count -eq 0) { Stop-Tool 'alienation.exe loads no FFmpeg DLL from the gpu\ffmpeg.txt build' }
 foreach ($text in 'LICENSE.md', 'COPYING.LGPLv2.1', 'BUILD.txt') {
     $source = Join-Path $ffmpegLicences $text

@@ -157,14 +157,24 @@ def check_packagers():
     third = read('packaging/licenses/THIRD-PARTY-LICENSES.txt')
     for component in ('shadPS4', 'AnyPS5', 'sirit', 'SPIRV-Headers', 'SMAA', 'FidelityFX', 'Dear ImGui', 'miniz',
                       'nanosvg', 'xbyak', 'TRG Launcher', 'SDL3', 'Zydis', 'xxHash', 'OpenSSL', 'FFmpeg', 'Noto Sans',
-                      'DejaVu', 'ANGLE', 'libstdc++'):
+                      'DejaVu', 'libstdc++'):
         check(component in third, f'THIRD-PARTY-LICENSES.txt does not list {component}')
+    check('ANGLE' not in third and 'Sync-AngleRuntime' not in windows and 'Get-AngleDlls' not in checker,
+          'the packages ship or credit ANGLE')
     check('RelWithDebInfo' in read('tools/build.ps1') and '--strip-debug' in windows and '--strip-debug' in linux,
           'the packages do not strip the debug information of the tested build')
     for script in ('tools/package.ps1', 'tools/package-release.ps1', 'tools/package-linux.sh', 'tools/package-release-linux.sh'):
         text = read(script)
         check(not re.search(r'build\.sh[^\n]*\s--run\b', text) and not re.search(r'build\.ps1[^\n]*\s-Run\b', text) and
               "@{ Run = $true }" not in text, f'{script} starts the game')
+
+
+def check_renderer_policy():
+    for document in ('README.md', 'docs/LINUX.md', 'docs/releases/v0.1.0.md', 'docs/release.md', 'packaging/README.txt'):
+        text = read(document)
+        check(not re.search(r'OpenGL|Direct3D|D3D11|ANGLE', text) or document == 'docs/release.md' and
+              not re.search(r'OpenGL|Direct3D|D3D11', text), f'{document} advertises another renderer than Vulkan')
+    check('requires Vulkan' in read('docs/releases/v0.1.0.md'), 'the release notes do not state that Vulkan is required')
 
 
 def check_update_infrastructure():
@@ -249,6 +259,7 @@ def main():
     check_updater(current)
     check_desktop_and_metainfo(current)
     check_packagers()
+    check_renderer_policy()
     check_update_infrastructure()
     check_ffmpeg()
     check_release_notes(current)

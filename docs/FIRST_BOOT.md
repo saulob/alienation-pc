@@ -129,7 +129,7 @@ shows every second flip (a game already flipping every second vblank is shown wh
 the last frame again on the slots of the target rate that fall before the next vblank (`gpu/shim/aln_frame_pacing.h`):
 the game still makes 60 new frames a second, so there is no interpolation and motion is as smooth as at 60. VSync bounds
 the repeats to the display's refresh (a display at 60 Hz has nothing to repeat), Unlimited repeats up to 480 a second,
-and the OpenGL and Direct3D 11 renderers never repeat (they present on the GPU command thread). It applies at start and
+and it applies at start and
 when changed in the Options menu. The log line is
 `VideoOut: vblank 60 Hz, frame rate 144, repeat cadence 144 FPS, VSync on, display 144.00 Hz`.
 

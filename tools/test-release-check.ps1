@@ -13,8 +13,8 @@ Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
 
 $RootLeaves = 'alienation.exe', 'trg-updater.exe', 'README.txt', 'LICENSE.txt'
 $AssetLeaves = 'header-art.png', 'sponsor-heart.png'
-$LicenseLeaves = 'THIRD-PARTY-LICENSES.txt', 'MSYS2-PACKAGES.txt', 'NotoSansTC\LICENSE-NotoSansTC.txt', 'angleproject\LICENSE',
-    'spirv-tools\LICENSE', 'vulkan-loader\LICENSE', 'VulkanMemoryAllocator\LICENSE', 'xxhash\LICENSE'
+$LicenseLeaves = 'THIRD-PARTY-LICENSES.txt', 'MSYS2-PACKAGES.txt', 'NotoSansTC\LICENSE-NotoSansTC.txt',
+    'VulkanMemoryAllocator\LICENSE', 'xxhash\LICENSE'
 
 # Each case adds one item to a clean release: a relative path, or path plus content.
 $Cases = [ordered]@{
@@ -75,7 +75,9 @@ $Cases = [ordered]@{
     'missing sponsor heart' = @{ Path = 'assets\launcher\sponsor-heart.png'; Delete = $true }
     'missing third party'   = @{ Path = 'licenses\THIRD-PARTY-LICENSES.txt'; Delete = $true }
     'missing packages'      = @{ Path = 'licenses\MSYS2-PACKAGES.txt'; Delete = $true }
-    'missing angle licence' = @{ Path = 'licenses\angleproject\LICENSE'; Delete = $true }
+    'ANGLE egl library'     = @{ Path = 'libEGL.dll' }
+    'ANGLE gles library'    = @{ Path = 'libGLESv2.dll' }
+    'ANGLE licence'         = @{ Path = 'licenses\angleproject\LICENSE' }
     'missing linked licence' = @{ Path = 'licenses\xxhash\LICENSE'; Delete = $true }
     'ps4 package magic'     = @{ Path = 'alienation.exe'; Bytes = [byte[]](0x7F, 0x43, 0x4E, 0x54, 0, 0) }
     'ps4 self magic'        = @{ Path = 'trg-updater.exe'; Bytes = [byte[]](0x4F, 0x15, 0x3D, 0x1D, 0, 0) }

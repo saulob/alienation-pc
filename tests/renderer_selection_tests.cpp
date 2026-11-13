@@ -1,7 +1,8 @@
-// Renderer selection tests: the Renderer setting, Auto's fallback and the OpenGL requirements. Pure logic plus the
-// sources that must agree with it: no window, no OpenGL or Vulkan context, no game files.
+// Renderer policy tests: Vulkan is the only renderer a release runs, nothing offers another, and the OpenGL backend's
+// requirements. Pure logic plus the sources that must agree with it: no window, no OpenGL or Vulkan context, no game files.
 #include <cstdio>
 #include <fstream>
+#include <initializer_list>
 #include <sstream>
 #include <string>
 
@@ -30,66 +31,112 @@ std::string ReadAll(const std::string& relative) {
     return text.str();
 }
 
-void TestParse() {
+void TestSelectionIsVulkan() {
     using namespace AlnRenderer;
-    CHECK(ParseChoice("vulkan") == Vulkan);
-    CHECK(ParseChoice("auto") == Auto);
-    CHECK(ParseChoice("opengl") == AlnRenderer::OpenGL);
-    CHECK(ParseChoice("") == Vulkan);
-    CHECK(ParseChoice("OpenGL") == Vulkan);
-    CHECK(ParseChoice("direct3d") == Vulkan);
-}
-
-void TestResolve() {
-    using namespace AlnRenderer;
-    CHECK(Resolve(Vulkan, true, "").backend == Backend::Vulkan);
-    CHECK(Resolve(AlnRenderer::OpenGL, true, "").backend == Backend::OpenGL);
-    CHECK(Resolve(AlnRenderer::OpenGL, true, "").fallback_reason.empty());
-    CHECK(Resolve(Auto, true, "").backend == Backend::Vulkan);
-    CHECK(Resolve(Auto, true, "").fallback_reason.empty());
-
-    const auto fallback = Resolve(Auto, false, "No Vulkan graphics driver was found.");
-    CHECK(fallback.backend == Backend::OpenGL);
-    CHECK(fallback.fallback_reason == "No Vulkan graphics driver was found.");
-
-    // A renderer chosen by name is never replaced, working or not.
-    const auto explicit_vulkan = Resolve(Vulkan, false, "No Vulkan graphics driver was found.");
-    CHECK(explicit_vulkan.backend == Backend::Vulkan);
-    CHECK(explicit_vulkan.fallback_reason.empty());
-    CHECK(Resolve(AlnRenderer::OpenGL, false, "anything").backend == Backend::OpenGL);
-    CHECK(Resolve(AlnRenderer::OpenGL, false, "anything").fallback_reason.empty());
-}
-
-void TestDirect3D11() {
-    using namespace AlnRenderer;
-    CHECK(ParseChoice("d3d11", true) == Direct3D11);
-    CHECK(ParseChoice("d3d11", false) == Vulkan);
-    CHECK(ParseChoice("D3D11", true) == Vulkan);
-    CHECK(ParseChoice("direct3d11", true) == Vulkan);
-    CHECK(ChoiceKeys[Direct3D11] == "d3d11");
+    for (const char* request : {"", "auto", "vulkan", "opengl", "d3d11", "angle", "OpenGL", "direct3d11"}) {
+        CHECK(Select(request, false) == Backend::Vulkan);
+        CHECK(Select(request) == Select(request, DevRenderersBuilt));
+    }
+    CHECK(!DevRenderersBuilt);
+    CHECK(Active() == Backend::Vulkan);
+    CHECK(std::string(BackendName(Backend::Vulkan)) == "Vulkan");
     CHECK(std::string(BackendName(Backend::Direct3D11)) == "Direct3D 11 via ANGLE");
-
-    // Chosen by name it starts or fails as itself, and Auto keeps its one fallback.
-    const auto named = Resolve(Direct3D11, false, "No Vulkan graphics driver was found.");
-    CHECK(named.backend == Backend::Direct3D11);
-    CHECK(named.fallback_reason.empty());
-    CHECK(Resolve(Direct3D11, true, "").backend == Backend::Direct3D11);
-    CHECK(Resolve(Auto, false, "anything").backend == Backend::OpenGL);
-    CHECK(Resolve(Auto, true, "").backend == Backend::Vulkan);
 }
 
-void TestDirect3D11Windows() {
-    const std::string settings = ReadAll("launcher/settings.h");
-    const size_t entry = settings.find("{\"d3d11\", \"Direct3D 11 (experimental)\"}");
-    CHECK(entry != std::string::npos);
-    CHECK(settings.rfind("#ifdef _WIN32", entry) != std::string::npos);
-    CHECK(settings.find("#endif", entry) != std::string::npos);
-    const std::string menu = ReadAll("gpu/shim/aln_options_menu.h");
-    const size_t row = menu.find("{\"d3d11\", \"Direct3D 11 (experimental)\"}");
-    CHECK(row != std::string::npos);
-    CHECK(menu.rfind("#ifdef _WIN32", row) > menu.rfind("#endif", row) ||
-          menu.rfind("#endif", row) == std::string::npos);
+void TestDevelopmentBackends() {
+    using namespace AlnRenderer;
+    CHECK(Select("opengl", true) == Backend::OpenGL);
+    CHECK(Select("auto", true) == Backend::Vulkan);
+    CHECK(Select("angle", true) == Backend::Vulkan);
+    CHECK(Select("", true) == Backend::Vulkan);
+#ifdef _WIN32
+    CHECK(Select("d3d11", true) == Backend::Direct3D11);
+#else
+    CHECK(Select("d3d11", true) == Backend::Vulkan);
+#endif
 
+    const std::string header = ReadAll("gpu/shim/aln_renderer.h");
+    CHECK(header.find("#ifdef ALN_DEV_RENDERERS") != std::string::npos);
+    const std::string gpu = ReadAll("gpu/shim/alngpu.cpp");
+    CHECK(gpu.find("AlnRenderer::Select(request ? request : \"\")") != std::string::npos);
+    CHECK(gpu.find("aln_check_vulkan(cause") == std::string::npos);
+    const std::string cmake = ReadAll("gpu/CMakeLists.txt");
+    CHECK(cmake.find("option(ALN_DEV_RENDERERS") != std::string::npos);
+    for (const char* script : {"tools/build.ps1", "tools/build.sh", "tools/package.ps1", "tools/package-linux.sh"}) {
+        CHECK(ReadAll(script).find("ALN_DEV_RENDERER") == std::string::npos);
+    }
+}
+
+void TestNoFallback() {
+    const std::string loader = ReadAll("src/loader.c");
+    CHECK(loader.find("AlnGraphicsCheck check_graphics=system_usable;") != std::string::npos);
+    CHECK(loader.find("aln_check_vulkan(cause,cause_size,advice,advice_size)") != std::string::npos);
+    CHECK(loader.find("aln_check_renderer") == std::string::npos);
+    const std::string list = ReadAll("gpu/shim/aln_gpu_list.cpp");
+    CHECK(list.find("aln_check_renderer") == std::string::npos);
+    CHECK(list.find("OpenGL") == std::string::npos);
+    const std::string header = ReadAll("gpu/shim/aln_renderer.h");
+    CHECK(header.find("fallback") == std::string::npos);
+    CHECK(header.find("Resolve(") == std::string::npos);
+    CHECK(ReadAll("launcher/aln_launcher.h").find("aln_check_renderer") == std::string::npos);
+}
+
+void TestNoRendererSetting() {
+    const std::string settings = ReadAll("launcher/settings.h");
+    CHECK(settings.find("kRendererChoices") == std::string::npos);
+    CHECK(settings.find("kDefaultRenderer") == std::string::npos);
+    CHECK(settings.find("RendererChoice") == std::string::npos);
+    CHECK(settings.find("\"OpenGL") == std::string::npos);
+    CHECK(settings.find("\"Direct3D") == std::string::npos);
+    CHECK(settings.find("kObsoleteRendererKey[] = \"renderer\"") != std::string::npos);
+
+    const std::string launcher_settings = ReadAll("launcher/settings.cpp");
+    CHECK(launcher_settings.find("{kRendererKey") == std::string::npos);
+    CHECK(launcher_settings.find("{kObsoleteRendererKey") == std::string::npos);
+    CHECK(launcher_settings.find("RemoveObsoleteSettings(file_);") != std::string::npos);
+    CHECK(launcher_settings.find("key == kObsoleteRendererKey") != std::string::npos);
+
+    const std::string shim = ReadAll("gpu/shim/aln_settings.cpp");
+    CHECK(shim.find("key == \"renderer\" ") == std::string::npos);
+    CHECK(shim.find("v.renderer") == std::string::npos);
+    CHECK(shim.find("return ParseLine(line, key, value) && key == \"renderer\";") != std::string::npos);
+    CHECK(ReadAll("gpu/shim/aln_settings.h").find("std::atomic<int> renderer") == std::string::npos);
+}
+
+void TestLauncherHasNoRendererRow() {
+    const std::string launcher = ReadAll("launcher/launcher.cpp");
+    CHECK(launcher.find("\"Renderer\", kRendererHelp") == std::string::npos);
+    CHECK(launcher.find("kRendererHelp") == std::string::npos);
+    CHECK(launcher.find("kRendererKey") == std::string::npos);
+    CHECK(launcher.find("ui.Combo(\"Renderer\"") == std::string::npos);
+    const size_t page = launcher.find("void PageDisplay(trg::Ui& ui)");
+    const size_t end = launcher.find("const AlnAspectRatio& SavedAspectRatio()", page);
+    CHECK(page != std::string::npos && end != std::string::npos);
+    const std::string body = launcher.substr(page, end - page);
+    CHECK(body.find("Renderer") == std::string::npos);
+    CHECK(body.find("Vulkan") == std::string::npos);
+    const size_t aspect = body.find("kAspectRatioKey,");
+    const size_t card = body.find("ui.Row(\"Graphics card\"");
+    CHECK(aspect != std::string::npos && card != std::string::npos && aspect < card);
+    const std::string between = body.substr(aspect, card - aspect);
+    CHECK(between.find("ui.Combo") == std::string::npos);
+}
+
+void TestOptionsMenuHasNoRenderer() {
+    const std::string menu = ReadAll("gpu/shim/aln_options_menu.h");
+    CHECK(menu.find("Renderer") == std::string::npos);
+    CHECK(menu.find("renderer") == std::string::npos);
+    CHECK(menu.find("kRenderers") == std::string::npos);
+    CHECK(menu.find("OpenGL") == std::string::npos);
+    CHECK(menu.find("Direct3D") == std::string::npos);
+    CHECK(menu.find("ANGLE") == std::string::npos);
+    CHECK(menu.find("\"Auto\"") == std::string::npos);
+    const size_t graphics = menu.find("Page::Graphics, \"");
+    CHECK(graphics != std::string::npos);
+    CHECK(menu.find("Page::Graphics, \"render_resolution\", \"Render resolution\",", graphics) == graphics);
+}
+
+void TestDirect3D11Backend() {
     const std::string angle = ReadAll("gpu/shadps4/video_core/renderer_opengl/gl_angle.cpp");
     CHECK(angle.find("SDL_HINT_OPENGL_ES_DRIVER") != std::string::npos);
     CHECK(angle.find("SDL_HINT_VIDEO_EGL_ALLOW_GETDISPLAY_FALLBACK, \"0\"") != std::string::npos);
@@ -130,24 +177,6 @@ void TestRectPathsStaySeparate() {
         ++calls;
     }
     CHECK(calls == 2);
-}
-
-void TestLauncherAgrees() {
-    const std::string settings = ReadAll("launcher/settings.h");
-    for (const auto key : AlnRenderer::ChoiceKeys) {
-        CHECK(settings.find("{\"" + std::string(key) + "\", ") != std::string::npos);
-    }
-    CHECK(settings.find("kRendererKey[] = \"renderer\"") != std::string::npos);
-    CHECK(settings.find("kDefaultRenderer[] = \"vulkan\"") != std::string::npos);
-    CHECK(settings.find("\"OpenGL (experimental)\"") != std::string::npos);
-
-    const std::string shim = ReadAll("gpu/shim/aln_settings.cpp");
-    CHECK(shim.find("key == \"renderer\"") != std::string::npos);
-
-    const std::string launcher = ReadAll("launcher/launcher.cpp");
-    const size_t renderer = launcher.find("ui.Combo(\"Renderer\", kRendererHelp, kRendererKey, kDefaultRenderer");
-    const size_t card = launcher.find("ui.Row(\"Graphics card\"");
-    CHECK(renderer != std::string::npos && card != std::string::npos && renderer < card);
 }
 
 // The game code stays out of renderer choices: only the factory and the window know both.
@@ -220,15 +249,17 @@ void TestGlesRequirements() {
 } // namespace
 
 int main() {
-    TestParse();
-    TestResolve();
-    TestDirect3D11();
-    TestDirect3D11Windows();
+    TestSelectionIsVulkan();
+    TestDevelopmentBackends();
+    TestNoFallback();
+    TestNoRendererSetting();
+    TestLauncherHasNoRendererRow();
+    TestOptionsMenuHasNoRenderer();
+    TestDirect3D11Backend();
     TestRectPathsStaySeparate();
     TestGlesRequirements();
-    TestLauncherAgrees();
     TestBoundary();
     TestRequirements();
-    std::printf("renderer selection tests: %d checks, %d failures\n", g_checks, g_failures);
+    std::printf("renderer policy tests: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures ? 1 : 0;
 }

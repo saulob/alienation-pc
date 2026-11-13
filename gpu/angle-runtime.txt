@@ -1,4 +1,5 @@
-# ANGLE for the Direct3D 11 renderer: fetched, verified and staged by tools\build.ps1 (Sync-AngleRuntime in tools\_common.ps1).
+# ANGLE for the development-only Direct3D 11 backend: staged beside development builds by tools\build.ps1
+# (Sync-AngleRuntime in tools\_common.ps1). Releases do not ship it.
 # A package from MSYS2's own server, read without pacman. Changing the revision means changing every hash here.
 revision  890b5d8fa2988e3719e0d80421bf3e927db9cd5c
 version   2.1.r25748.890b5d8f-3

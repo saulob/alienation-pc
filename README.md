@@ -75,7 +75,7 @@ Working in the launcher:
 
 - Install from your own `.pkg`, with the build identified by its metadata and executable hash; other builds are refused
 - Install update and Remove update, staged and checked before the installed game changes
-- Graphics card and renderer selection, window mode, monitor, VSync, presentation, SMAA, anisotropic filtering,
+- Graphics card selection, window mode, monitor, VSync, presentation, SMAA, anisotropic filtering,
   FSR 1 and RCAS, frame counter, render resolution (native to 4K) and aspect ratio (16:9, 16:10, 21:9, 32:9, 4:3, 5:4),
   and a 59.94 FPS engine target, in every supported build
 - **Frame rate** (Gameplay page): 30, 60 (Original, default), 90, 120, 144, 165, 240 or Unlimited frames per second

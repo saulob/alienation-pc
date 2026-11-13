@@ -5,6 +5,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <mutex>
@@ -50,8 +51,6 @@ uint64_t runtime_process_time_counter(void);
 uint64_t runtime_tsc_frequency(void);
 int32_t* runtime_errno(void);
 void runtime_memory_set_gpu_hooks(RuntimeGpuRange map, RuntimeGpuRange unmap, RuntimeGpuRange invalidate);
-// aln_gpu_list.cpp
-int aln_check_vulkan(char* cause, size_t cause_size, char* advice, size_t advice_size);
 // runtime_log.c
 void runtime_log_flush(void);
 void runtime_log_mark_clean_exit(void);
@@ -201,20 +200,11 @@ extern "C" int alngpu_available(void) {
     return 1;
 }
 
-// Each renderer needs its own kind of window, so Auto asks whether Vulkan can run before there is one.
 static void SelectRenderer() {
-    const auto choice = AlnRenderer::Choice(AlnSettings::Get().renderer.load());
-    char cause[320] = "", advice[320] = "";
-    const bool vulkan_usable = choice != AlnRenderer::Auto ||
-                               aln_check_vulkan(cause, sizeof(cause), advice, sizeof(advice));
-    const auto resolution = AlnRenderer::Resolve(choice, vulkan_usable, cause);
-    AlnRenderer::SetActive(resolution.backend);
-    std::printf("Renderer: selected %s, active %s\n",
-                std::string(AlnRenderer::ChoiceKeys[choice]).c_str(),
-                AlnRenderer::BackendName(resolution.backend));
-    if (!resolution.fallback_reason.empty()) {
-        std::printf("Renderer: Auto fell back to OpenGL: %s\n", resolution.fallback_reason.c_str());
-    }
+    const char* request = std::getenv("ALN_DEV_RENDERER");
+    const auto backend = AlnRenderer::Select(request ? request : "");
+    AlnRenderer::SetActive(backend);
+    std::printf("Renderer: %s\n", AlnRenderer::BackendName(backend));
 }
 
 static_assert(ALN_GPU_FEATURE_RENDER_RESOLUTION == AlnSettings::RenderResolution);

@@ -5,7 +5,7 @@
 .DESCRIPTION
   -Folder checks a staged release folder. -Zip checks the ZIP itself: the entry names, the .sha256 file beside it, and
   the extraction into a temporary folder, which gets the same check as a staged folder.
-  Binary checks (imports, the pinned ANGLE files, the version resource) need the MSYS2 CLANG64 llvm-objdump;
+  Binary checks (imports, the version resource) need the MSYS2 CLANG64 llvm-objdump;
   -SkipBinaryChecks is for placeholder files (tools\test-release-check.ps1).
 .EXAMPLE
   .\tools\check-release-folder.ps1 -Folder dist\AlienationPC-v0.1.0-windows-x64
@@ -24,9 +24,8 @@ $root = $script:RepoRoot
 $RootFiles = @('alienation.exe', 'trg-updater.exe', 'README.txt', 'LICENSE.txt')
 $AssetFiles = @('assets\launcher\header-art.png', 'assets\launcher\sponsor-heart.png')
 $RequiredLicenses = @('licenses\THIRD-PARTY-LICENSES.txt', 'licenses\MSYS2-PACKAGES.txt', 'licenses\NotoSansTC\LICENSE-NotoSansTC.txt')
-$AngleLicence = 'licenses\angleproject\LICENSE'
-# The licence folders of what libGLESv2.dll has compiled in.
-$AngleLinkedLicences = @('spirv-tools', 'vulkan-loader', 'VulkanMemoryAllocator', 'xxhash')
+# The licence folders of what alienation.exe has compiled in or loads.
+$RequiredLicenseFolders = @('VulkanMemoryAllocator', 'xxhash')
 # Names that mean game data, a package, player data, caches, logs or build output; the same list as tools/package-linux.sh.
 $ForbiddenNames = @('game', 'user', 'user_data', 'user_data.migrating', 'logs', 'cache', 'build', 'prepared', 'extracted', 'image',
     'trophy', 'sce_sys', 'sce_module', 'online-instances', 'eboot.bin', 'param.sfo', 'alienation.ini', 'boot.bin', 'content.bin',
@@ -35,7 +34,7 @@ $ForbiddenWindowsNames = @('saves', 'settings', 'profiles', 'achievements')
 $ForbiddenPatterns = @('*.pkg', '*.pdb', '*.debug', '*.log', '*.dmp', '*.ini', '*.bin', '*.self', '*.sprx', '*.prx',
     '*.elf', '*.cpk', '*.sfo', '*.json', '*.spv', '*.pipeline_cache', '*.obj', '*.o', '*.a', '*.lib', '*.tmp', '*.bak',
     '*.sav', '*.py', '*.ps1', '*.c', '*.cpp', '*.h', '*.pyc', '*.orig', '*.rej', '*.rdc', '*~',
-    'trg-update-*', 'vulkan-1.dll', 'VkLayer_*', 'renderdoc*', 'TracyClient*', 'Thumbs.db', 'desktop.ini', '.git*')
+    'trg-update-*', 'vulkan-1.dll', 'libEGL.dll', 'libGLESv2.dll', 'VkLayer_*', 'renderdoc*', 'TracyClient*', 'Thumbs.db', 'desktop.ini', '.git*')
 # Licence texts have names such as COPYING.LIB; the licences folder is still checked for everything else.
 $LicenseTextPatterns = @('*.lib', '*.a', '*.o', '*.c', '*.h')
 # File signatures of PS4 packages, SELF/ELF executables and CRI archives.
@@ -61,8 +60,6 @@ $LocalNeedles = foreach ($text in $LocalText) { $text; $Latin1.GetString([Text.E
 $LocalPathRegexes = @('[A-Za-z]:[\\/]Users[\\/][^\\/\x00-\x1f"<>|*?]+', '[A-Za-z]:[\\/]msys64') |
     ForEach-Object { [regex]::new($_, 'IgnoreCase') }
 
-$AnglePin = Read-AnglePin
-$AngleLicenceSha256 = ($AnglePin.Files | Where-Object { $_.Name -eq 'LICENSE' }).Sha256
 $objdump = $null
 $dllDirs = @()
 if (-not $SkipBinaryChecks) {
@@ -71,23 +68,9 @@ if (-not $SkipBinaryChecks) {
     $dllDirs = @((Join-Path (Get-FFmpegPrefix) 'bin'), $tc.Bin)
 }
 
-# Adds what ANGLE's DLLs in $Dir load from $Dir.
-function Add-AngleDlls($Found, [string]$Dir) {
-    foreach ($file in Get-AngleDlls $AnglePin) {
-        $path = Join-Path $Dir $file.Name
-        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
-        $closure = Get-DllClosure $path $Dir $objdump
-        foreach ($dllName in $closure.Keys) { if (-not $Found.Contains($dllName)) { $Found[$dllName] = $closure[$dllName] } }
-    }
-}
-
-# The DLLs a release folder may hold: what the executables and ANGLE load from it.
+# The DLLs a release folder may hold: what the executables load from it.
 function Get-ShippedDlls([string]$Base) {
     $dlls = [ordered]@{}
-    foreach ($file in Get-AngleDlls $AnglePin) {
-        $path = Join-Path $Base $file.Name
-        if (Test-Path -LiteralPath $path -PathType Leaf) { $dlls[$file.Name.ToLowerInvariant()] = $path }
-    }
     if ($SkipBinaryChecks) { return $dlls }
     foreach ($exe in @('alienation.exe', 'trg-updater.exe')) {
         $path = Join-Path $Base $exe
@@ -95,7 +78,6 @@ function Get-ShippedDlls([string]$Base) {
         $closure = Get-DllClosure $path $Base $objdump
         foreach ($dllName in $closure.Keys) { if (-not $dlls.Contains($dllName)) { $dlls[$dllName] = $closure[$dllName] } }
     }
-    Add-AngleDlls $dlls $Base
     return $dlls
 }
 
@@ -103,10 +85,6 @@ function Test-BinaryContent([string]$Base, $Problems) {
     $exe = Join-Path $Base 'alienation.exe'
     $updaterExe = Join-Path $Base 'trg-updater.exe'
     $dlls = Get-ShippedDlls $Base
-    foreach ($problem in Get-AngleRuntimeProblems $Base $AnglePin { param($path) Get-Imports $path $objdump }) { $Problems.Add($problem) }
-    if ((Test-Path -LiteralPath (Join-Path $Base $AngleLicence) -PathType Leaf) -and -not (Test-Sha256 (Join-Path $Base $AngleLicence) $AngleLicenceSha256)) {
-        $Problems.Add("stale: $AngleLicence differs from gpu\angle-runtime.txt")
-    }
     foreach ($binary in @($exe, $updaterExe)) {
         if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) { continue }
         foreach ($name in (Get-DllClosure $binary $dllDirs $objdump).Keys) {
@@ -180,12 +158,13 @@ function Test-ReleaseFolder([string]$Dir) {
             if ($pattern.IsMatch($text)) { $problems.Add("secret or token in file: $relative"); break }
         }
     }
-    foreach ($leaf in $RootFiles + $RequiredLicenses + @($AngleLicence) + $AssetFiles) {
+    foreach ($leaf in $RootFiles + $RequiredLicenses + $AssetFiles) {
         if (-not (Test-Path -LiteralPath (Join-Path $base $leaf) -PathType Leaf)) { $problems.Add("missing: $leaf") }
     }
-    foreach ($folder in $AngleLinkedLicences) {
+    foreach ($folder in $RequiredLicenseFolders) {
         if (-not (Get-ChildItem -LiteralPath (Join-Path $base "licenses\$folder") -File -ErrorAction SilentlyContinue)) { $problems.Add("missing licence: licenses\$folder") }
     }
+    if (Test-Path -LiteralPath (Join-Path $base 'licenses\angleproject')) { $problems.Add('unused ANGLE licence: licenses\angleproject') }
     return $problems
 }
 
