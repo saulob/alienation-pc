@@ -101,6 +101,7 @@ Add-Exes $s @(
     , @('aln-cursor-tests', 'cursor visibility')
     , @('aln-window-tests', 'window fit')
     , @('aln-present-tests', 'presentation')
+    , @('aln-frame-pacing-tests', 'Frame rate: presentation pacing, game speed and network work equal at every rate')
 )
 Add-Suite $s 'python' 'tests\display_aspect_tests.py' 'display size, aspect and ultrawide sites against the real executables'
 

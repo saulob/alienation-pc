@@ -17,6 +17,7 @@
 #include <sys/resource.h>
 #endif
 #include "common/assert.h"
+#include "aln_frame_pacing.h"
 #include "aln_latency_trace.h"
 #include "aln_present.h"
 #include "aln_settings.h"
@@ -359,8 +360,14 @@ void VideoOutDriver::Flip(const Request& req) {
     aln_boot_diag_count(ALN_DIAG_FLIP);
     static const bool first_flip = (aln_checkpoint("VideoOut: first guest flip"), true);
     (void)first_flip;
+    const bool present = AlnFramePacing::PresentsFlip(AlnSettings::Get().frame_rate.load(), flips_consumed++,
+                                                      req.port->flip_rate);
     // Update HDR status before presenting, then present the frame on the swap thread.
-    RunPresenter([this, frame = req.frame, hdr = req.port->is_hdr, submitted = req.submitted] {
+    RunPresenter([this, frame = req.frame, hdr = req.port->is_hdr, submitted = req.submitted, present] {
+        if (!present) {
+            presenter->RetireFrame(frame);
+            return;
+        }
         presenter->SetHDR(hdr);
         presenter->Present(frame);
         aln_boot_diag_count(ALN_DIAG_PRESENT);
@@ -659,6 +666,54 @@ void VideoOutDriver::DrawLastFrame() {
     }, true);
 }
 
+void VideoOutDriver::RepeatLastFrame() {
+    RunPresenter([this] {
+        const auto frame = presenter->PrepareLastFrame();
+        if (frame != nullptr) {
+            presenter->Present(frame, true);
+        }
+    }, true);
+}
+
+namespace {
+constexpr auto kLimiterSpinWindow = std::chrono::microseconds(500);
+
+// A coarse wait can return about a millisecond late, so it stops short and the rest is yielded.
+void WaitUntilSlot(std::chrono::steady_clock::time_point slot) {
+    using Clock = std::chrono::steady_clock;
+    const auto coarse = slot - Clock::now() - kLimiterSpinWindow;
+#ifdef _WIN32
+    thread_local const HANDLE timer =
+        CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+    if (coarse > Clock::duration::zero()) {
+        LARGE_INTEGER due;
+        due.QuadPart = -std::chrono::duration_cast<std::chrono::nanoseconds>(coarse).count() / 100;
+        if (timer && SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE)) {
+            WaitForSingleObject(timer, INFINITE);
+        } else {
+            std::this_thread::sleep_for(coarse);
+        }
+    }
+#else
+    if (coarse > Clock::duration::zero()) {
+        std::this_thread::sleep_for(coarse);
+    }
+#endif
+    while (Clock::now() < slot) {
+        std::this_thread::yield();
+    }
+}
+
+// Extra presents on the GPU command thread would hold back the game's own work, so only a presenter that can repeat
+// off that thread gets a repeat cadence.
+unsigned RepeatCadence(int frame_rate, bool vsync, double display_hz) {
+    if (!presenter->CanRepeatFrames()) {
+        return 0u;
+    }
+    return AlnFramePacing::RepeatCadenceHz(frame_rate, vsync, display_hz);
+}
+} // namespace
+
 bool VideoOutDriver::SubmitFlip(VideoOutPort* port, s32 index, s64 flip_arg,
                                 bool is_eop /*= false*/) {
     {
@@ -718,8 +773,21 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
     Common::SetCurrentThreadRealtime(vblank_period);
 
     Common::AccurateTimer timer{vblank_period};
-    std::printf("VideoOut: vblank %u Hz, VSync %s\n", EmulatorSettings.GetVblankFrequency(),
-                AlnSettings::Get().vsync ? "on" : "off");
+    auto& settings = AlnSettings::Get();
+    int frame_rate = settings.frame_rate.load();
+    bool vsync = settings.vsync.load();
+    double display_hz = settings.display_refresh_hz.load();
+    AlnFramePacing::FrameLimiter limiter{0, std::chrono::steady_clock::now()};
+    const auto start_pacing = [&](std::chrono::steady_clock::time_point now) {
+        const unsigned cadence = RepeatCadence(frame_rate, vsync, display_hz);
+        limiter = AlnFramePacing::FrameLimiter{cadence, now};
+        settings.repeat_cadence_hz = cadence;
+        std::printf("VideoOut: vblank %u Hz, frame rate %s, repeat cadence %s, VSync %s, display %.2f Hz\n",
+                    EmulatorSettings.GetVblankFrequency(), AlnFramePacing::ModeName(frame_rate).c_str(),
+                    cadence ? (std::to_string(cadence) + " FPS").c_str() : "none", vsync ? "on" : "off",
+                    display_hz);
+    };
+    start_pacing(std::chrono::steady_clock::now());
     if (AlnLatencyTrace::enabled) {
         std::printf("Latency trace: on (ALN_INPUT_LATENCY_TRACE=1), pad and present lines every 5 s\n");
     }
@@ -736,6 +804,15 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
 
     while (!token.stop_requested()) {
         timer.Start();
+        const auto tick_start = std::chrono::steady_clock::now();
+        if (settings.frame_rate.load() != frame_rate || settings.vsync.load() != vsync ||
+            settings.display_refresh_hz.load() != display_hz) {
+            frame_rate = settings.frame_rate.load();
+            vsync = settings.vsync.load();
+            display_hz = settings.display_refresh_hz.load();
+            start_pacing(tick_start);
+        }
+        const auto tick_deadline = tick_start + vblank_period;
 
         if (DebugState.IsGuestThreadsPaused()) {
             DrawLastFrame();
@@ -763,6 +840,7 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
                     }
                 }
             } else {
+                limiter.Release(tick_start);
                 Flip(request);
                 FRAME_END;
             }
@@ -790,6 +868,20 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
             vblank_status.process_time = Libraries::Kernel::sceKernelGetProcessTime();
             vblank_status.tsc = Libraries::Kernel::sceKernelReadTsc();
             main_port.vblank_cv.notify_all();
+        }
+
+        // Frame rate above 60: the guest gets its vblank and flip on time; the slots left before the next vblank show
+        // the last frame again.
+        while (main_port.is_open && !token.stop_requested()) {
+            const auto slot = limiter.SlotBefore(tick_deadline);
+            if (!slot) {
+                break;
+            }
+            if (std::chrono::steady_clock::now() < *slot) {
+                WaitUntilSlot(*slot);
+            }
+            limiter.Release(std::chrono::steady_clock::now());
+            RepeatLastFrame();
         }
 
         timer.End();

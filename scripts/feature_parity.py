@@ -41,7 +41,7 @@ GUEST_PATCHES = {
 FEATURES = (
     'Boot', 'Save', 'Trophies', 'Audio', 'Controller support', 'PlayStation Original prompts', 'Xbox prompts',
     'Xbox prompts in every language', 'Asian Menu Buttons', 'Skip Intro', 'Exit Game: Options',
-    'Exit Game: Select Campaign', '60 FPS', 'Render Resolution', 'Aspect Ratio', 'True Ultrawide', 'GPU heap scaling',
+    'Exit Game: Select Campaign', '60 FPS', 'Frame rate', 'Render Resolution', 'Aspect Ratio', 'True Ultrawide', 'GPU heap scaling',
     'SMAA', 'FSR', 'Texture filtering', 'Online', 'Online status', 'Matching2', 'P2P', 'Sessions and invitations',
     'Local co-op',
     'Install Game', 'Install Update', 'Remove Update',
@@ -76,6 +76,8 @@ def _common(save, prompts, languages, menu_buttons, install_update, remove_updat
         'Exit Game: Options': (SUPPORTED, HEADLESS, 'last of 6 rows; ' + _EXIT_MENUS),
         'Exit Game: Select Campaign': (SUPPORTED, HEADLESS, 'after LOAD; ' + _EXIT_MENUS),
         '60 FPS': (SUPPORTED, STATIC, 'engine_set_fps binding'),
+        'Frame rate': (SUPPORTED, HEADLESS, 'presentation only, no guest patch; the flip-paced fixed-step timing is '
+                       'checked per build by tests/patch_site_tests.py and modelled by tests/frame_pacing_tests.cpp'),
         'Render Resolution': (SUPPORTED, STATIC, 'display size sites'),
         'Aspect Ratio': (SUPPORTED, STATIC, 'render size + VideoOut status'),
         'True Ultrawide': (SUPPORTED, STATIC, '21:9 and 32:9 render targets'),

@@ -767,13 +767,20 @@ void SetTextEntry(bool active, const std::string& prompt, const std::string& tex
     text_entry_text = text;
 }
 
-std::atomic<u64> presented_frames{0};
+std::atomic<u64> presented_frames{0}, repeated_frames{0};
 
 u64 PresentedFrames() {
     return presented_frames.load(std::memory_order_relaxed);
 }
 
-void LogPresent() {
+u64 RepeatedFrames() {
+    return repeated_frames.load(std::memory_order_relaxed);
+}
+
+void LogPresent(bool repeat) {
+    if (repeat) {
+        repeated_frames.fetch_add(1, std::memory_order_relaxed);
+    }
     presented_frames.fetch_add(1, std::memory_order_relaxed);
 }
 

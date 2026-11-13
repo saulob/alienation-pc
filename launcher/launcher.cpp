@@ -142,7 +142,14 @@ constexpr char kAntiAliasingHelp[] =
     "SMAA smooths jagged edges on the finished picture, at a small cost in performance.";
 constexpr char kAnisotropyHelp[] =
     "Sharper textures on floors and walls seen at an angle. Game uses the game's own filtering.";
-constexpr char kShowFpsTitleHelp[] = "Shows the frame rate in the window title: Alienation | FPS: 60.00";
+constexpr char kFrameRateHelp[] =
+    "60 FPS is the original game rate. The game always makes 60 new frames a second at its original speed, so no "
+    "setting changes gameplay, online play or local co-op. 30 shows every second frame. Faster rates show the last "
+    "frame again until the next one (no interpolation), up to the display's refresh with VSync on; Unlimited repeats "
+    "up to 480 a second. Vulkan only above 60.";
+constexpr char kShowFpsTitleHelp[] =
+    "Shows the frame rate in the window title: Alienation | FPS: 60.00. Above 60 the new game frames follow in "
+    "brackets: FPS: 144.00 (game 60.00)";
 constexpr char kShowResolutionTitleHelp[] =
     "Shows the game's render resolution in the window title: Alienation | 1920x1080";
 constexpr char kFrameCounterHelp[] = "Shows the frame rate and frame time in a corner of the game.";
@@ -626,7 +633,7 @@ private:
             return {name, "Resolution, anti-aliasing and texture filtering.", [this](trg::Ui& ui) { PageGraphics(ui); },
                     nullptr, nullptr};
         case PageId::kGameplay:
-            return {name, "Readouts and startup options.", [this](trg::Ui& ui) { PageGameplay(ui); },
+            return {name, "Frame rate, readouts and startup options.", [this](trg::Ui& ui) { PageGameplay(ui); },
                     nullptr, nullptr};
         case PageId::kControls:
             return {name, "Controller and keyboard.", [this](trg::Ui& ui) { PageControls(ui); }, nullptr, nullptr};
@@ -955,6 +962,11 @@ private:
     }
 
     void PageGameplay(trg::Ui& ui) {
+        std::vector<trg::Option> frame_rates;
+        for (const int fps : {30, 60, 90, 120, 144, 165, 240, 0}) {
+            frame_rates.push_back({std::to_string(fps), FrameRateLabel(fps)});
+        }
+        ui.Combo("Frame rate", kFrameRateHelp, kFrameRateKey, "60", frame_rates);
         ui.Toggle("Frame rate in title", kShowFpsTitleHelp, kShowFpsTitleKey, false, "Off", "On");
         ui.Toggle("Render resolution in title", kShowResolutionTitleHelp, kShowResolutionTitleKey, false, "Off", "On");
         ui.Toggle("Frame counter", kFrameCounterHelp, kShowFrameCounterKey, false, "Hidden", "Shown");

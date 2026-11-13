@@ -134,6 +134,11 @@ def check_semantic_evidence():
     check(registered('aln-exit-game-menu-tests'), 'the Exit Game menu test is not run by tools/test.ps1')
     check(registered('prompt_language_tests.py'), 'the prompt language test is not run by tools/test.ps1')
     check(registered('aln-online-status-tests'), 'the online status test is not run by tools/test.ps1')
+    check(registered('aln-frame-pacing-tests'), 'the frame pacing test is not run by tools/test.ps1')
+    timing = read('tests/patch_site_tests.py')
+    for key in keys():
+        check(parity.PARITY[key]['Frame rate'][0] != parity.SUPPORTED or re.search(rf"'{key}': \(0x[0-9a-f]+, ", timing),
+              f'{key}: Frame rate without the game\'s timing checked on its executable')
     for key in keys():
         check(builds is not None and f'"{key}"' in builds.group(1), f'{key}: the Exit Game menus are not executed')
         languages = prompt_language_tests.LANGUAGES.get(key, {})

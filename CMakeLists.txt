@@ -371,6 +371,14 @@ target_include_directories(aln-present-tests PRIVATE gpu/shim)
 target_compile_definitions(aln-present-tests PRIVATE ALN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_compile_options(aln-present-tests PRIVATE -Wall -Wextra -Werror)
 
+# Focused tests of the Frame rate setting and the game's flip-paced timing under it (tools/test.ps1); not part of the
+# default build.
+add_executable(aln-frame-pacing-tests EXCLUDE_FROM_ALL tests/frame_pacing_tests.cpp)
+set_target_properties(aln-frame-pacing-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_include_directories(aln-frame-pacing-tests PRIVATE gpu/shim)
+target_compile_definitions(aln-frame-pacing-tests PRIVATE ALN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+target_compile_options(aln-frame-pacing-tests PRIVATE -Wall -Wextra -Werror)
+
 # Focused tests of the AvPlayer worker threads joining themselves and each other (tools/test.ps1); not part of the default build.
 add_executable(aln-avplayer-thread-tests EXCLUDE_FROM_ALL tests/avplayer_thread_tests.cpp)
 set_target_properties(aln-avplayer-thread-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)

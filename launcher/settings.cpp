@@ -40,6 +40,7 @@ constexpr ManagedSetting kBaseSettings[] = {
     {kRendererKey, kDefaultRenderer},
     {kAntiAliasingKey, "0"},
     {kAnisotropyKey, "0"},
+    {kFrameRateKey, "60"},
     {kShowFpsTitleKey, "0"},
     {kShowResolutionTitleKey, "0"},
     {kShowFrameCounterKey, "0"},
@@ -102,6 +103,9 @@ bool IsValidSetting(std::string_view key, std::string_view value) {
     }
     if (key == kAnisotropyKey) {
         return one_of({"0", "2", "4", "8", "16"});
+    }
+    if (key == kFrameRateKey) {
+        return one_of({"30", "60", "90", "120", "144", "165", "240", "0"});
     }
     if (key == kPresentationKey) {
         return std::any_of(std::begin(kPresentationChoices), std::end(kPresentationChoices),
@@ -210,6 +214,16 @@ bool LauncherSettings::WriteFile(const Values& changes) {
     return file.Save();
 }
 
+std::string FrameRateLabel(int fps) {
+    if (fps == 0) {
+        return "Unlimited";
+    }
+    if (fps == 60) {
+        return "60 FPS (Original)";
+    }
+    return std::to_string(fps) + " FPS";
+}
+
 bool LauncherWanted(bool game_ready, bool show_setting, bool shift_held, bool skip_once) {
     if (!game_ready) {
         return true;
@@ -296,7 +310,8 @@ std::string SettingsSummary(const LauncherSettings& settings, const GameBuild* b
     line(std::string("Controller prompts ") + AlnPromptStyleLabel(aln_controller_prompts_style(Utf8(settings.file()).c_str())));
 
     const std::string mode = settings.Get(kDisplayModeKey, "windowed");
-    line(std::string("Window ") + (mode == "borderless" ? "Borderless Fullscreen" : "Windowed") + ", frame counter " +
+    line(std::string("Window ") + (mode == "borderless" ? "Borderless Fullscreen" : "Windowed") + ", frame rate " +
+         FrameRateLabel(std::atoi(settings.Get(kFrameRateKey, "60").c_str())) + ", frame counter " +
          OnOff(settings.GetBool(kShowFrameCounterKey, false)) + ", frame rate in title " +
          OnOff(settings.GetBool(kShowFpsTitleKey, false)) + ", render resolution in title " +
          OnOff(settings.GetBool(kShowResolutionTitleKey, false)));

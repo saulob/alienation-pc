@@ -107,6 +107,8 @@ public:
     virtual void Present(PresentFrame* frame, bool is_reusing_frame = false,
                          bool is_game_frame = true) = 0;
     virtual void RetireFrame(PresentFrame* frame) = 0;
+    /// Whether the last frame can be shown again without taking time from the GPU command thread.
+    [[nodiscard]] virtual bool CanRepeatFrames() const = 0;
 
     virtual void ReportCompilerStats() = 0;
 };

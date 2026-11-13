@@ -50,6 +50,12 @@ Working in the launcher:
 - Graphics card and renderer selection, window mode, monitor, VSync, presentation, SMAA, anisotropic filtering,
   FSR 1 and RCAS, frame counter, render resolution (native to 4K) and aspect ratio (16:9, 16:10, 21:9, 32:9, 4:3, 5:4),
   and a 59.94 FPS engine target, in every supported build
+- **Frame rate** (Gameplay page): 30, 60 (Original, default), 90, 120, 144, 165, 240 or Unlimited frames per second
+  reaching the window. 60 is the original game rate: the game makes 60 new frames a second at its original speed
+  whatever the setting, so gameplay, online play and local co-op never change. 30 shows every second frame; faster
+  rates show the last frame again until the next one (repeated frames, no interpolation, Vulkan only), up to the
+  display's refresh with VSync on and up to 480 a second for Unlimited. Frame rate in title shows every presentation,
+  with the game's new frames in brackets while frames are repeated: `FPS: 144.00 (game 60.00)`
 - Keyboard mapping, Xbox and PlayStation controllers, up to four local players' controllers
 - Online page: Online play switch, Online name, Friend Code, Connection status and Connection test, friends and friend
   requests, squad invitations, Join a friend's squad, the public Lobby and public rooms with Join

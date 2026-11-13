@@ -69,14 +69,16 @@ private:
     void ApplyDisplayMode(int mode);
     void ToggleBorderless();
     void UpdateFpsTitle();
+    void UpdateDisplayRefresh();
     void UpdateCursor();
     bool TrackControllerEvent(const SDL_Event& event);
     std::unordered_map<u32, PadActivity> pad_activity; ///< window thread
     AlnCursor::State cursor; ///< window thread
     void RefreshTitle();
     std::chrono::steady_clock::time_point fps_started{};
-    u64 fps_frames = 0;
-    double fps = -1.0; ///< frame rate shown in the title; negative: none
+    u64 fps_frames = 0, fps_repeats = 0;
+    double fps = -1.0;      ///< frame rate shown in the title; negative: none
+    double game_fps = -1.0; ///< the game's new frames among them, while frames are repeated; negative: none
     std::string title_shown;
     int text_state{};
     std::string text, text_prompt, base_title;

@@ -37,9 +37,10 @@ void ShowNotice(const std::string& text);
 /// Whether anything is drawn this frame.
 bool Visible();
 
-/// Counts a presented game frame (the frame rate in the window title).
-void LogPresent();
+/// Counts a presented game frame (the frame rate in the window title); `repeat`: the last frame shown again.
+void LogPresent(bool repeat = false);
 u64 PresentedFrames();
+u64 RepeatedFrames();
 
 /// Present thread: draws into `view` (layout ColorAttachmentOptimal).
 void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent);

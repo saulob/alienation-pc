@@ -698,7 +698,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
         cmdbuf.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
                                vk::PipelineStageFlagBits::eAllCommands,
                                vk::DependencyFlagBits::eByRegion, {}, {}, post_barriers);
-        AlnOverlay::LogPresent();
+        AlnOverlay::LogPresent(is_reusing_frame);
         if (overlay) {
             AlnOverlay::Render(cmdbuf, swapchain.ImageView(), extent);
         }

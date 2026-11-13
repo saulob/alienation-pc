@@ -94,6 +94,66 @@ def check_skip_intro(label, image, relocs, skip_source, build, spans):
     spans.append((update, update + 10))
 
 
+# The game's own frame timing, never patched. The Frame rate setting is presentation only because every build runs at
+# least one fixed simulation step per frame and paces its frames by waiting for each flip, which completes on the guest
+# vblank (tests/frame_pacing_tests.cpp models it). Entries: stepper, frame update, flip rate, end of frame, SetFps(59.94).
+TIMING = {
+    'CUSA00062-1.00': (0xf1b90, 0xf20e0, 0x1fbc20, 0x1fb700, 0x1402f4f),
+    'CUSA00062-1.06': (0xf48f0, 0xf4e40, 0x1fecd0, 0x1fe7b0, 0x140996f),
+    'CUSA04430-1.00': (0xf2750, 0xf2ca0, 0x1fc830, 0x1fc310, 0x140518f),
+}
+# (entry index, offset, bytes with ?? for relocated operands)
+TIMING_SHAPES = (
+    # stop catching up after a step slower than real time or after 1 + max frame skip steps
+    (0, 0x139, 'c5f82e4594448b7d88488b9d70ffffff0f96c0443bad7cffffff0f9cc184c8750341b701c5fa10459041ffc5'),
+    # advance the step clock and step again while the wall-clock lag is a whole step or more
+    (0, 0x1c5, 'c5fa1045944889dfc5fa114594e8????????c5fa104590c5fa104d944531f6c5fa5cc1c5f82ec10f83????????'),
+    # the stepper gets the measured delta, 1 / fps, 8 / fps and the max frame skip
+    (1, 0x58, '488b7b08c5fa1043204c8b7b18c5fa104f0c488b07c5fa1145c4c5fa114dbcc5f2590d????????c5fa114dc0ff5040'
+              'c5fa1045c4c5fa104dbcc5fa105dc04c89ff89c6e8????????'),
+    # the render update: a fixed delta with sasquatch__fixed_render_frame_rate, else the measured one
+    (1, 0xb4, '803d????????004c8b30498b064c8b7810740ac5fa1005????????eb19488b7b08c5fa104320488b07c5fa1145c0ff5038'
+              'c5fa5945c04c89f741ffd7'),
+    # flip rate = clamp(round(1 / (fps * vblank period)) - 1, 0, 2)
+    (2, 0, '554889e553504889fbc5fa100d????????c5fa594340c5f25ec0e8????????c5fa2cc031c9be02000000ffc80f48c183f803'
+           '0f4cf08973448b7b084883c4085b5de9????????'),
+    # submit and flip, then wait for the flip
+    (3, 0, '554889e553504889fbe8????????48837b7800742d8b4344ffc0c5fa2ac0c5fa594340c5f82e83f80000007615be009f2400'
+           '4889dfe8????????c5fa1183f8000000'),
+)
+
+
+def masked(text):
+    return re.compile(b''.join(b'.' if text[i:i + 2] == '??' else re.escape(bytes.fromhex(text[i:i + 2]))
+                               for i in range(0, len(text), 2)), re.S)
+
+
+def f32(image, at):
+    return struct.unpack_from('<f', image, at)[0]
+
+
+def check_timing(label, image, build, set_fps_binding):
+    entries = TIMING.get(build)
+    check(entries is not None, f'{label}: no timing entries')
+    if not entries:
+        return
+    stepper, tick, _, _, set_fps = entries
+    code = bytes(image[:0x1e90000])
+    for index, offset, shape in TIMING_SHAPES:
+        at = entries[index] + offset
+        hits = [m.start() for m in masked(shape).finditer(code)]
+        check(hits == [at], f'{label}: timing shape at {at:#x} differs or is not unique ({[hex(h) for h in hits]})')
+    stepper_call = tick + 0x58 + 0x43
+    check(rip(image, stepper_call + 1) == stepper, f'{label}: the frame update does not call the stepper')
+    check(f32(image, rip(image, tick + 0x58 + 0x23)) == 8.0, f'{label}: the delta clamp is not 8 steps')
+    check(abs(f32(image, rip(image, tick + 0xb4 + 0x17)) - 1 / 30) < 1e-7, f'{label}: the fixed render delta is not 1/30')
+    check(bytes(image[set_fps:set_fps + 3]) == b'\x48\x8d\x05' and bytes(image[set_fps + 7:set_fps + 11]) ==
+          bytes.fromhex('c5fa1005'), f'{label}: SetFps(59.94) differs')
+    check(abs(f32(image, rip(image, set_fps + 11)) - 59.94) < 1e-4, f'{label}: the startup rate is not 59.94')
+    check(rip(image, set_fps + 3) == rip(image, set_fps_binding + 0x3f),
+          f'{label}: startup SetFps and engine_set_fps use different engines')
+
+
 EXIT_APP = re.compile(rb'\x48\x8d\x05....\x48\x8b\x38\x48\x8b\x07\xff\x60\x28', re.S)
 TEXT_COPY = bytes.fromhex('4c8d65c8488d73204d8dbeb00000008b43104c89e7488d540320e8')
 BOX_NEW_TEXT = bytes.fromhex('488d9dd8feffff4889dfe8')
@@ -245,6 +305,7 @@ def check_build(label, folder, source, skip_source, build, resolution_name, fram
     check(replacement == bytes.fromhex('31c0c390'), f'{label}: replacement is not xor eax,eax; ret')
     spans.append((offset, offset + 4))
     check(registered_natives(image).get(offset) == 'engine_set_fps', f'{label}: {offset:#x} is not engine_set_fps')
+    check_timing(label, image, build, offset)
     check_display_defaults(label, image, resolution)
     check_skip_intro(label, image, relocs, skip_source, build, spans)
     check_exit_game(label, image, build, spans)

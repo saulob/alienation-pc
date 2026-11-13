@@ -105,6 +105,41 @@ else is touched. Static evidence only: whether Havok stepping, animation, script
 
 The community shadPS4 patch (halves the delta at EUR `0x14035FC` / `0x1403632` and needs a 120 Hz vblank) is not used.
 
+### The game's timing
+
+The engine's frame update (EUR `0xf20e0`) measures the wall-clock time since the last frame with `sceKernelReadTsc`
+and hands it to the stepper (`0xf1b90`) with the step `1 / fps` (`1 / 59.94`), a clamp of 8 steps and the max frame
+skip (4). The stepper always runs one fixed step (input, game logic scaled by `an__delta_t_multiplier`, world), then
+more while the wall-clock lag is a whole step or more: at most 5 a frame, none after a step that took longer than real
+time, and the lag it cannot catch up is dropped. Then one variable update gets the measured delta and the render update
+gets a fixed `1 / 30` (`sasquatch__fixed_render_frame_rate`, on by default). The frame ends by submitting the flip and
+waiting for it on the flip event queue (`0x1fb700`); the flip completes on the guest vblank. The online lockstep
+objects (`determinism_sync_*` script natives: per-frame data and a frame counter check), the NP callbacks (Matching2,
+sessions) and the local players' pads are all driven by the game's own frames and steps.
+
+So the game makes one frame per flip at 60 Hz and runs at least one step per frame: frames flipped faster than its step
+would make the whole game faster, and a slower host is caught up from the wall clock, as on the console. The same code
+is in every build (`tests/patch_site_tests.py` checks it on each executable; `docs/GAME_BUILDS.md` has the offsets).
+
+### Frame rate setting
+
+The Frame rate setting (`frame_rate`: 30, 60, 90, 120, 144, 165, 240, 0 for Unlimited; 60 by default) is presentation
+only and changes nothing in the game: the guest vblank stays 60 Hz and every flip is taken and completed on time. 30
+shows every second flip (a game already flipping every second vblank is shown whole). Above 60 the present thread shows
+the last frame again on the slots of the target rate that fall before the next vblank (`gpu/shim/aln_frame_pacing.h`):
+the game still makes 60 new frames a second, so there is no interpolation and motion is as smooth as at 60. VSync bounds
+the repeats to the display's refresh (a display at 60 Hz has nothing to repeat), Unlimited repeats up to 480 a second,
+and the OpenGL and Direct3D 11 renderers never repeat (they present on the GPU command thread). It applies at start and
+when changed in the Options menu. The log line is
+`VideoOut: vblank 60 Hz, frame rate 144, repeat cadence 144 FPS, VSync on, display 144.00 Hz`.
+
+Frame rate in title counts every presentation; while frames are repeated the game's new frames follow in brackets
+(`FPS: 144.00 (game 60.00)`). The frame counter (F2) shows the presentation rate and interval.
+
+Known, not caused by the setting: the guest vblank is 60.000 Hz and the step `1 / 59.94`, so the stepper's clock runs
+0.1% ahead of the wall clock (about 3.6 s an hour). While that lead lasts, a stretch the host renders below 60 is not
+caught up and plays slower, until the lead is used up.
+
 ## Render resolution and aspect ratio
 
 The engine's display configuration defaults to 1920 x 1080 (`mov dword [rdi+0x34], 1080` / `mov dword [rdi+0x30], 1920`

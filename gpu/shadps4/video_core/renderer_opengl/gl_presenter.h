@@ -48,6 +48,7 @@ public:
     void Present(VideoCore::PresentFrame* frame, bool is_reusing_frame,
                  bool is_game_frame) override;
     void RetireFrame(VideoCore::PresentFrame*) override {}
+    bool CanRepeatFrames() const override { return false; } // every swap runs on the GPU command thread
     void ReportCompilerStats() override {}
 
 private:

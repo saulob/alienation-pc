@@ -122,6 +122,7 @@ public:
     /// A black frame with the loading screen (AlnOverlay::SetLoading) only.
     void PresentLoadingFrame();
     Frame* PrepareLastFrame() override;
+    bool CanRepeatFrames() const override { return true; } // presents run on the VideoOut swap thread
     void ReportCompilerStats() override;
 
 private:

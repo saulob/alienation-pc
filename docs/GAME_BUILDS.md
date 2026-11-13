@@ -84,6 +84,7 @@ No entry is final until the manual test matrix has passed in game.
 | Exit Game: Options | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED |
 | Exit Game: Select Campaign | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED |
 | 60 FPS | SUPPORTED · STATICALLY VERIFIED | SUPPORTED · STATICALLY VERIFIED | SUPPORTED · STATICALLY VERIFIED | SUPPORTED · STATICALLY VERIFIED |
+| Frame rate | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED | SUPPORTED · HEADLESS SEMANTICALLY VERIFIED |
 | Render Resolution | SUPPORTED · STATICALLY VERIFIED | SUPPORTED · STATICALLY VERIFIED | SUPPORTED · STATICALLY VERIFIED | SUPPORTED · STATICALLY VERIFIED |
 | Aspect Ratio | SUPPORTED · STATICALLY VERIFIED | SUPPORTED · STATICALLY VERIFIED | SUPPORTED · STATICALLY VERIFIED | SUPPORTED · STATICALLY VERIFIED |
 | True Ultrawide | SUPPORTED · STATICALLY VERIFIED | SUPPORTED · STATICALLY VERIFIED | SUPPORTED · STATICALLY VERIFIED | SUPPORTED · STATICALLY VERIFIED |
@@ -122,6 +123,21 @@ The simulation runs at the engine's frame rate in every build: the frame update 
 `an__delta_t_multiplier` tunable (1.00 `0x14035fc`, 1.06 `0x140a01c`) and the engine starts with `SetFps(59.94)` (1.00
 `0x1402f4f`, 1.06 `0x140996f`). With the binding a no-op the scripts' `engine_set_fps(29.97)` calls change nothing, so
 1.06 steps its game at 59.94 like 1.00, not only its presentation.
+
+### Game timing (not patched)
+
+The Frame rate setting relies on these being the same in every build: at least one fixed step per frame, frames paced
+by waiting for each flip ([FIRST_BOOT.md](FIRST_BOOT.md#the-games-timing)). `tests/patch_site_tests.py` checks their
+masked fingerprints (unique, at these offsets), the stepper call, the 8-step clamp, the fixed `1 / 30` render delta and
+that the startup `SetFps(59.94)` and `engine_set_fps` address the same engine object.
+
+| Function | CUSA00062 1.00 | CUSA00062 1.06 | CUSA04430 1.00 |
+|---|---|---|---|
+| Stepper (fixed steps, catch-up, max frame skip) | `0xf1b90` | `0xf48f0` | `0xf2750` |
+| Frame update (wall-clock delta, render delta) | `0xf20e0` | `0xf4e40` | `0xf2ca0` |
+| Flip rate from fps | `0x1fbc20` | `0x1fecd0` | `0x1fc830` |
+| End of frame (submit, wait for the flip) | `0x1fb700` | `0x1fe7b0` | `0x1fc310` |
+| Startup `SetFps(59.94)` | `0x1402f4f` | `0x140996f` | `0x140518f` |
 
 ### stream.dat blocks
 
