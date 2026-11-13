@@ -12,7 +12,7 @@
 
 </div>
 
-<p align="center"><img src="assets/launcher/header-art-source.png" alt="Alienation PC header art" width="100%"></p>
+<img width="1348" height="798" alt="2026-11-13_18-02_1" src="https://github.com/user-attachments/assets/b110fe21-432e-4950-bfeb-752fd683168a" />
 
 ## Status
 
@@ -132,6 +132,8 @@ How it works:
 In game, the squad menus offer Create Squad, Join Squad, Friends only, Invite only and Invite friends.
 
 **Testing notes:** online 2-player games have been played by hand. Squads of 3 and 4 players are verified headlessly (protocol, rooms, invitations, relay) and have had less manual gameplay testing. Leaderboards, weekly missions, leagues and the UNX Global Matrix features are unavailable. Technical details and known limits: [docs/ONLINE.md](docs/ONLINE.md).
+
+<img width="1344" height="795" alt="2026-11-13_18-06" src="https://github.com/user-attachments/assets/d945d243-91bb-44ab-b114-f2f52b2ac0e3" />
 
 ## Local Co-op
 
