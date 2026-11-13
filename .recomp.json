@@ -3,27 +3,56 @@
   "game": "Alienation",
   "system": "PS4",
   "type": "recomp",
-  "original": {
-    "revision": "01.00",
-    "serial": "CUSA00062"
-  },
+  "original": [
+    {
+      "region": "Europe",
+      "revision": "01.00",
+      "serial": "CUSA00062"
+    },
+    {
+      "region": "Europe",
+      "revision": "01.06",
+      "serial": "CUSA00062"
+    },
+    {
+      "region": "Asia",
+      "revision": "01.00",
+      "serial": "CUSA04430"
+    }
+  ],
   "project": "Alienation PC Port",
-  "status": "in-development",
+  "status": "released",
   "targets": [
-    "Windows"
+    "Windows",
+    "Linux",
+    "Steam Deck"
   ],
   "toolchain": "shadPS4-derived runtime",
-  "approach": "Original PS4 x86-64 game code running directly on the PC through replacement PS4 system libraries and a Vulkan renderer derived from shadPS4",
+  "approach": "Original PS4 x86-64 game code running directly on Windows and Linux through replacement PS4 system libraries and a Vulkan renderer derived from shadPS4",
   "maintainers": [
     {
       "name": "saulob",
       "link": "https://github.com/saulob"
     }
   ],
-  "links": [],
+  "links": [
+    {
+      "label": "Latest release",
+      "url": "https://github.com/saulob/alienation-pc/releases/latest"
+    },
+    {
+      "label": "Reddit announcement",
+      "url": "https://www.reddit.com/r/recomps/comments/1xvk3hx/alienation_ps4_native_pc_port_v010_released/"
+    }
+  ],
   "tags": [
     "launcher",
-    "Vulkan"
+    "Vulkan",
+    "4K",
+    "True Ultrawide",
+    "online co-op",
+    "local co-op",
+    "high frame rate"
   ],
-  "notes": "Early development: the user's own CUSA00062 (Europe) or CUSA04430 (Asia) 1.00 package is installed by the launcher; the game has not been verified to boot yet. No game files are included."
+  "notes": "Public native Windows release with an experimental Linux/Steam Deck AppImage. Supports CUSA00062 1.00 and 1.06 Europe and CUSA04430 1.00 Asia/KR. Includes the TRG launcher and package installer, online co-op for 2 to 4 players with Friends, Friend Codes, invitations, public Lobby, direct P2P and automatic relay fallback, local co-op for up to 4 players on CUSA00062 1.06, render resolutions up to 4K, experimental True Ultrawide, high-refresh presentation modes, FSR 1 and RCAS, SMAA, Xbox controller prompts, local trophies, Bug Report, Skip Intro, Exit Game, a self-updater and portable user data. No game files are included."
 }
