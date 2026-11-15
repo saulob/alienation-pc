@@ -654,6 +654,7 @@ int main(int argc, char **argv) {
     }
     if (app0) {
         runtime_file_configure(app0, user_dir ? user_dir : "user");
+        runtime_content_load_addons(app0);
         if (known_build) {
             char prompts_detail[160]="";
             if (aln_controller_prompts_install(settings_file,app0,build_key,prompts_detail,sizeof(prompts_detail))==0)

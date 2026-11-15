@@ -153,6 +153,7 @@ targets=(alienation)
 tests=(aln-image-format-tests aln-resolution-patch-tests aln-frame-pacing-tests aln-runtime-tests aln-sigpipe-tests aln-runtime-overlay-tests aln-savedata-tests aln-np-tests aln-online-status-tests aln-online-view-tests aln-local-pad-tests aln-controller-prompts-tests aln-exit-game-tests aln-exit-game-menu-tests aln-text-fix-tests aln-menu-buttons-tests aln-skip-intro-tests aln-module-history-tests aln-rtc-tests aln-ime-keyboard-tests aln-json2-tests aln-thread-cancel-tests aln-avplayer-thread-tests aln-tiling-tests aln-gds-lane-offset-tests aln-gpu-crash-trace-tests aln-gpu-recording-tests aln-renderer-selection-tests aln-opengl-backend-tests aln-opengl-perf-tests aln-cursor-tests aln-window-tests aln-sdl-compat-tests aln-present-tests aln-trophy-tests aln-incident-tests aln-paths-tests aln-game-install-tests aln-update-tests aln-update-network-tests)
 # Run with a loopback development lobby below. The Windows-only suites (memory, log, crash guard, update helper) are
 # not defined here; tests/feature_parity_tests.py names their Linux counterparts.
+tests+=(aln-content-tests aln-addon-install-tests)
 lobby_tests=(aln-online-hle-tests)
 ((test)) && targets+=("${tests[@]}" "${lobby_tests[@]}")
 ninja -C "$build_dir" "${targets[@]}"
@@ -182,6 +183,9 @@ if ((test)); then
     missing() { step "Running $1"; echo "MISSING: $2"; failed+=("$1"); }
 
     for t in "${tests[@]}"; do suite "$t" "$build_dir/bin/$t"; done
+    suite 'DLC runtime (empty)' "$build_dir/bin/aln-content-tests" --empty
+    suite 'DLC runtime (256)' "$build_dir/bin/aln-content-tests" --limit
+    suite 'DLC runtime (event queue full)' "$build_dir/bin/aln-content-tests" --queue-full
 
     step 'Every test target is run'
     unlisted=$(ninja -C "$build_dir" -t targets all | grep -oE '^aln-[a-z0-9-]+-tests:' | tr -d : | sort -u |

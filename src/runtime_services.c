@@ -70,7 +70,7 @@ static ABI int32_t system_param(int32_t id,int32_t *value) {
 }
 /* Events the online layer queues (an accepted squad invitation, a Join): eventType @0, data @4. They wait until the
  * game's user manager runs, which drops a session invitation addressed to a user it does not know yet. */
-#define SYSTEM_EVENT_BYTES 0xc0
+#define SYSTEM_EVENT_BYTES RUNTIME_SYSTEM_EVENT_BYTES
 #define MAX_SYSTEM_EVENTS 4
 static unsigned char system_events[MAX_SYSTEM_EVENTS][SYSTEM_EVENT_BYTES];
 static int system_events_pending;
@@ -223,8 +223,7 @@ static Dialog dialogs[]={{"CommonDialog",0,0,0},{"MsgDialog",0,0,0},{"SaveDataDi
 #define DIALOG_NOT_RUNNING ((int32_t)0x80B8000B)
 #define DIALOG_ARG_NULL ((int32_t)0x80B8000D)
 #define DIALOG_NOT_SUPPORTED ((int32_t)0x80B8000F)
-static int common_initialized;
-static ABI int32_t common_init(void) { common_initialized=1; return 0; }
+static ABI int32_t common_init(void) { return 0; }
 static ABI int32_t common_is_used(void) {
     for (size_t i=0;i<sizeof(dialogs)/sizeof(*dialogs);++i) if (dialogs[i].status==DIALOG_RUNNING) return 1;
     return 0;

@@ -9,6 +9,7 @@
 #include <string.h>
 
 #define USER_ID 1
+int32_t runtime_user_initial_id(void) { return USER_ID; }
 #define MAX_USERS 4
 #define USER_EVENT_LOGIN 0
 #define USER_INVALID_ARGUMENT ((int32_t)0x80960005)

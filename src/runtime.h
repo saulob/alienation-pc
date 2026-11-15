@@ -102,6 +102,8 @@ void runtime_sema_report(void);
 unsigned runtime_sema_waiters(uint32_t id);
 uintptr_t runtime_time_resolve(const char *name);
 void runtime_content_configure(const uint32_t values[5]);
+int runtime_content_addon(const char *label,const char *host);
+void runtime_content_load_addons(const char *app0);
 uintptr_t runtime_content_resolve(const char *name);
 void runtime_content_report(void);
 typedef struct { const char *name; void *function; } RuntimeExport;
@@ -114,6 +116,14 @@ uintptr_t runtime_services_resolve(const char *name);
 uintptr_t runtime_users_resolve(const char *name);
 /* 1 once the game polled sceUserServiceGetEvent: its user manager knows the initial user. */
 int runtime_user_events_polled(void);
+int32_t runtime_user_initial_id(void);
+enum { RUNTIME_SYSTEM_EVENT_BYTES = 0xc0 };
+typedef struct {
+    uint32_t type;
+    int32_t user;
+    uint32_t service;
+    unsigned char reserved[RUNTIME_SYSTEM_EVENT_BYTES-12];
+} RuntimeEntitlementEvent;
 /* Queues one SceSystemServiceEvent (eventType @0, data @4; at most 0xc0 bytes) for sceSystemServiceReceiveEvent; 0 when
  * the queue is full. */
 int runtime_system_event_push(const void *event, size_t size);

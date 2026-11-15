@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 project(alienation_pc VERSION 0.1.0 LANGUAGES C CXX)
 set(ALN_PORT_VERSION "${PROJECT_VERSION}")
+option(ALN_LOCAL_DLC_BUILD "Disable the upstream updater for a private local DLC build" OFF)
 
 if (NOT CMAKE_C_COMPILER_ID MATCHES "Clang")
     message(FATAL_ERROR "Build with Clang: MSYS2 CLANG64 (tools\\build.ps1) on Windows, tools/build.sh on Linux.")
@@ -87,6 +88,7 @@ set(ALN_RUNTIME_SOURCES
     src/runtime_audio.c
     src/runtime_audio3d.c
     src/runtime_content.c
+    src/runtime_addons.cpp
     src/runtime_eventflag.c
     src/runtime_fiber.c
     src/runtime_file.c
@@ -179,6 +181,17 @@ if (WIN32)
     add_executable(aln-log-tests EXCLUDE_FROM_ALL tests/log_tests.c src/runtime_log.c src/runtime_session_log.c)
     target_include_directories(aln-log-tests PRIVATE src)
     target_compile_options(aln-log-tests PRIVATE -Wall -Wextra -Werror)
+endif()
+
+# Local DLC runtime contract tests; not part of the default build.
+add_executable(aln-content-tests EXCLUDE_FROM_ALL tests/content_tests.c src/runtime_content.c src/runtime_file.c)
+target_include_directories(aln-content-tests PRIVATE src)
+target_compile_options(aln-content-tests PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(aln-content-tests PRIVATE Threads::Threads)
+if(WIN32)
+    target_sources(aln-content-tests PRIVATE src/compat_win.c)
+    target_compile_definitions(aln-content-tests PRIVATE _WIN32_WINNT=0x0A00 NTDDI_VERSION=0x0A000007)
+    target_link_libraries(aln-content-tests PRIVATE onecore)
 endif()
 
 # The pure parts of the crash report: module history, call site decoding, fault ownership and the startup phase

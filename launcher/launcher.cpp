@@ -34,6 +34,7 @@
 #include "aln_resolution.h"
 #include "game_files.h"
 #include "game_install.h"
+#include "addon_install.h"
 #include "game_process.h"
 #include "header_art.h"
 #include "host.h"
@@ -59,6 +60,14 @@
 
 #ifndef ALN_PORT_VERSION
 #define ALN_PORT_VERSION "unknown"
+#endif
+#ifndef ALN_LOCAL_DLC_BUILD
+#define ALN_LOCAL_DLC_BUILD 0
+#endif
+#if ALN_LOCAL_DLC_BUILD
+#define ALN_BUILD_SUFFIX " + local DLC"
+#else
+#define ALN_BUILD_SUFFIX ""
 #endif
 #define ALN_TRG_LAUNCHER_VERSION "1.1.0"
 
@@ -333,8 +342,12 @@ public:
         }
         trg::SetTranslator(&TranslateLauncherText);
         launcher_ = std::make_unique<trg::Launcher>(MakeConfig());
-        updater_ = std::make_unique<trg::update::UpdateController>(MakeUpdateConfig(InstallDir()));
-        updater_->StartCheck();
+        // Private builds may opt out; official builds retain the upstream updater.
+        if (!ALN_LOCAL_DLC_BUILD) {
+            updater_ = std::make_unique<trg::update::UpdateController>(MakeUpdateConfig(InstallDir()));
+            updater_->StartCheck();
+        }
+        RefreshAddonCount();
 
         outcome = Outcome::kRunning;
         host_.BeginFrame();
@@ -406,7 +419,7 @@ private:
         ImGui::BeginDisabled(play_.starting());
         const trg::Result result = launcher_->Frame();
         ImGui::EndDisabled();
-        if (result == trg::Result::kNone && !play_.starting()) {
+        if (updater_ && result == trg::Result::kNone && !play_.starting()) {
             if (HandleUpdateAction(
                     trg::update::DrawUpdateBanner(updater_->snapshot(), launcher_->config().theme, fonts_))) {
                 return Outcome::kQuit;
@@ -446,6 +459,7 @@ private:
     }
 
     bool HandleUpdateAction(trg::update::UpdateUiAction action) {
+        if (!updater_) return false;
         switch (action) {
         case trg::update::UpdateUiAction::kDownload:
             updater_->StartDownload();
@@ -533,6 +547,10 @@ private:
         files_ = check.state;
         build_ = check.build;
         alias_ = check.state == GameFileState::kValid ? check.alias : nullptr;
+        RefreshAddonCount();
+    }
+    void RefreshAddonCount() {
+        addon_count_ = build_ ? InstalledAddons(RootsOf(paths_), build_->title_id).size() : 0;
     }
 
     // A build whose executable has no verified render resolution sites runs at its native 16:9 size; a saved custom
@@ -596,7 +614,7 @@ private:
         c.branding.subtitle_color = kAccent;
         c.branding.subtitle_segments = {
             {"PC PORT   \xC2\xB7   ", ""},
-            {"v" ALN_PORT_VERSION "   \xC2\xB7   ", ""},
+            {"v" ALN_PORT_VERSION ALN_BUILD_SUFFIX "   \xC2\xB7   ", ""},
             {"BY SAULOB", kAuthorUrl},
         };
         c.branding.background = LauncherHeader([this](int width, int height) { return HeaderArtTexture(width, height); },
@@ -716,6 +734,18 @@ private:
         ui.EndRows();
         ui.Help(GameFilesHelp().c_str());
         if (ready) {
+            ui.Row("DLC", "Install add-on packages for this game's title ID. Saves are kept.");
+            ImGui::BeginDisabled(install_.running());
+            if (ImGui::Button(Tr("Install DLC..."), ImVec2(-FLT_MIN, 0))) {
+                BrowseAndInstall(PackageKind::kAddon);
+            }
+            ImGui::EndDisabled();
+            if (build_) {
+                ImGui::Text(Tr("%zu installed"), addon_count_);
+                if(std::string_view(build_->title_id)=="CUSA00062" && std::string_view(build_->version)!="1.06")
+                    ImGui::TextUnformatted(Tr("Inactive: requires game update 1.06"));
+            }
+            ui.EndRows();
             ui.Row("Update", kUpdateHelp);
             ImGui::BeginDisabled(install_.running());
             if (ImGui::Button(Tr("Install update..."), ImVec2(-FLT_MIN, 0))) {
@@ -777,16 +807,26 @@ private:
                              removed.ok() ? 6.0 : 8.0);
     }
 
+    bool AddonInstallAllowed() {
+        if (!build_ || (std::string_view(build_->title_id)=="CUSA00062" && std::string_view(build_->version)!="1.06")) {
+            launcher_->SetStatus(Tr("Install European update 1.06 before DLC."),8.0);return false;
+        }
+        if (OtherProcessRunning(trg::update::CurrentExecutablePath())) {
+            launcher_->SetStatus(Tr("Close the game before installing DLC."),8.0);return false;
+        }
+        return true;
+    }
     void BrowseAndInstall(PackageKind kind) {
         if (install_.running() || browser_.active() || BuildPinned()) {
             return;
         }
+        if (kind==PackageKind::kAddon && !AddonInstallAllowed()) return;
         if (UseBuiltInChooser()) {
             browsing_for_ = kind;
             browser_.Open(paths_.app0.parent_path().parent_path().parent_path());
             return;
         }
-        StartInstall(trg::BrowseForFile(Tr(kind == PackageKind::kUpdate ? kInstallUpdateTitle : kInstallTitle),
+        StartInstall(trg::BrowseForFile(Tr(kind == PackageKind::kAddon ? "Install DLC" : kind == PackageKind::kUpdate ? kInstallUpdateTitle : kInstallTitle),
                                         {{Tr("PS4 packages (*.pkg)"), "*.pkg"}}),
                      kind);
     }
@@ -806,13 +846,15 @@ private:
         if (picked.empty() || BuildPinned()) {
             return;
         }
+        if (kind==PackageKind::kAddon && !AddonInstallAllowed()) return;
         install_failure_.clear();
         install_failure_text_.clear();
+        installing_addon_ = kind == PackageKind::kAddon;
         outcome_ = std::make_shared<InstallResult>();
         const bool started = install_.Start(
             "Checking the package...",
             [outcome = outcome_, source = PathFromUtf8(picked), roots = RootsOf(paths_),
-             replace = files_ == GameFileState::kValid, kind](trg::Task& task) {
+             title = std::string(build_ ? build_->title_id : ""), replace = files_ == GameFileState::kValid, kind](trg::Task& task) {
                 InstallHooks hooks;
                 hooks.replace_active = replace;
                 hooks.expected = kind;
@@ -824,11 +866,12 @@ private:
                     task.Progress(static_cast<long long>(done), static_cast<long long>(total));
                     return !task.cancelled();
                 };
-                *outcome = InstallGame(source, roots, hooks);
-                return outcome->ok() ? std::string() : std::string(DescribeInstall(*outcome).title);
+                *outcome = kind == PackageKind::kAddon ? InstallAddon(source, roots, title, hooks)
+                                                       : InstallGame(source, roots, hooks);
+                return outcome->ok() ? std::string() : (kind==PackageKind::kAddon ? DescribeAddonInstall(*outcome).title : DescribeInstall(*outcome).title);
             });
         if (started) {
-            Log("%s from %s", kind == PackageKind::kUpdate ? "installing an update" : "installing the game", picked.c_str());
+            Log("%s from %s", kind == PackageKind::kAddon ? "installing DLC" : kind == PackageKind::kUpdate ? "installing an update" : "installing the game", picked.c_str());
         }
     }
 
@@ -839,6 +882,26 @@ private:
         }
         const std::shared_ptr<InstallResult> outcome = std::move(outcome_);
         if (!outcome) {
+            return;
+        }
+        if (installing_addon_) {
+            RefreshAddonCount();
+            const auto message=DescribeAddonInstall(*outcome);
+            if (!outcome->recognition.empty()) Log("%s", outcome->recognition.c_str());
+            if (outcome->ok()) {
+                launcher_->SetStatus(message.text, 8.0);
+            } else if (outcome->status == InstallStatus::kCancelled) {
+                launcher_->SetStatus(message.title+". "+message.text, 10.0);
+                if (!outcome->detail.empty()) {
+                    install_failure_=message.title;
+                    install_failure_text_=message.text;
+                }
+            } else {
+                install_failure_ = Tr(message.title.c_str());
+                install_failure_text_ = message.text;
+                Log("DLC installation failed: %s", outcome->detail.c_str());
+                launcher_->SetStatus(install_failure_, 8.0);
+            }
             return;
         }
         const InstallMessage message = DescribeInstall(*outcome);
@@ -1205,6 +1268,8 @@ private:
     trg::Task install_;
     PackageBrowser browser_;
     PackageKind browsing_for_ = PackageKind::kBase;
+    bool installing_addon_ = false;
+    size_t addon_count_ = 0;
     std::string install_failure_;
     std::string install_failure_text_;
     bool skip_finish_save_ = false;

@@ -102,6 +102,13 @@ Install the base game first (**Install game...**), then press **Install update..
 
 A complete 1.06 package already holds the update: install it with **Install game**. Install update then refuses the official 1.06 update before changing anything ("This game already contains version 1.06"), and Remove update is not offered: there is no separate update layer.
 
+### Installing DLC
+
+On the Play page choose **Install DLC...** and select a compatible add-on package from your own copy of the game.
+European CUSA00062 DLC requires update 1.06. Close any running game before installing, then restart it to use the add-ons.
+Packages are installed separately from the base/update files and saved games. See [DLC installation](docs/LOCAL_DLC.md)
+for batch installation, validation and recovery details.
+
 ## Online Co-op
 
 Alienation's own online co-op works over the Internet for **2 to 4 players**, as on the PS4. **No PlayStation Network account is needed.**

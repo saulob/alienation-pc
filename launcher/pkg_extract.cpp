@@ -503,6 +503,11 @@ const std::string& Package::sfo() const {
 uint64_t Package::total_bytes() const {
     return impl_->total;
 }
+uint64_t Package::extracted_bytes() const {
+    uint64_t total=impl_->total;
+    for(const auto& entry:impl_->entries) if(entry.id>=kFirstMetadataEntry) total+=entry.size;
+    return total;
+}
 size_t Package::file_count() const {
     return impl_->files;
 }

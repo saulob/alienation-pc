@@ -35,6 +35,10 @@ update run on synthetic packages only and the summary says so. A .pkg in game\ i
 .PARAMETER SkipGameData
 Runs without the prepared game builds in game\prepared (the suites that read them skip those parts; the summary says so).
 
+.PARAMETER DlcPackages
+Read-only folder of the player's compatible European DLC packages (also ALN_TEST_DLC_PACKAGES). Without it the DLC
+installer runs synthetic tests only and reports the real-package part as skipped. This is separate from Packages.
+
 .PARAMETER Detail
 Shows the output of passing suites too.
 
@@ -52,6 +56,7 @@ AppImage's header.
 [CmdletBinding()]
 param(
     [string]$Packages = $env:ALN_TEST_PACKAGES,
+    [string]$DlcPackages = $env:ALN_TEST_DLC_PACKAGES,
     [switch]$SkipGameData,
     [switch]$Detail,
     [switch]$List,
@@ -88,6 +93,11 @@ Add-Suite $s 'python' 'tests\game_profile_tests.py' 'build fingerprints, regions
 Add-Suite $s 'python' 'tests\feature_parity_tests.py' 'feature matrix of the four builds against patch tables, tests and docs; Local co-op only where it exists'
 Add-Suite $s 'python' 'tests\patch_site_tests.py' 'patch sites, byte fingerprints and overlap against the real executables and stream.dat'
 Add-Exes $s @(, @('aln-image-format-tests', 'boot image and content profile contract'))
+Add-Exes $s @(, @('aln-content-tests', 'DLC enumeration, lookup, bounds, mounting and read-only files'))
+Add-Suite $s 'exe' 'aln-content-tests' 'DLC runtime with no add-ons' @{ Arguments = @('--empty'); Label = ' (no DLC)' }
+Add-Suite $s 'exe' 'aln-content-tests' 'DLC runtime at the 256 add-on limit' @{ Arguments = @('--limit'); Label = ' (256 DLC)' }
+Add-Suite $s 'exe' 'aln-content-tests' 'DLC runtime survives a full system-event queue' @{ Arguments = @('--queue-full'); Label = ' (queue full)' }
+Add-Suite $s 'exe' 'aln-addon-install-tests' 'DLC metadata, title isolation, cancellation and optional 19 real packages' @{ DlcPackages = $true }
 $scriptTests = 'build_script_tests.ps1', 'build_log_tests.ps1', 'angle_dependency_tests.ps1'
 foreach ($name in $scriptTests) { Add-Suite $s 'script' "tests\$name" 'build script, log and ANGLE dependency contracts (stand-in commands, no network)' @{ Host = $hostExe } }
 if ($pwsh -and $pwsh.Source -ne $hostExe) {
@@ -570,6 +580,16 @@ function Invoke-SuiteRun($Suite) {
                 try { return Invoke-Process $exe @() $root }
                 finally { $env:ALN_TEST_PACKAGES = $previous }
             }
+            if ($Suite.Options['DlcPackages']) {
+                if ($DlcPackages -and -not (Test-Path -LiteralPath $DlcPackages -PathType Container)) {
+                    return New-Result 1 @("DLC package folder is missing or unreadable: $DlcPackages")
+                }
+                $previousDlc = $env:ALN_TEST_DLC_PACKAGES
+                $env:ALN_TEST_DLC_PACKAGES = $DlcPackages
+                try { return Invoke-Process $exe @() $root }
+                finally { $env:ALN_TEST_DLC_PACKAGES = $previousDlc }
+            }
+            if ($Suite.Options['Arguments']) { return Invoke-Process $exe @($Suite.Options['Arguments']) $root }
             return Invoke-Process $exe @() $root
         }
         'python' {

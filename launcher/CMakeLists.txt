@@ -33,7 +33,7 @@ target_link_libraries(aln_imgui_sdl PUBLIC SDL3::SDL3)
 # needed (tests link only this).
 find_package(ZLIB REQUIRED)
 find_package(PNG REQUIRED)
-add_library(aln_launcher_core STATIC boot_image.cpp file_browser.cpp game_files.cpp game_install.cpp game_process.cpp
+add_library(aln_launcher_core STATIC addon_install.cpp boot_image.cpp file_browser.cpp game_files.cpp game_install.cpp game_process.cpp
     game_profile.cpp header_art.cpp incident_report.cpp log_scrubber.cpp report_history.cpp online_client.cpp online_settings.cpp
     online_view.cpp options.cpp page_icons.cpp paths.cpp frame_rate.c menu_buttons.c pkg_extract.cpp resolution.c settings.cpp
     controller_prompts.cpp controller_prompts_style.c controller_prompts_data.c
@@ -77,6 +77,7 @@ add_library(aln_launcher STATIC host.cpp incident_page.cpp launcher.cpp my_repor
     updater/update_ui.cpp updater/update_zip.cpp updater/version.cpp)
 set_source_files_properties(updater/third_party/miniz/miniz.c PROPERTIES COMPILE_OPTIONS "-w")
 target_compile_definitions(aln_launcher PRIVATE ALN_PORT_VERSION="${PROJECT_VERSION}")
+target_compile_definitions(aln_launcher PRIVATE ALN_LOCAL_DLC_BUILD=$<BOOL:${ALN_LOCAL_DLC_BUILD}>)
 target_include_directories(aln_launcher PRIVATE ${PROJECT_SOURCE_DIR}/gpu/shim)
 target_link_libraries(aln_launcher PUBLIC aln_launcher_core trg_launcher aln_imgui_sdl ${CMAKE_DL_LIBS})
 
@@ -109,6 +110,15 @@ endif()
 
 set_target_properties(aln_launcher_core aln_launcher PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 target_compile_options(aln_launcher_core PRIVATE -Wall -Wextra)
+add_executable(aln-addon-install-tests EXCLUDE_FROM_ALL ../tests/addon_install_tests.cpp ../src/runtime_addons.cpp)
+target_link_libraries(aln-addon-install-tests PRIVATE aln_launcher_core)
+set_target_properties(aln-addon-install-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+add_executable(aln-dlc-install EXCLUDE_FROM_ALL ../tools/dlc_install.cpp)
+target_link_libraries(aln-dlc-install PRIVATE aln_launcher_core)
+set_target_properties(aln-dlc-install PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(WIN32)
+    target_link_options(aln-dlc-install PRIVATE -municode)
+endif()
 target_compile_options(aln_launcher PRIVATE -Wall -Wextra)
 
 # Focused updater tests: versions, release JSON, SHA-256, ZIP safety, staging, jobs and rollback; no network.

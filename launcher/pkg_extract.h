@@ -53,6 +53,7 @@ public:
     const std::string& content_id() const;
     const std::string& sfo() const;
     uint64_t total_bytes() const;
+    uint64_t extracted_bytes() const; // PFS payload plus all sce_sys metadata entries
     size_t file_count() const;
 
 private:

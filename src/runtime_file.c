@@ -32,7 +32,7 @@ typedef struct stat HostStat;
 #endif
 #define ERR(n) ((int32_t)(UINT32_C(0x80020000)|(n)))
 #define MAX_FILES 1024
-#define MAX_MOUNTS 16
+#define MAX_MOUNTS 288 /* base/user/save mounts plus up to 256 local add-ons */
 
 typedef struct { int64_t sec, nsec; } GuestTimespec;
 typedef struct {
@@ -171,6 +171,8 @@ int runtime_file_overlay(const char *guest,uint64_t length,const RuntimeFilePatc
 /* Resolve a guest path to a host path; returns 0 or a host errno. */
 static int translate(const char *guest,char *out,size_t size) {
     if (!guest || !*guest) return ENOENT;
+    /* Guest paths use '/'. Backslashes and drive/stream separators could escape a mount on Windows. */
+    if (strchr(guest,'\\') || strchr(guest,':')) return EACCES;
     char buffer[1024];
     absolute_guest_path(guest,buffer,sizeof(buffer));
     for (const char *p=buffer;(p=strstr(p,".."));p+=2)
@@ -277,7 +279,8 @@ static int game_path(const char *p) {
     if (!p || !*p) return 0;
     if (*p!='/') return 1;
     return (!strncmp(p,"/app0",5) && (!p[5] || p[5]=='/')) ||
-           (!strncmp(p,"/hostapp",8) && (!p[8] || p[8]=='/'));
+           (!strncmp(p,"/hostapp",8) && (!p[8] || p[8]=='/')) ||
+           !strncmp(p,"/addcont",8);
 }
 /* All operations return >=0 or -(host errno); wrappers adapt the convention. */
 static int64_t do_open(const char *guest,int flags,int mode) {

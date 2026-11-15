@@ -41,7 +41,7 @@ enum class InstallStatus {
 };
 
 // What the player asked to install. An update and a base package are refused for each other's action.
-enum class PackageKind { kAny, kBase, kUpdate };
+enum class PackageKind { kAny, kBase, kUpdate, kAddon };
 
 struct InstallResult {
     InstallStatus status = InstallStatus::kInstalled;
