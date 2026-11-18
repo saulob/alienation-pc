@@ -26,8 +26,11 @@ unsigned long aln_thread_id(void);
 /* Copies the strings; they may be changed from any thread. */
 void aln_crash_context_set_display(int width, int height, const char *resolution, const char *aspect_ratio);
 void aln_crash_context_set_video(const char *path);
+/* The online room as the game sees it and the Matching2 callback running now; NULL or "" clears. */
+void aln_crash_context_set_online(const char *room);
+void aln_crash_context_set_online_callback(const char *callback);
 
-/* "phase=..., render 3360x1440 (1440p) 21:9, video=...": no allocation, no locks, safe in a fatal handler. */
+/* "phase=..., [online=..., ]render 3360x1440 (1440p) 21:9, video=...": no allocation, no locks, safe in a fatal handler. */
 size_t aln_crash_context_describe(char *out, size_t size);
 
 #ifdef __cplusplus

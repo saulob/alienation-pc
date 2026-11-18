@@ -252,7 +252,7 @@ static void write_text(const Text *text) {
 static void write_emergency_line(const EXCEPTION_POINTERS *info, const char *note, DWORD thread) {
     const CONTEXT *c = info->ContextRecord;
     Text text;
-    char context[320];
+    char context[512];
     text_init(&text, line, sizeof(line));
     text_str(&text, "CRASH: ");
     put_fault(&text, info->ExceptionRecord);
@@ -479,7 +479,7 @@ static int handler_reachable(const CONTEXT *start) {
 static void write_first_chance(const EXCEPTION_POINTERS *info, int reachable) {
     const EXCEPTION_RECORD *record = info->ExceptionRecord;
     const CONTEXT *c = info->ContextRecord;
-    char context[320];
+    char context[512];
     Text text;
     text_init(&text, chance_line, sizeof(chance_line));
     text_str(&text, "Diagnostics: first-chance ");

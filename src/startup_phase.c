@@ -16,6 +16,7 @@
 static const char *current_phase = "process start";
 static int display_width, display_height;
 static char display_resolution[16], display_aspect[16], video_path[160];
+static char online_room[96], online_callback[64];
 static char last_checkpoint[2][160];
 static unsigned checkpoint_count, published_checkpoint;
 
@@ -46,6 +47,14 @@ void aln_crash_context_set_display(int width, int height, const char *resolution
 
 void aln_crash_context_set_video(const char *path) {
     copy_text(video_path, sizeof(video_path), path);
+}
+
+void aln_crash_context_set_online(const char *room) {
+    copy_text(online_room, sizeof(online_room), room);
+}
+
+void aln_crash_context_set_online_callback(const char *callback) {
+    copy_text(online_callback, sizeof(online_callback), callback);
 }
 
 #define THREAD_LABELS 128
@@ -139,6 +148,14 @@ size_t aln_crash_context_describe(char *out, size_t size) {
     out[0] = 0;
     size_t at = append(out, size, 0, "phase=");
     at = append(out, size, at, aln_startup_phase_current());
+    if (online_room[0]) {
+        at = append(out, size, at, ", online=");
+        at = append(out, size, at, online_room);
+        if (online_callback[0]) {
+            at = append(out, size, at, ", in ");
+            at = append(out, size, at, online_callback);
+        }
+    }
     at = append(out, size, at, ", render ");
     at = append_number(out, size, at, display_width);
     at = append(out, size, at, "x");

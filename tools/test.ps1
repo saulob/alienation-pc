@@ -168,7 +168,7 @@ if ($pwsh -and $pwsh.Source -ne $hostExe) {
 } elseif (-not $pwsh) {
     Add-NotRun $s 'online instance script under PowerShell 7' 'PowerShell 7 (pwsh) is not installed: winget install Microsoft.PowerShell'
 }
-Add-Suite $s 'hle' 'aln-online-hle-tests' 'Matching2 rooms of 2, 3 and 4 players with a full mesh of peers, four-player invitations, launcher Accept and play, sessions, relay and DGRAM_P2P on a loopback lobby'
+Add-Suite $s 'hle' 'aln-online-hle-tests' 'Matching2 rooms of 2, 3 and 4 players with a full mesh of peers, four-player invitations, launcher Accept and play, sessions, relay and DGRAM_P2P on a loopback lobby; ALN-YB9NZA: the game joining a squad already in a mission'
 
 $s = 'Online Worker'
 Add-Suite $s 'node' 'server\lobby (npm test)' 'the whole Worker suite: protocol, friends, rooms, sessions, relay, edge and ingress abuse protection, hibernation, write budgets, diagnostics, admin data (in memory, no network)'

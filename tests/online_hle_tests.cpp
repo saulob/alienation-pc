@@ -28,6 +28,7 @@
 #include "online_view.h"
 #include "online_status.h"
 #include "runtime_online.h"
+#include "startup_phase.h"
 
 #define SYSV __attribute__((sysv_abi))
 
@@ -81,6 +82,8 @@ struct Seen {
         uint32_t count = 0, total = 0;
         std::string me_name, owner_name;
         std::vector<std::string> names;
+        std::vector<uint32_t> member_attrs; // first 4 bytes of each member's first attribute, in names order
+        std::map<uint16_t, std::vector<uint8_t>> internal;
     };
     std::vector<Request> requests;
     struct Room {
@@ -92,7 +95,14 @@ struct Seen {
     };
     std::vector<Room> rooms;
     std::vector<std::pair<uint16_t, uint16_t>> signals; // member, event
+    std::vector<std::string> signal_context;            // the crash report's context while each signal ran
 } g_seen;
+
+std::string CrashContext() {
+    char text[512];
+    aln_crash_context_describe(text, sizeof(text));
+    return text;
+}
 
 std::string NpName(const uint8_t* np_id) { return std::string(reinterpret_cast<const char*>(np_id), strnlen(reinterpret_cast<const char*>(np_id), 16)); }
 
@@ -113,11 +123,21 @@ SYSV void OnRequest(uint16_t ctx, uint32_t id, uint16_t event, int32_t error, co
         const uint8_t* me = Rd<const uint8_t*>(data, 0x18);
         r.me = Rd<uint16_t>(me, 0x38);
         r.me_name = NpName(me + 0x10);
-        for (const uint8_t* m = Rd<const uint8_t*>(data, 8); m; m = Rd<const uint8_t*>(m, 0)) r.names.push_back(NpName(m + 0x10));
+        for (const uint8_t* m = Rd<const uint8_t*>(data, 8); m; m = Rd<const uint8_t*>(m, 0)) {
+            r.names.push_back(NpName(m + 0x10));
+            const uint8_t* member_attrs = Rd<const uint8_t*>(m, 0x48);
+            const bool has_attr = member_attrs && Rd<uint64_t>(m, 0x50) && Rd<uint64_t>(member_attrs, 0x18) >= 4;
+            r.member_attrs.push_back(has_attr ? Rd<uint32_t>(Rd<const uint8_t*>(member_attrs, 0x10), 0) : 0);
+        }
         const uint8_t* attrs = Rd<const uint8_t*>(internal, 0x48);
         if (attrs && Rd<uint64_t>(internal, 0x50)) {
             const uint8_t* bytes = Rd<const uint8_t*>(attrs, 0x18);
             r.copy.assign(bytes, bytes + Rd<uint64_t>(attrs, 0x20));
+        }
+        for (uint64_t i = 0; attrs && i < Rd<uint64_t>(internal, 0x50); ++i) {
+            const uint8_t* e = attrs + i * 0x28;
+            const uint8_t* bytes = Rd<const uint8_t*>(e, 0x18);
+            r.internal[Rd<uint16_t>(e, 0x10)].assign(bytes, bytes + Rd<uint64_t>(e, 0x20));
         }
     }
     if (data && !error && event == 0x0002) {
@@ -164,6 +184,7 @@ SYSV void OnRoom(uint16_t ctx, uint64_t room, uint16_t event, const void* data, 
 SYSV void OnSignal(uint16_t ctx, uint64_t room, uint16_t member, uint16_t event, int32_t error, void* arg) {
     (void)ctx, (void)room, (void)error, (void)arg;
     g_seen.signals.push_back({member, event});
+    g_seen.signal_context.push_back(CrashContext());
 }
 
 bool PumpUntil(const std::function<bool()>& done, int timeout_ms = 8000) {
@@ -1034,19 +1055,25 @@ struct MeshNode {
     }
     bool ok() const { return socket && !player.code.empty(); }
 
-    std::string Join(uint64_t room) {
+    std::string Join(uint64_t room, const net::Json& member_bin = net::Json::Array()) {
         net::Json body = net::Json::Object();
         body.set("room", net::u64_text(room));
+        body.set("member_bin", member_bin);
         std::string code;
         const net::Json joined = player.Call("room.join", body, &code);
         if (code != "ok") return code;
-        seat = int(joined["me"].as_int());
+        Seat(joined);
+        return code;
+    }
+
+    // The answer of room.create or room.join: our seat and the room's key.
+    void Seat(const net::Json& answer) {
+        seat = int(answer["me"].as_int());
         net::RoomKey key{};
         std::vector<uint8_t> bytes;
-        net::hex_decode(joined["room"]["key"].as_string(), bytes);
+        net::hex_decode(answer["room"]["key"].as_string(), bytes);
         if (bytes.size() == key.size()) std::memcpy(key.data(), bytes.data(), key.size());
         socket->set_room(key, player.id.account);
-        return code;
     }
 
     void Leave(uint64_t room) {
@@ -1107,7 +1134,7 @@ bool Pump(Mesh& nodes, const std::function<bool()>& done, int timeout_ms = 15000
 
 // Every pair of the room's players has a working link: the game with each guest through its DGRAM_P2P socket (signaling
 // established, a datagram each way attributed to the right member) and each two guests directly. Returns the pairs checked.
-size_t VerifyMesh(Mesh& nodes, uint16_t ctx, uint64_t room, int32_t sock) {
+size_t VerifyMesh(Mesh& nodes, uint16_t ctx, uint64_t room, int32_t sock, int game = 0x10) {
     size_t pairs = 0;
     for (auto& node : nodes) {
         int32_t status = 0;
@@ -1115,7 +1142,7 @@ size_t VerifyMesh(Mesh& nodes, uint16_t ctx, uint64_t room, int32_t sock) {
         uint16_t port = 0;
         const auto linked = [&] {
             return Fn<Status>("sceNpMatching2SignalingGetConnectionStatus")(ctx, room, uint16_t(node->seat), &status, &ip, &port) == 0 &&
-                   status == 2 && node->Connected(0x10);
+                   status == 2 && node->Connected(game);
         };
         CHECK(Pump(nodes, linked));
         uint8_t to[16];
@@ -1123,10 +1150,10 @@ size_t VerifyMesh(Mesh& nodes, uint16_t ctx, uint64_t room, int32_t sock) {
         const std::string down = "game to seat " + std::to_string(node->seat);
         CHECK(Fn<SendTo>("sceNetSendto")(sock, down.data(), down.size(), 0, to, 16) == int64_t(down.size()));
         std::vector<uint8_t> got;
-        CHECK(Pump(nodes, [&] { return node->socket->receive(node->links[0x10], got); }));
+        CHECK(Pump(nodes, [&] { return node->socket->receive(node->links[game], got); }));
         CHECK(std::string(got.begin(), got.end()) == down);
         const std::string up = "seat " + std::to_string(node->seat) + " to game";
-        CHECK(node->socket->send(node->links[0x10], up.data(), up.size()));
+        CHECK(node->socket->send(node->links[game], up.data(), up.size()));
         uint8_t buffer[0x1800], from[16];
         uint32_t from_size = 16;
         int64_t read = -1;
@@ -1254,6 +1281,101 @@ void RoomOfSize(int players, const char* url, const fs::path& base, uint16_t ctx
 
     for (auto& node : nodes) node->Leave(room);
     LeaveAsGame(ctx, opt, room);
+}
+
+net::Json Attrs(uint16_t id, const std::vector<uint8_t>& bytes) {
+    net::Json pair = net::Json::Array();
+    pair.push(int64_t(id));
+    pair.push(net::hex_encode(bytes.data(), bytes.size()));
+    net::Json list = net::Json::Array();
+    list.push(std::move(pair));
+    return list;
+}
+
+size_t SignalsOf(size_t from, uint16_t member, uint16_t event) {
+    size_t n = 0;
+    for (size_t i = from; i < g_seen.signals.size(); ++i) n += g_seen.signals[i] == std::make_pair(member, event);
+    return n;
+}
+
+// ALN-YB9NZA: the game joins a friend's squad that is already in a mission. The host and its guest are linked to each
+// other, carry member attributes and the host changed the room's internal data after creating it. The joiner must get
+// that current room in the JoinRoom answer, no "member joined" for players who were already there, exactly one
+// "established" per existing member, datagrams attributed to the right member, a refused second JoinRoom that leaves the
+// seat intact, a clean leave, and a second session afterwards. The crash report names the room and the callback.
+void LateJoin(const char* url, const fs::path& base, uint16_t ctx, void* const* opt, int32_t sock) {
+    Mesh nodes;
+    nodes.push_back(std::make_unique<MeshNode>(url, base / "late-host", "LateHost"));
+    nodes.push_back(std::make_unique<MeshNode>(url, base / "late-guest", "LateGuest"));
+    MeshNode& host = *nodes[0];
+    MeshNode& guest = *nodes[1];
+    CHECK(host.ok() && guest.ok());
+    if (!host.ok() || !guest.ok()) return;
+
+    const std::vector<uint8_t> compat = {1}, host_class = {4, 3, 2, 1}, guest_class = {0xd, 0xc, 0xb, 0xa};
+    net::Json create = net::Json::Object();
+    create.set("world", 1);
+    create.set("slots", 4);
+    create.set("flags", int64_t(kPublic));
+    create.set("bin_int", Attrs(0x57, compat));
+    create.set("member_bin", Attrs(0x59, host_class));
+    std::string code;
+    const net::Json made = host.player.Call("room.create", create, &code);
+    CHECK(code == "ok");
+    if (code != "ok") return;
+    host.Seat(made);
+    const uint64_t room = made["room"]["id"].as_u64();
+    CHECK(guest.Join(room, Attrs(0x59, guest_class)) == "ok" && guest.seat == 0x20);
+    CHECK(Pump(nodes, [&] { return host.Connected(0x20) && guest.Connected(0x10); }));
+
+    std::vector<uint8_t> mission(0xc0);
+    for (size_t i = 0; i < mission.size(); ++i) mission[i] = uint8_t(0x80 ^ i);
+    net::Json running = net::Json::Object();
+    running.set("room", net::u64_text(room));
+    running.set("bin_int", Attrs(0x58, mission));
+    host.player.Call("room.set_internal", running, &code);
+    CHECK(code == "ok");
+
+    for (int session = 1; session <= 2; ++session) {
+        const size_t rooms_before = g_seen.rooms.size(), signals_before = g_seen.signals.size();
+        const Seen::Request* joined = JoinAsGame(ctx, opt, room);
+        CHECK(joined && joined->error == 0 && joined->me == 0x30 && joined->slots == 4);
+        if (!joined || joined->error) return;
+        CHECK(joined->names == std::vector<std::string>({"LateHost", "LateGuest", "Alpha"}));
+        CHECK(joined->member_attrs.size() == 3 && joined->member_attrs[0] == 0x01020304 && joined->member_attrs[1] == 0x0a0b0c0d);
+        CHECK(joined->internal.count(0x57) && joined->internal.at(0x57) == compat);
+        CHECK(joined->internal.count(0x58) && joined->internal.at(0x58) == mission);
+        const std::string seated = "online=room " + std::to_string(room) + " as 0x30, owner 0x10, 3 of 4 seats";
+        CHECK(CrashContext().find(seated) != std::string::npos);
+
+        CHECK(VerifyMesh(nodes, ctx, room, sock, 0x30) == 3);
+        CHECK(Pump(nodes, [&] { return SignalsOf(signals_before, 0x10, 0x5102) && SignalsOf(signals_before, 0x20, 0x5102); }));
+        CHECK(SignalsOf(signals_before, 0x10, 0x5102) == 1 && SignalsOf(signals_before, 0x20, 0x5102) == 1);
+        for (size_t i = signals_before; i < g_seen.signals.size(); ++i) {
+            const std::string callback = "in Matching2 signaling 0x5102 member 0x" + std::string(g_seen.signals[i].first == 0x10 ? "10" : "20");
+            CHECK(g_seen.signal_context[i].find(seated) != std::string::npos);
+            CHECK(g_seen.signal_context[i].find(callback) != std::string::npos);
+        }
+        CHECK(CrashContext().find(seated + ", 2 peers linked, render") != std::string::npos);
+        CHECK(!SawRoomEvent(rooms_before, 0x1101, 0x10) && !SawRoomEvent(rooms_before, 0x1101, 0x20));
+
+        const Seen::Request* again = JoinAsGame(ctx, opt, room);
+        CHECK(again && again->error != 0);
+        int32_t status = 0;
+        uint32_t ip = 0;
+        uint16_t port = 0;
+        for (uint16_t member : {uint16_t(0x10), uint16_t(0x20)})
+            CHECK(Fn<Status>("sceNpMatching2SignalingGetConnectionStatus")(ctx, room, member, &status, &ip, &port) == 0 && status == 2);
+        CHECK(CrashContext().find(seated + ", 2 peers linked") != std::string::npos);
+
+        LeaveAsGame(ctx, opt, room);
+        CHECK(CrashContext().find("online=") == std::string::npos);
+        CHECK(Fn<Status>("sceNpMatching2SignalingGetConnectionStatus")(ctx, room, 0x10, &status, &ip, &port) != 0);
+        CHECK(Pump(nodes, [&] { return !host.links.count(0x30) && !guest.links.count(0x30); }));
+        std::printf("online-hle: ALN-YB9NZA late join, session %d: running squad joined, 3 peer pairs linked, duplicate join refused, left\n",
+                    session);
+    }
+    for (auto& node : nodes) node->Leave(room);
 }
 
 // The launcher while no game runs: the squad invitation arrives at the launcher's lobby link, Accept and play leaves the
@@ -1707,6 +1829,7 @@ int main() {
     Invites(url, base, ctx, opt);
     const int32_t web = Fn<WebContext>("sceNpWebApiCreateContext")(Fn<WebInit>("sceNpWebApiInitialize")(1, 0x20000), g_settings.online_id.c_str());
     for (int players = 2; players <= 4; ++players) RoomOfSize(players, url, base, ctx, opt, sock, web);
+    LateJoin(url, base, ctx, opt, sock);
 
     // Shutdown in the game's order: abort, shutdown, close; then the context stops.
     CHECK(Fn<Abort>("sceNetSocketAbort")(sock, 0) == 0);

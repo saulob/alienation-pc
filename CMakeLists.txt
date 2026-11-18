@@ -446,7 +446,7 @@ add_executable(aln-online-hle-tests EXCLUDE_FROM_ALL tests/online_hle_tests.cpp 
 target_include_directories(aln-online-hle-tests PRIVATE src launcher)
 set_target_properties(aln-online-hle-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 target_compile_options(aln-online-hle-tests PRIVATE -Wall -Wextra)
-target_link_libraries(aln-online-hle-tests PRIVATE aln_net)
+target_link_libraries(aln-online-hle-tests PRIVATE aln_net aln_startup_phase)
 # Local co-op input: SDL3 virtual gamepads through libScePad and libSceUserService; no window, no physical controller.
 add_executable(aln-local-pad-tests EXCLUDE_FROM_ALL tests/local_pad_tests.c src/runtime_pad.c src/runtime_users.c)
 target_include_directories(aln-local-pad-tests PRIVATE src)

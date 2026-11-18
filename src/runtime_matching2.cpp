@@ -29,6 +29,7 @@
 #include "net/relay_frame.h"
 #include "online_status.h"
 #include "runtime_online.h"
+#include "startup_phase.h"
 
 #define ALN_SYSV __attribute__((sysv_abi))
 
@@ -153,7 +154,7 @@ struct State {
     bool lobby_on_lan = false;
     uint32_t next_request = 1;
     std::map<uint32_t, Pending> pending;
-    std::vector<std::function<void()>> calls;
+    std::vector<std::pair<std::string, std::function<void()>>> calls; // crash report label, game callback
     // the room we are in
     uint64_t room = 0;
     uint16_t me = 0, owner = 0, slots = 0;
@@ -403,6 +404,27 @@ void ApplyPeers() {
     ConfigureRelay();
 }
 
+// The room for the crash report. Caller holds g_mutex.
+void NoteRoom() {
+    if (!g.room) {
+        aln_crash_context_set_online(nullptr);
+        return;
+    }
+    size_t linked = 0;
+    for (const auto& [member, s] : g.signals) linked += s.established;
+    char text[96];
+    std::snprintf(text, sizeof(text), "room %llu as 0x%x, owner 0x%x, %zu of %u seats, %zu peers linked",
+                  (unsigned long long)g.room, g.me, g.owner, g.members.size(), g.slots, linked);
+    aln_crash_context_set_online(text);
+}
+
+std::string Label(const char* what, uint16_t event, int member = -1) {
+    char text[64];
+    if (member < 0) std::snprintf(text, sizeof(text), "Matching2 %s 0x%04x", what, event);
+    else std::snprintf(text, sizeof(text), "Matching2 %s 0x%04x member 0x%x", what, event, member);
+    return text;
+}
+
 void ClearRoom() {
     if (const std::shared_ptr<net::PeerSocket> socket = g.socket.lock()) {
         for (const auto& [member, s] : g.signals) socket->forget_peer(s.account);
@@ -414,6 +436,7 @@ void ClearRoom() {
     g.members.clear();
     g.signals.clear();
     g.last_external.clear();
+    NoteRoom();
 }
 
 // The room from a create or join answer; also becomes our room. Caller holds g_mutex.
@@ -457,6 +480,7 @@ uint8_t* JoinResponse(Block& b, const Json& body) {
     Wr<uint8_t*>(response, 0x18, me);
     Wr<uint8_t*>(response, 0x20, owner);
     ApplyPeers();
+    NoteRoom();
     return response;
 }
 
@@ -545,7 +569,7 @@ void Complete(const Pending& p, int32_t error, std::shared_ptr<Block> block = nu
     void* arg = p.arg;
     const uint32_t request = p.request;
     const uint16_t event = p.event;
-    g.calls.push_back([=] {
+    g.calls.emplace_back(Label("request", event), [=] {
         cb(kContextId, request, event, error, data, arg);
         (void)block;
     });
@@ -581,7 +605,8 @@ void PushRoomEvent(uint16_t event, std::shared_ptr<Block> block, const uint8_t* 
     const RoomCallback cb = g.room_cb;
     void* arg = g.room_arg;
     const uint64_t room = g.room;
-    g.calls.push_back([=] {
+    const bool member_event = data && (event == kRoomMemberJoined || event == kRoomMemberLeft);
+    g.calls.emplace_back(Label("room event", event, member_event ? Rd<uint16_t>(Rd<const uint8_t*>(data, 0), 0x38) : -1), [=] {
         cb(kContextId, room, event, data, arg);
         (void)block;
     });
@@ -591,7 +616,7 @@ void PushContextEvent(uint16_t event, int32_t error) {
     if (!g.context_cb) return;
     const ContextCallback cb = g.context_cb;
     void* arg = g.context_arg;
-    g.calls.push_back([=] { cb(kContextId, event, 0, error, arg); });
+    g.calls.emplace_back(Label("context event", event), [=] { cb(kContextId, event, 0, error, arg); });
 }
 
 void PushSignal(uint16_t member, uint16_t event) {
@@ -599,7 +624,7 @@ void PushSignal(uint16_t member, uint16_t event) {
     const SignalingCallback cb = g.signal_cb;
     void* arg = g.signal_arg;
     const uint64_t room = g.room;
-    g.calls.push_back([=] { cb(kContextId, room, member, event, 0, arg); });
+    g.calls.emplace_back(Label("signaling", event, member), [=] { cb(kContextId, room, member, event, 0, arg); });
 }
 
 // Kicked or destroyed: {event cause u8 @0}.
@@ -736,6 +761,7 @@ void MemberGone(uint16_t id) {
     g.signals.erase(it);
     p2p_forget_member(id);
     if (established) PushSignal(id, kSignalDead);
+    NoteRoom();
 }
 
 void OnEvent(const net::LobbyMessage& m) {
@@ -756,6 +782,7 @@ void OnEvent(const net::LobbyMessage& m) {
         const Member joined = MemberOf(b["member"]);
         g.members[joined.id] = joined;
         std::printf("Matching2: member 0x%x joined\n", joined.id);
+        NoteRoom();
         uint8_t* data = block->alloc(0x10);
         Wr<uint8_t*>(data, 0, MemberStruct(*block, joined));
         PushRoomEvent(kRoomMemberJoined, block, data);
@@ -766,6 +793,7 @@ void OnEvent(const net::LobbyMessage& m) {
         if (g.members.count(id)) left = g.members[id];
         g.members.erase(id);
         MemberGone(id);
+        NoteRoom();
         std::printf("Matching2: member 0x%x left (%s)\n", id, b["why"].as_string().c_str());
         uint8_t* data = block->alloc(0x10);
         Wr<uint8_t*>(data, 0, MemberStruct(*block, left));
@@ -773,6 +801,7 @@ void OnEvent(const net::LobbyMessage& m) {
     } else if (m.event == "room.owner") {
         g.owner = uint16_t(b["to"].as_int());
         std::printf("Matching2: room owner 0x%llx -> 0x%x\n", (unsigned long long)b["from"].as_int(), g.owner);
+        NoteRoom();
     } else if (m.event == "room.kicked" || m.event == "room.gone") {
         std::printf("Matching2: %s\n", m.event == "room.kicked" ? "kicked from the room" : "the room was closed");
         RoomGone(m.event == "room.kicked" ? kRoomKicked : kRoomDestroyed, m.event == "room.kicked" ? kCauseKicked : kCauseServer);
@@ -912,6 +941,7 @@ void LinkMembers(uint64_t now) {
             s.established = true;
             std::printf("Matching2: member 0x%x established at %s\n", member, net::endpoint_text(peer_endpoint(member)).c_str());
             PushSignal(member, kSignalEstablished);
+            NoteRoom();
         }
     }
 }
@@ -1348,7 +1378,7 @@ void pump() {
     std::unique_lock<std::mutex> serial(g_pumping, std::try_to_lock);
     if (!serial.owns_lock()) return;
     t_pumping = true;
-    std::vector<std::function<void()>> calls;
+    std::vector<std::pair<std::string, std::function<void()>>> calls;
     {
         std::lock_guard<std::mutex> lock(g_mutex);
         HandleLobbyMessages();
@@ -1361,7 +1391,11 @@ void pump() {
         LinkMembers(now);
         calls.swap(g.calls);
     }
-    for (auto& call : calls) call();
+    for (auto& [label, call] : calls) {
+        aln_crash_context_set_online_callback(label.c_str());
+        call();
+        aln_crash_context_set_online_callback(nullptr);
+    }
     sessions_pump();
     t_pumping = false;
 }
