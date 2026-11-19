@@ -18,6 +18,7 @@
 #include "aln_menu_buttons.h"
 #include "aln_resolution.h"
 #include "skip_intro.h"
+#include "stepper_diag.h"
 #include "exit_game.h"
 #include "online_status.h"
 #include "exit_game_stream.h"
@@ -785,7 +786,8 @@ int main(int argc, char **argv) {
     const size_t skip_intro_bytes = known_build && skip_intro_requested ? skip_intro_stub_bytes() : 0;
     const size_t exit_game_bytes = known_build ? exit_game_stub_bytes() : 0;
     const size_t status_bytes = known_build ? online_status_stub_bytes() : 0;
-    const size_t all_hook_bytes = skip_intro_bytes + exit_game_bytes + status_bytes;
+    const size_t stepper_bytes = known_build ? stepper_diag_stub_bytes() : 0;
+    const size_t all_hook_bytes = skip_intro_bytes + exit_game_bytes + status_bytes + stepper_bytes;
     const size_t hook_bytes = all_hook_bytes ? round_page(all_hook_bytes) : 0;
     /* The hook stubs follow the image, within a jump of it. */
     image = allocate(round_page(size) + hook_bytes);
@@ -934,6 +936,11 @@ int main(int argc, char **argv) {
     if (known_build)
         install_scripts(app0,build_key,image,size,image+round_page(size)+skip_intro_bytes,exit_game_bytes,
                         image+round_page(size)+skip_intro_bytes+exit_game_bytes,status_bytes);
+    if (known_build)
+        stepper_diag_install(image,size,build_key,game_build.label,
+                             image+round_page(size)+skip_intro_bytes+exit_game_bytes+status_bytes,stepper_bytes);
+    else
+        puts("Issue5Diag: stepper unavailable for an unknown game build: not a supported build");
     printf("Display: render resolution %dx%d (%s), aspect ratio %s\n",render_target.width,render_target.height,
            render_resolution->key,aspect_ratio->name);
     const AlnRunSettings run_settings={known_build ? game_build.label : NULL,render_target.width,render_target.height,

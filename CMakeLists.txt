@@ -110,7 +110,8 @@ set(ALN_RUNTIME_SOURCES
     src/runtime_users.c
     src/runtime_webapi.cpp
     src/online_status.c
-    src/skip_intro.c)
+    src/skip_intro.c
+    src/stepper_diag.c)
 # The built-in system fonts are assembled into runtime_font.c (.incbin): rebuild it when a font changes.
 set(ALN_NOTO_SANS ${CMAKE_SOURCE_DIR}/third_party/fonts/NotoSans-Regular.ttf)
 set(ALN_NOTO_SANS_TC ${CMAKE_SOURCE_DIR}/third_party/fonts/NotoSansTC-Regular.otf)
@@ -223,6 +224,11 @@ target_compile_options(aln-menu-buttons-tests PRIVATE -Wall -Wextra -Werror)
 add_executable(aln-skip-intro-tests EXCLUDE_FROM_ALL tests/skip_intro_tests.c src/skip_intro.c src/guest_hook.c)
 target_include_directories(aln-skip-intro-tests PRIVATE src)
 target_compile_options(aln-skip-intro-tests PRIVATE -Wall -Wextra -Werror)
+
+# Focused tests of the Issue5Diag stepper sites, hook and accounting (tools/test.ps1); not part of the default build.
+add_executable(aln-stepper-diag-tests EXCLUDE_FROM_ALL tests/stepper_diag_tests.c src/stepper_diag.c src/guest_hook.c)
+target_include_directories(aln-stepper-diag-tests PRIVATE src)
+target_compile_options(aln-stepper-diag-tests PRIVATE -Wall -Wextra -Werror)
 
 # Focused tests of the Exit Game bytecode patch, hook site checks and row text (tools/test.ps1, tools/build.sh --test);
 # not part of the default build.
@@ -417,9 +423,9 @@ target_compile_options(aln-present-tests PRIVATE -Wall -Wextra -Werror)
 
 # Focused tests of the Frame rate setting and the game's flip-paced timing under it (tools/test.ps1); not part of the
 # default build.
-add_executable(aln-frame-pacing-tests EXCLUDE_FROM_ALL tests/frame_pacing_tests.cpp)
+add_executable(aln-frame-pacing-tests EXCLUDE_FROM_ALL tests/frame_pacing_tests.cpp src/stepper_diag.c src/guest_hook.c)
 set_target_properties(aln-frame-pacing-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
-target_include_directories(aln-frame-pacing-tests PRIVATE gpu/shim)
+target_include_directories(aln-frame-pacing-tests PRIVATE gpu/shim src)
 target_compile_definitions(aln-frame-pacing-tests PRIVATE ALN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_compile_options(aln-frame-pacing-tests PRIVATE -Wall -Wextra -Werror)
 

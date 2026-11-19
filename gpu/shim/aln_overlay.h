@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 #include "common/types.h"
+#include "aln_frame_report.h"
 #include "aln_png.h"
 #include "video_core/renderer_vulkan/vk_common.h"
 
@@ -37,10 +38,14 @@ void ShowNotice(const std::string& text);
 /// Whether anything is drawn this frame.
 bool Visible();
 
-/// Counts a presented game frame (the frame rate in the window title); `repeat`: the last frame shown again.
+/// Counts a present to the window; `repeat`: the last frame shown again.
 void LogPresent(bool repeat = false);
 u64 PresentedFrames();
 u64 RepeatedFrames();
+/// Vblank thread: counts a flip of the game's, shown or not (the game's own frame rate).
+void LogGuestFlip();
+/// The game's flips, the presents and the repeats so far.
+AlnFrameReport::Counters FrameCounters();
 
 /// Present thread: draws into `view` (layout ColorAttachmentOptimal).
 void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent);

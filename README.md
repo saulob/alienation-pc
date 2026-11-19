@@ -62,7 +62,7 @@ Release notes, including known issues: [docs/releases](docs/releases).
 
 The **Frame rate** option (Gameplay page) offers 30, 60 (Original, default), 90, 120, 144, 165, 240 or Unlimited frames per second reaching the window.
 
-60 is the original game rate and stays the simulation rate: the game makes 60 new frames a second at its original speed whatever the setting, so gameplay, online play and local co-op never change. 30 shows every second frame. Faster rates **repeat the latest game frame** until the next one: there is **no interpolation**, and the game does not simulate at 120 Hz or above. Repeats go up to the display's refresh with VSync on and up to 480 a second for Unlimited. The window title shows every presentation, with the game's new frames in brackets while frames are repeated: `FPS: 144.00 (game 60.00)`.
+60 is the original game rate and stays the simulation rate: the game makes 60 new frames a second at its original speed whatever the setting, so gameplay, online play and local co-op never change. 30 shows every second frame. Faster rates **repeat the latest game frame** until the next one: there is **no interpolation**, and the game does not simulate at 120 Hz or above. Repeats never go beyond the display's refresh, where a repeated image can no longer be seen (480 a second for Unlimited when the refresh is unknown). The window title and the frame counter show the game's own frame rate, with the presented rate in brackets when it differs: `FPS: 60.00 (presented 144.00)`. An overlay that counts presents (MangoHud, Steam) counts the repeats too, so its number is not the game's frame rate.
 
 ## Download and install
 

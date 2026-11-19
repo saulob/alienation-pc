@@ -86,7 +86,7 @@ $s = 'Build and parity'
 Add-Suite $s 'check' 'prepared game builds' 'game\prepared holds the three supported builds the static suites read' @{ Run = 'Test-GameData' }
 Add-Suite $s 'python' 'tests\game_profile_tests.py' 'build fingerprints, regions, complete package alias, save and online identity: launcher and script tables agree'
 Add-Suite $s 'python' 'tests\feature_parity_tests.py' 'feature matrix of the four builds against patch tables, tests and docs; Local co-op only where it exists'
-Add-Suite $s 'python' 'tests\patch_site_tests.py' 'patch sites, byte fingerprints and overlap against the real executables and stream.dat'
+Add-Suite $s 'python' 'tests\patch_site_tests.py' 'patch sites, byte fingerprints and overlap against the real executables and stream.dat; Issue #5: the Issue5Diag stepper, hook, state object and its upd/skip debug text in every build'
 Add-Exes $s @(, @('aln-image-format-tests', 'boot image and content profile contract'))
 $scriptTests = 'build_script_tests.ps1', 'build_log_tests.ps1', 'angle_dependency_tests.ps1'
 foreach ($name in $scriptTests) { Add-Suite $s 'script' "tests\$name" 'build script, log and ANGLE dependency contracts (stand-in commands, no network)' @{ Host = $hostExe } }
@@ -134,7 +134,7 @@ Add-Exes $s @(
     , @('aln-cursor-tests', 'cursor visibility')
     , @('aln-window-tests', 'window fit')
     , @('aln-present-tests', 'presentation')
-    , @('aln-frame-pacing-tests', 'Frame rate: presentation pacing, game speed and network work equal at every rate; ALN-U3T5UQ: under Gamescope presents never outpace the display (60, 90, 120 Hz), no repeat backlog')
+    , @('aln-frame-pacing-tests', 'Frame rate: presentation pacing, game speed and network work equal at every rate; ALN-U3T5UQ: under Gamescope presents never outpace the display (60, 90, 120 Hz), no repeat backlog; Issue #5: a 34 FPS game shows ~17 at 30, 34 at 60, its 34 frames plus repeats at Unlimited, repeats capped at a known refresh (60 to 360 Hz) in every present mode with no guest flip dropped, 30 completes all 60 flips, frame counter and title show the game FPS before the presented rate, slow motion only from a step slower than 1/59.94, once-a-minute log line; Issue5Diag through the real accounting: 59.94 steps 100%, 30 slow steps 50%, 34 slow steps 56.7%, 60 FPS with Unlimited repeats 100%, no setting, display or Frame rate change alters it, dropped steps only from slow steps, first line at 60 s and ten in ten minutes')
 )
 Add-Suite $s 'python' 'tests\display_aspect_tests.py' 'display size, aspect and ultrawide sites against the real executables'
 
@@ -150,6 +150,7 @@ Add-Suite $s 'python' 'tools\prompts\verify_prompts.py' 'generated controller ar
 $s = 'Game patches'
 Add-Exes $s @(
     , @('aln-skip-intro-tests', 'Skip Intro: hook sites, state logic, input contract, startup video')
+    , @('aln-stepper-diag-tests', 'Issue #5 Issue5Diag: stepper sites of the three builds from the production fingerprints, another build''s offsets and changed code refused, unsupported build writes nothing, the hook only reads steps (+4), skips (+8), the stepper milliseconds and the step, dropped steps only from skips, bad values rejected, each report empties the window')
     , @('aln-exit-game-tests', 'Exit Game: bytecode patch, hook sites, localized rows')
     , @('aln-exit-game-menu-tests', 'Exit Game rows in the real menus of each prepared build')
     , @('aln-text-fix-tests', 'ASIA/KR Portuguese Voice-Over Language text fix')

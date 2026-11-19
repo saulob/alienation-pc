@@ -204,7 +204,7 @@ void WindowSDL::RefreshTitle() {
         .height = settings.image_height,
         .show_fps = settings.show_fps_title,
         .fps = fps,
-        .game_fps = game_fps,
+        .presented_fps = presented_fps,
         .entry = entry,
     });
     if (title != title_shown) {
@@ -220,33 +220,29 @@ void WindowSDL::UpdateDisplayRefresh() {
     }
 }
 
-// Presentations per second, measured about once a second; while the Frame rate repeats frames, also the game's new
-// frames among them.
+// The game's frames and the presents per second, measured about once a second.
 void WindowSDL::UpdateFpsTitle() {
     if (!AlnSettings::Get().show_fps_title) {
         fps = -1.0;
-        game_fps = -1.0;
+        presented_fps = -1.0;
         return;
     }
     const auto now = std::chrono::steady_clock::now();
+    const AlnFrameReport::Counters counters = AlnOverlay::FrameCounters();
     if (fps_started == std::chrono::steady_clock::time_point{}) {
         fps_started = now;
-        fps_frames = AlnOverlay::PresentedFrames();
-        fps_repeats = AlnOverlay::RepeatedFrames();
+        fps_counters = counters;
         return;
     }
     const double elapsed = std::chrono::duration<double>(now - fps_started).count();
     if (elapsed < 1.0) {
         return;
     }
-    const u64 frames = AlnOverlay::PresentedFrames(), repeats = AlnOverlay::RepeatedFrames();
-    fps = double(frames - fps_frames) / elapsed;
-    game_fps = AlnSettings::Get().repeat_cadence_hz.load() != 0
-                   ? std::max(0.0, double(frames - fps_frames) - double(repeats - fps_repeats)) / elapsed
-                   : -1.0;
+    const AlnFrameReport::Rates rates = AlnFrameReport::RatesBetween(fps_counters, counters, elapsed);
+    fps = rates.game_fps;
+    presented_fps = rates.presented_fps;
     fps_started = now;
-    fps_frames = frames;
-    fps_repeats = repeats;
+    fps_counters = counters;
 }
 
 // F11: Windowed and Borderless, saved as the Display mode like the launcher's row.

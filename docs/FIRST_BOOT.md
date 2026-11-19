@@ -127,14 +127,20 @@ The Frame rate setting (`frame_rate`: 30, 60, 90, 120, 144, 165, 240, 0 for Unli
 only and changes nothing in the game: the guest vblank stays 60 Hz and every flip is taken and completed on time. 30
 shows every second flip (a game already flipping every second vblank is shown whole). Above 60 the present thread shows
 the last frame again on the slots of the target rate that fall before the next vblank (`gpu/shim/aln_frame_pacing.h`):
-the game still makes 60 new frames a second, so there is no interpolation and motion is as smooth as at 60. VSync bounds
-the repeats to the display's refresh (a display at 60 Hz has nothing to repeat), Unlimited repeats up to 480 a second,
-and it applies at start and
-when changed in the Options menu. The log line is
+the game still makes 60 new frames a second, so there is no interpolation and motion is as smooth as at 60. A repeat is
+the same image again, so in any present mode no more than one a refresh can be seen: the display's refresh bounds the
+repeats with VSync on or off (a display at 60 Hz has nothing to repeat), and Unlimited repeats up to 480 a second only
+when the refresh is unknown. It applies at start and when changed in the Options menu. The log line is
 `VideoOut: vblank 60 Hz, frame rate 144, repeat cadence 144 FPS, VSync on, display 144.00 Hz`.
 
-Frame rate in title counts every presentation; while frames are repeated the game's new frames follow in brackets
-(`FPS: 144.00 (game 60.00)`). The frame counter (F2) shows the presentation rate and interval.
+Frame rate in title and the frame counter (F2) show the game's own frames (guest flips) a second; the presented rate
+follows when it differs (`FPS: 60.00 (presented 144.00)`, `60 FPS  16.7 ms  (30 presented)`). Overlays that count
+presents (MangoHud, the Steam overlay) count repeats too. Once a minute while the game flips, the log has
+`Frame rate: game 34.0 FPS; presented 120.0 a second (34.0 new, 86.0 repeats); GPU command thread: CPU ..%, idle ..%,
+waiting for the GPU ..%, ...` (`ALN_FRAME_STATS=1` replaces it with its 5 second detail). The next line reads the
+stepper itself (`src/stepper_diag.c`): `Issue5Diag: game steps 34.0/s, target 59.94/s, game speed 56.7%, dropped 1560
+steps in 1560 of 2040 frames, ...`. Game speed is the steps run of all the steps the engine's clock advanced by; a
+dropped step is lag the stepper discarded after a step slower than real time or its step limit.
 
 Known, not caused by the setting: the guest vblank is 60.000 Hz and the step `1 / 59.94`, so the stepper's clock runs
 0.1% ahead of the wall clock (about 3.6 s an hour). While that lead lasts, a stretch the host renders below 60 is not

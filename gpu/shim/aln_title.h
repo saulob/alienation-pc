@@ -2,6 +2,7 @@
 // The game window's title: the game's title, then the render resolution and the frame rate when they are shown.
 #pragma once
 
+#include <cmath>
 #include <cstdio>
 #include <string>
 #include <string_view>
@@ -13,9 +14,9 @@ struct Content {
     bool show_resolution = false;
     int width = 0, height = 0; ///< the render resolution; 0 until a frame is presented
     bool show_fps = false;
-    double fps = -1.0;      ///< presentations per second; negative until measured
-    double game_fps = -1.0; ///< the game's new frames per second, shown only while frames are repeated
-    std::string_view entry{}; ///< text being typed; it takes the place of the frame rate
+    double fps = -1.0;           ///< the game's own frames (flips) per second; negative until measured
+    double presented_fps = -1.0; ///< presents per second, repeats included; shown only when it differs
+    std::string_view entry{};    ///< text being typed; it takes the place of the frame rate
 };
 
 inline std::string Compose(const Content& content) {
@@ -29,9 +30,9 @@ inline std::string Compose(const Content& content) {
         char digits[32];
         std::snprintf(digits, sizeof(digits), "%.2f", content.fps);
         title += std::string(" | FPS: ") + digits;
-        if (content.game_fps >= 0.0) {
-            std::snprintf(digits, sizeof(digits), "%.2f", content.game_fps);
-            title += std::string(" (game ") + digits + ")";
+        if (content.presented_fps >= 0.0 && std::abs(content.presented_fps - content.fps) >= 1.0) {
+            std::snprintf(digits, sizeof(digits), "%.2f", content.presented_fps);
+            title += std::string(" (presented ") + digits + ")";
         }
     }
     return title;

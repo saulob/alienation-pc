@@ -49,7 +49,6 @@ struct Values {
     // cadence the present thread runs (0: none).
     std::atomic<int> frame_rate{60};
     std::atomic<double> display_refresh_hz{0.0};
-    std::atomic<unsigned> repeat_cadence_hz{0};
     // The window mode switch as an SDL scancode (aln_keys.h).
     std::atomic<int> window_mode_key{SDL_SCANCODE_F11};
 };

@@ -60,14 +60,10 @@ constexpr int NominalHz(double hz) {
     return static_cast<int>(hz + 0.5);
 }
 
-// VSync, or a compositor such as Gamescope that shows one image per refresh whatever the present mode.
-constexpr bool DisplayPacesPresents(bool vsync, bool compositor_paced) {
-    return vsync || compositor_paced;
-}
-
-// The rate frames can actually reach the screen at; 0 = uncapped. When the display paces presents it is the ceiling.
-constexpr int EffectiveRenderHz(int setting, bool display_paced = false, double display_hz = 0.0) {
-    if (!IsHighRate(setting) || !display_paced || display_hz <= 0.0) {
+// The rate frames can actually reach the screen at; 0 = uncapped. A repeat is the same image again, so in any present
+// mode (VSync, Mailbox, Immediate, a compositor) no more than one a refresh can be seen: a known refresh is the ceiling.
+constexpr int EffectiveRenderHz(int setting, double display_hz = 0.0) {
+    if (!IsHighRate(setting) || display_hz <= 0.0) {
         return RenderFps(setting);
     }
     const int display = NominalHz(display_hz);
@@ -75,11 +71,11 @@ constexpr int EffectiveRenderHz(int setting, bool display_paced = false, double 
 }
 
 // Presentations per second the host schedules, new frames and repeats together; 0 = only the game's own flips.
-constexpr unsigned RepeatCadenceHz(int setting, bool display_paced = false, double display_hz = 0.0) {
+constexpr unsigned RepeatCadenceHz(int setting, double display_hz = 0.0) {
     if (!IsHighRate(setting)) {
         return 0u;
     }
-    const int hz = EffectiveRenderHz(setting, display_paced, display_hz);
+    const int hz = EffectiveRenderHz(setting, display_hz);
     const int cadence = hz == 0 ? kUnlimitedCadenceHz : std::min(hz, kUnlimitedCadenceHz);
     return cadence > kGameHz ? static_cast<unsigned>(cadence) : 0u;
 }

@@ -90,9 +90,9 @@ std::vector<ImTextureData*> choice_textures, choice_retired;
 std::atomic<bool> choice_retiring{false};
 float base_scale = 1.0f;
 
-// Present rate for the FPS counter.
 std::chrono::steady_clock::time_point last_present{};
-float frame_ms_avg = 0.0f;
+// The frame counter's text, measured over half a second; empty until then.
+std::string counter_text;
 
 // The caller holds imgui_mutex.
 void SetNotice(const std::string& text, std::chrono::seconds shown = std::chrono::seconds(2)) {
@@ -153,14 +153,6 @@ float PixelDensity(SDL_WindowID id) {
     return density > 0.0f ? density : 1.0f;
 }
 
-// The frame counter's text.
-std::string OverlayText() {
-    char text[64];
-    std::snprintf(text, sizeof(text), "%.0f FPS  %.1f ms", frame_ms_avg > 0.0f ? 1000.0f / frame_ms_avg : 0.0f,
-                  frame_ms_avg);
-    return text;
-}
-
 struct OverlayPanel {
     AlnOverlayBox::Box box;
     float size;
@@ -197,7 +189,7 @@ void DrawOverlayPanel(const OverlayPanel& panel, const char* text) {
 }
 
 bool FpsCounterShown() {
-    return AlnSettings::Get().show_fps && frame_ms_avg > 0.0f;
+    return AlnSettings::Get().show_fps && !counter_text.empty();
 }
 
 bool MenuOpen() {
@@ -364,11 +356,10 @@ void LoadingScreen() {
 }
 
 void FpsCounter() {
-    if (frame_ms_avg <= 0.0f) {
+    if (counter_text.empty()) {
         return;
     }
-    const std::string label = OverlayText();
-    DrawOverlayPanel(FpsCounterBox(label.c_str()), label.c_str());
+    DrawOverlayPanel(FpsCounterBox(counter_text.c_str()), counter_text.c_str());
 }
 
 void BackgroundLoading() {
@@ -784,20 +775,42 @@ void LogPresent(bool repeat) {
     presented_frames.fetch_add(1, std::memory_order_relaxed);
 }
 
+std::atomic<u64> guest_flips{0};
+
+void LogGuestFlip() {
+    guest_flips.fetch_add(1, std::memory_order_relaxed);
+}
+
+AlnFrameReport::Counters FrameCounters() {
+    return {.guest_flips = guest_flips.load(std::memory_order_relaxed),
+            .presents = PresentedFrames(),
+            .repeats = RepeatedFrames()};
+}
+
 namespace {
 
 float last_interval_ms = 0.0f;
 
+void UpdateCounterText(std::chrono::steady_clock::time_point now) {
+    static std::chrono::steady_clock::time_point start = now;
+    static AlnFrameReport::Counters from = FrameCounters();
+    const double seconds = std::chrono::duration<double>(now - start).count();
+    if (seconds < 0.5) {
+        return;
+    }
+    const AlnFrameReport::Counters to = FrameCounters();
+    counter_text = AlnFrameReport::CounterText(AlnFrameReport::RatesBetween(from, to, seconds));
+    start = now;
+    from = to;
+}
+
 // Everything that runs every presented frame; false when nothing is on screen.
 bool BeginPresent() {
-    // Present interval for the FPS readout (measured also while nothing is drawn).
     const auto now = std::chrono::steady_clock::now();
     const float ms = std::chrono::duration<float, std::milli>(now - last_present).count();
     last_present = now;
     last_interval_ms = ms;
-    if (ms > 0.0f && ms < 1000.0f) {
-        frame_ms_avg = frame_ms_avg == 0.0f ? ms : frame_ms_avg * 0.95f + ms * 0.05f;
-    }
+    UpdateCounterText(now);
     PollChoiceInput();
     return Visible();
 }

@@ -18,12 +18,14 @@
 #endif
 #include "common/assert.h"
 #include "aln_frame_pacing.h"
+#include "aln_frame_report.h"
 #include "aln_latency_trace.h"
 #include "aln_present.h"
 #include "aln_settings.h"
 #include "aln_toggles.h"
 #include "boot_diagnostic.h"
 #include "startup_phase.h"
+#include "stepper_diag.h"
 #include "aln_overlay.h"
 #include "video_core/renderer_vulkan/vk_frame_capture.h"
 #include "common/debug.h"
@@ -54,6 +56,31 @@ extern std::atomic<u32> g_aln_pending_draws;
 namespace Libraries::VideoOut {
 
 static std::atomic<u32> g_trace_flip_waits;
+
+// CPU time of the GPU command thread so far; 0 before it starts.
+static u64 GpuThreadCpuNs() {
+#ifdef _WIN32
+    static HANDLE gpu_thread = nullptr;
+    if (!gpu_thread) {
+        if (const unsigned long id = AlnStats::gpu_thread_id.load()) {
+            gpu_thread = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, id);
+        }
+    }
+    FILETIME created, exited, kernel, user;
+    if (!gpu_thread || !GetThreadTimes(gpu_thread, &created, &exited, &kernel, &user)) {
+        return 0;
+    }
+    const auto ns = [](const FILETIME& t) { return ((u64(t.dwHighDateTime) << 32) | t.dwLowDateTime) * 100; };
+    return ns(kernel) + ns(user);
+#else
+    const int clock = AlnStats::gpu_thread_clock.load();
+    timespec ts{};
+    if (clock == -1 || clock_gettime(static_cast<clockid_t>(clock), &ts) != 0) {
+        return 0;
+    }
+    return u64(ts.tv_sec) * 1000000000ull + u64(ts.tv_nsec);
+#endif
+}
 
 // Swap thread.
 static void TracePresent(std::chrono::steady_clock::time_point submitted) {
@@ -362,6 +389,7 @@ void VideoOutDriver::Flip(const Request& req) {
     (void)first_flip;
     const bool present = AlnFramePacing::PresentsFlip(AlnSettings::Get().frame_rate.load(), flips_consumed++,
                                                       req.port->flip_rate);
+    AlnOverlay::LogGuestFlip();
     // Update HDR status before presenting, then present the frame on the swap thread.
     RunPresenter([this, frame = req.frame, hdr = req.port->is_hdr, submitted = req.submitted, present] {
         if (!present) {
@@ -450,29 +478,7 @@ void VideoOutDriver::Flip(const Request& req) {
                   subs = AlnStats::submissions.load(), sys_us = AlnStats::gpu_sys_us.load(),
                   user_us = AlnStats::gpu_user_us.load(), invol = AlnStats::gpu_invol_switches.load(),
                   vol = AlnStats::gpu_vol_switches.load();
-        u64 gpu_ns = 0;
-#ifdef _WIN32
-        // Windows has no per-thread clock id; the thread's user + kernel time instead.
-        static HANDLE gpu_thread = nullptr;
-        if (!gpu_thread) {
-            if (const unsigned long id = AlnStats::gpu_thread_id.load()) {
-                gpu_thread = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, id);
-            }
-        }
-        if (FILETIME created, exited, kernel, user;
-            gpu_thread && GetThreadTimes(gpu_thread, &created, &exited, &kernel, &user)) {
-            const auto ns = [](const FILETIME& t) {
-                return ((u64(t.dwHighDateTime) << 32) | t.dwLowDateTime) * 100;
-            };
-            gpu_ns = ns(kernel) + ns(user);
-        }
-#else
-        if (const int clock = AlnStats::gpu_thread_clock.load(); clock != -1) {
-            timespec ts{};
-            clock_gettime(static_cast<clockid_t>(clock), &ts);
-            gpu_ns = u64(ts.tv_sec) * 1000000000ull + u64(ts.tv_nsec);
-        }
-#endif
+        const u64 gpu_ns = GpuThreadCpuNs();
         const u64 images = AlnStats::images_registered.load();
         const u64 image_bytes = AlnStats::image_upload_bytes.load();
         const u64 buffer_bytes = AlnStats::buffer_upload_bytes.load();
@@ -706,13 +712,69 @@ void WaitUntilSlot(std::chrono::steady_clock::time_point slot) {
 
 // Extra presents on the GPU command thread would hold back the game's own work, so only a presenter that can repeat
 // off that thread gets a repeat cadence.
-unsigned RepeatCadence(int frame_rate, bool vsync, double display_hz) {
+unsigned RepeatCadence(int frame_rate, double display_hz) {
     if (!presenter->CanRepeatFrames()) {
         return 0u;
     }
-    const bool display_paced = AlnFramePacing::DisplayPacesPresents(vsync, AlnPresent::GamescopeSession());
-    return AlnFramePacing::RepeatCadenceHz(frame_rate, display_paced, display_hz);
+    return AlnFramePacing::RepeatCadenceHz(frame_rate, display_hz);
 }
+
+// Present thread: the frame rate and the game's stepper, a line each a minute while the game runs. ALN_FRAME_STATS
+// replaces the frame rate line and resets the counters it reads.
+class FrameRateSummary {
+public:
+    explicit FrameRateSummary(std::chrono::steady_clock::time_point now) : clock_{now} { Restart(now); }
+
+    void Tick(std::chrono::steady_clock::time_point now) {
+        if (!clock_.Due(now)) {
+            return;
+        }
+        const double seconds = clock_.Seconds(now);
+        if (!AlnStats::enabled) {
+            PrintFrameRate(seconds);
+        }
+        char stepper[320];
+        if (stepper_diag_report(seconds, stepper, sizeof(stepper))) {
+            std::printf("%s\n", stepper);
+        }
+        Restart(now);
+    }
+
+private:
+    void PrintFrameRate(double seconds) {
+        const AlnFrameReport::Counters counters = AlnOverlay::FrameCounters();
+        const AlnFrameReport::Rates rates = AlnFrameReport::RatesBetween(counters_, counters, seconds);
+        if (rates.game_fps > 0.0) {
+            const auto share = [seconds](u64 from, u64 to) { return to > from ? (to - from) / (seconds * 1e7) : 0.0; };
+            const u64 draws = AlnStats::draws.load();
+            const u64 flips = counters.guest_flips - counters_.guest_flips;
+            const AlnFrameReport::GpuThreadLoad load{
+                .cpu = share(cpu_ns_, GpuThreadCpuNs()),
+                .idle = share(idle_ns_, AlnStats::gpu_idle_ns.load()),
+                .gpu_wait = share(tick_wait_ns_, AlnStats::tick_wait_ns.load()),
+                .recorder = share(recorder_ns_, AlnStats::sync_recording_ns.load()),
+                .host_copies = share(copies_ns_, AlnStats::host_copies_wait_ns.load()),
+                .draws_per_frame = flips ? double(draws - draws_) / double(flips) : 0.0,
+            };
+            std::printf("%s\n", AlnFrameReport::SummaryLine(rates, load).c_str());
+        }
+    }
+
+    void Restart(std::chrono::steady_clock::time_point now) {
+        clock_.Restart(now);
+        counters_ = AlnOverlay::FrameCounters();
+        cpu_ns_ = GpuThreadCpuNs();
+        idle_ns_ = AlnStats::gpu_idle_ns.load();
+        tick_wait_ns_ = AlnStats::tick_wait_ns.load();
+        recorder_ns_ = AlnStats::sync_recording_ns.load();
+        copies_ns_ = AlnStats::host_copies_wait_ns.load();
+        draws_ = AlnStats::draws.load();
+    }
+
+    AlnFrameReport::SummaryClock clock_;
+    AlnFrameReport::Counters counters_{};
+    u64 cpu_ns_ = 0, idle_ns_ = 0, tick_wait_ns_ = 0, recorder_ns_ = 0, copies_ns_ = 0, draws_ = 0;
+};
 } // namespace
 
 bool VideoOutDriver::SubmitFlip(VideoOutPort* port, s32 index, s64 flip_arg,
@@ -780,15 +842,15 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
     double display_hz = settings.display_refresh_hz.load();
     AlnFramePacing::FrameLimiter limiter{0, std::chrono::steady_clock::now()};
     const auto start_pacing = [&](std::chrono::steady_clock::time_point now) {
-        const unsigned cadence = RepeatCadence(frame_rate, vsync, display_hz);
+        const unsigned cadence = RepeatCadence(frame_rate, display_hz);
         limiter = AlnFramePacing::FrameLimiter{cadence, now};
-        settings.repeat_cadence_hz = cadence;
         std::printf("VideoOut: vblank %u Hz, frame rate %s, repeat cadence %s, VSync %s%s, display %.2f Hz\n",
                     EmulatorSettings.GetVblankFrequency(), AlnFramePacing::ModeName(frame_rate).c_str(),
                     cadence ? (std::to_string(cadence) + " FPS").c_str() : "none", vsync ? "on" : "off",
                     AlnPresent::GamescopeSession() ? " (Gamescope paces presents)" : "", display_hz);
     };
     start_pacing(std::chrono::steady_clock::now());
+    FrameRateSummary summary{std::chrono::steady_clock::now()};
     if (AlnLatencyTrace::enabled) {
         std::printf("Latency trace: on (ALN_INPUT_LATENCY_TRACE=1), pad and present lines every 5 s\n");
     }
@@ -870,6 +932,7 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
             vblank_status.tsc = Libraries::Kernel::sceKernelReadTsc();
             main_port.vblank_cv.notify_all();
         }
+        summary.Tick(tick_start);
 
         // Frame rate above 60: the guest gets its vblank and flip on time; the slots left before the next vblank show
         // the last frame again.

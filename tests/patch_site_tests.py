@@ -1,5 +1,5 @@
 """Checks every guest patch site of every supported build against its prepared executable and stream.dat: the
-resolution, frame rate, Skip Intro, Exit Game and menu button sites, and the stream.dat blocks the Exit Game bytecode
+resolution, frame rate, Skip Intro, Exit Game, menu button and Issue5Diag stepper sites, and the stream.dat blocks the Exit Game bytecode
 and the Xbox prompts rewrite. No two sites of one build may overlap.
 
 A build whose prepared folder is missing is skipped. Usage: python tests/patch_site_tests.py
@@ -152,6 +152,72 @@ def check_timing(label, image, build, set_fps_binding):
     check(abs(f32(image, rip(image, set_fps + 11)) - 59.94) < 1e-4, f'{label}: the startup rate is not 59.94')
     check(rip(image, set_fps + 3) == rip(image, set_fps_binding + 0x3f),
           f'{label}: startup SetFps and engine_set_fps use different engines')
+
+
+# Issue #5 Issue5Diag (src/stepper_diag.c): the stepper's per-frame steps (+4) and skips (+8), read where the frame
+# update stores the stepper's milliseconds; the game's own debug text names them "upd" and "skip".
+STEPPER_DIAG = (ROOT / 'src' / 'stepper_diag.c').read_text(encoding='utf-8')
+STEPPER_HUD = b'FPS: %5.2f (min: %5.2f, max: %5.2f, upd: %d, skip: %d)\0'
+
+
+def stepper_pattern(name):
+    body = re.search(rf'const char {name}\[\] =\s*((?:"[0-9a-f?]+"\s*)+);', STEPPER_DIAG).group(1)
+    return masked(''.join(re.findall(r'"([0-9a-f?]+)"', body)))
+
+
+def stepper_sites():
+    return {build: tuple(int(v, 16) for v in values) for build, *values in
+            re.findall(r'\{"(CUSA\d+-\d\.\d\d)", (0x[0-9a-f]+), (0x[0-9a-f]+), (0x[0-9a-f]+)\}', STEPPER_DIAG)}
+
+
+def check_stepper_diag(label, image, build, spans):
+    sites = stepper_sites()
+    check(set(sites) == set(TIMING), f'{label}: Issue5Diag sites are not the supported builds')
+    site = sites.get(build)
+    check(site is not None, f'{label}: no Issue5Diag site')
+    if not site:
+        return
+    frame_update, stepper, state = site
+    check((stepper, frame_update) == TIMING[build][:2], f'{label}: Issue5Diag stepper is not the timing table\'s')
+    code = bytes(image[:0x1e90000])
+    frame_pattern, stepper_code = stepper_pattern('stepper_diag_frame_update_pattern'), stepper_pattern(
+        'stepper_diag_stepper_pattern')
+    check([m.start() for m in frame_pattern.finditer(code)] == [frame_update],
+          f'{label}: the Issue5Diag frame update fingerprint is not unique at {frame_update:#x}')
+    check([m.start() for m in stepper_code.finditer(code)] == [stepper],
+          f'{label}: the Issue5Diag stepper fingerprint is not unique at {stepper:#x}')
+    for other, (other_update, other_stepper, _) in sites.items():
+        if other != build:
+            check(not frame_pattern.match(code, other_update) and not stepper_code.match(code, other_stepper),
+                  f'{label}: {other}\'s Issue5Diag offsets match this build')
+    check(rip(image, frame_update + 0x9b + 1) == stepper, f'{label}: Issue5Diag frame update does not call the stepper')
+    hook = frame_update + 0x107
+    check(image[hook] == 0xe8 and bytes(image[hook - 13:hook - 9]) == bytes.fromhex('c5fa5905') and
+          f32(image, rip(image, hook - 9)) == 1000.0 and bytes(image[hook + 5:hook + 14]) == bytes.fromhex('c5fa1045c4c5fa1100'),
+          f'{label}: the Issue5Diag hook is not where the stepper milliseconds are stored')
+    accessor = rip(image, stepper + 0x243 + 1)
+    check(stepper_pattern('stepper_diag_state_accessor_pattern').match(code, accessor) is not None,
+          f'{label}: the stepper state accessor differs')
+    check(rip(image, accessor + 0x40 + 3) == state, f'{label}: the stepper state is not at {state:#x}')
+    check(rip(image, stepper + 0x253 + 1) == accessor, f'{label}: the skip setter takes another object')
+    check(bytes(image[stepper + 0x248:stepper + 0x24e]) == bytes.fromhex('4889c74489ee') and
+          bytes(image[stepper + 0x258:stepper + 0x25e]) == bytes.fromhex('4889c74489e6'),
+          f'{label}: the setters do not take r13d (steps) and r12d (skips)')
+    setters = (rip(image, stepper + 0x24e + 1), rip(image, stepper + 0x25e + 1))
+    check(bytes(image[setters[0]:setters[0] + 4]) == bytes.fromhex('897704c3') and
+          bytes(image[setters[1]:setters[1] + 4]) == bytes.fromhex('897708c3'), f'{label}: the stepper setters differ')
+    getters = (setters[0] - 0x10, setters[1] - 0x10)
+    check(bytes(image[getters[0]:getters[0] + 4]) == bytes.fromhex('8b4704c3') and
+          bytes(image[getters[1]:getters[1] + 4]) == bytes.fromhex('8b4708c3'), f'{label}: the stepper getters differ')
+    hud = re.compile(bytes.fromhex('e8') + b'(....)' + bytes.fromhex('4c89f74189c5e8') + b'(....).{24}' +
+                     bytes.fromhex('4c8da5') + b'....' + bytes.fromhex('89c1488d35') + b'(....)' +
+                     bytes.fromhex('b0034489ea'), re.S)
+    named = [m for m in hud.finditer(code) if m.start() + 5 + struct.unpack('<i', m.group(1))[0] == getters[0] and
+             m.start() + 11 + 5 + struct.unpack('<i', m.group(2))[0] == getters[1] and
+             bytes(image[rip(image, m.start(3)):rip(image, m.start(3)) + len(STEPPER_HUD)]) == STEPPER_HUD]
+    check(len(named) == 1, f'{label}: the debug text does not pass +4 as upd and +8 as skip ({len(named)} readers)')
+    check(state + 12 <= len(image), f'{label}: the stepper state is outside the image')
+    spans.append((hook, hook + 5))
 
 
 EXIT_APP = re.compile(rb'\x48\x8d\x05....\x48\x8b\x38\x48\x8b\x07\xff\x60\x28', re.S)
@@ -311,6 +377,7 @@ def check_build(label, folder, source, skip_source, build, resolution_name, fram
     check_exit_game(label, image, build, spans)
     check_menu_buttons(label, image, build, spans)
     check_online_status(label, image, build, spans)
+    check_stepper_diag(label, image, build, spans)
     spans.sort()
     check(all(a[1] <= b[0] for a, b in zip(spans, spans[1:])), f'{label}: patch sites overlap')
     for at in HEAP_LITERALS:

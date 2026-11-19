@@ -177,7 +177,8 @@ inline constexpr Setting kSettings[] = {
     {Id::ResolutionInTitle, Page::Gameplay, "show_resolution_title", "Render resolution in title",
      "Shows the game's render resolution in the window title.", Apply::Live, kOffOn},
     {Id::FrameCounter, Page::Gameplay, "show_fps", "Frame counter",
-     "Shows the frame rate and frame time in a corner of the game. F2 also switches it for this session.",
+     "Shows the game's frame rate and frame time in a corner of the game, and the presented rate when it differs. F2 "
+     "also switches it for this session.",
      Apply::Live, kHiddenShown},
     {Id::SkipIntro, Page::Gameplay, "skip_intro", "Skip Intro",
      "Skip startup videos and go directly to the title screen.", Apply::Restart, kOffOn},

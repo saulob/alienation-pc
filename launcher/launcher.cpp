@@ -142,14 +142,15 @@ constexpr char kAnisotropyHelp[] =
 constexpr char kFrameRateHelp[] =
     "60 FPS is the original game rate. The game always makes 60 new frames a second at its original speed, so no "
     "setting changes gameplay, online play or local co-op. 30 shows every second frame. Faster rates show the last "
-    "frame again until the next one (no interpolation), up to the display's refresh with VSync on; Unlimited repeats "
-    "up to 480 a second.";
+    "frame again until the next one (no interpolation), up to the display's refresh: a repeat beyond it is never seen. "
+    "Unlimited repeats up to the display's refresh (480 a second when it is unknown).";
 constexpr char kShowFpsTitleHelp[] =
-    "Shows the frame rate in the window title: Alienation | FPS: 60.00. Above 60 the new game frames follow in "
-    "brackets: FPS: 144.00 (game 60.00)";
+    "Shows the game's frame rate in the window title: Alienation | FPS: 60.00. When the window shows a different "
+    "number of frames (30, repeats) it follows in brackets: FPS: 60.00 (presented 144.00)";
 constexpr char kShowResolutionTitleHelp[] =
     "Shows the game's render resolution in the window title: Alienation | 1920x1080";
-constexpr char kFrameCounterHelp[] = "Shows the frame rate and frame time in a corner of the game.";
+constexpr char kFrameCounterHelp[] =
+    "Shows the game's frame rate and frame time in a corner of the game, and the presented rate when it differs.";
 constexpr char kSkipIntroHelp[] = "Skip startup videos and go directly to the title screen";
 constexpr char kAsianMenuButtonsHelp[] =
     "Off: %s confirms and %s cancels in menus. On: %s confirms and %s cancels, as in the Asian release. Gameplay "
