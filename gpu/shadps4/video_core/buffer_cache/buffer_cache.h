@@ -10,6 +10,7 @@
 
 #include "common/interval_set.h"
 #include "common/types.h"
+#include "video_core/buffer_cache/arena_map.h"
 #include "video_core/buffer_cache/buffer.h"
 #include "video_core/buffer_cache/fault_manager.h"
 #include "video_core/buffer_cache/range_set.h"
@@ -39,10 +40,9 @@ class PageManager;
 class BufferCache {
     static constexpr u64 ADDRESS_SPACE_BITS = 40;
     // aln: arena pages are 4 GiB unless the driver's buffer size limit is lower (AMD's
-    // Windows driver: 2 GiB); an arena spans up to two pages, so they shrink to half the limit.
+    // Windows driver: 2 GiB); an arena spans two pages, so they shrink to half the limit.
     static constexpr u64 MAX_ARENA_PAGE_BITS = 32;
     static constexpr u64 MIN_ARENA_PAGE_BITS = 30;
-    static constexpr u64 MAX_ARENA_PAGES = u64{1} << (ADDRESS_SPACE_BITS - MIN_ARENA_PAGE_BITS);
     static constexpr u64 MIN_BLOCK_SIZE = 16_KB;
 
 public:
@@ -173,7 +173,7 @@ private:
     std::unique_ptr<Buffer> bda_pagetable_buffer;
     std::unique_ptr<Buffer> null_index_buffer;
 
-    std::array<const Buffer*, MAX_ARENA_PAGES> address_space{};
+    ArenaMap<const Buffer*> arena_map;
     u64 arena_page_bits{MAX_ARENA_PAGE_BITS};
     u64 arena_page_size{u64{1} << MAX_ARENA_PAGE_BITS};
     u64 num_arena_pages{u64{1} << (ADDRESS_SPACE_BITS - MAX_ARENA_PAGE_BITS)};

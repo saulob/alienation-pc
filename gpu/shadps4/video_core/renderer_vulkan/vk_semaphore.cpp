@@ -45,6 +45,12 @@ void Semaphore::Refresh() {
         if (counter < this_tick) {
             return;
         }
+        if (IsPayloadNeverSignalled(counter, CurrentTick())) {
+            Common::GpuTrace::VulkanFailure("semread", s32(vk::Result::eErrorDeviceLost), this_tick,
+                                            timeline);
+            UNREACHABLE_MSG("Timeline semaphore reads {}, past every submitted tick: device lost",
+                            counter);
+        }
         Common::GpuTrace::SetCompletedTick(timeline, counter);
     } while (!gpu_tick.compare_exchange_weak(this_tick, counter, std::memory_order_release,
                                              std::memory_order_relaxed));

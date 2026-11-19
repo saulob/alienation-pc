@@ -35,6 +35,17 @@ struct AddressRange {
     }
 };
 
+/// Buffer arenas alias one another over the same guest memory, so they are tracked by guest
+/// address in one shared space; other buffers by their own offsets.
+constexpr AddressRange BufferAccessRange(u64 buffer, bool is_guest_arena, u64 guest_base,
+                                         u64 offset, u64 size) {
+    constexpr u64 GuestArenaSpace = 0;
+    if (is_guest_arena) {
+        return {GuestArenaSpace, guest_base + offset, guest_base + offset + size - 1};
+    }
+    return {buffer, offset, offset + size - 1};
+}
+
 /**
  * Node of a red-black tree, consisting of a packed node header as well as a resource address range.
  * GCC generates weird code with bitfields here, so pack manually.

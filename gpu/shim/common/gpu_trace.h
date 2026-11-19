@@ -12,7 +12,7 @@ enum class Event : u32 {
     BlockingWait,
     ShaderCompile,
     PipelineFirstUse,
-    ArenaMigration,
+    ArenaCreated,
     CopyLayersCoerced,
     GeometryOutputClamp,
     RenderingMismatch,

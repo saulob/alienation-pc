@@ -830,13 +830,17 @@ void Runtime::SetBackingSamples(VideoCore::Image* image, u32 num_samples, bool c
     backing = new_backing;
 }
 
+namespace {
+AddressRange TrackedRange(const VideoCore::Buffer* handle, u64 offset, u64 size) {
+    return BufferAccessRange(reinterpret_cast<u64>(handle),
+                             handle->mem_type == VideoCore::MemoryType::Sparse, handle->cpu_addr,
+                             offset, size);
+}
+} // namespace
+
 bool Runtime::IsBufferAccessed(const VideoCore::Buffer* handle, u64 offset, u64 size,
                                bool check_read_access) {
-    const AddressRange range = {
-        .resource = reinterpret_cast<u64>(handle),
-        .range_start = offset,
-        .range_end = offset + size - 1,
-    };
+    const AddressRange range = TrackedRange(handle, offset, size);
     bool has_access = barrier_tracker.FindRange(range, Access::Write);
     if (check_read_access && !has_access) {
         has_access |= barrier_tracker.FindRange(range, Access::Read);
@@ -846,11 +850,7 @@ bool Runtime::IsBufferAccessed(const VideoCore::Buffer* handle, u64 offset, u64 
 
 void Runtime::AccessBuffer(const VideoCore::Buffer* handle, u64 offset, u64 size,
                            vk::PipelineStageFlags2 src_stage, vk::AccessFlags2 src_access) {
-    AddressRange range = {
-        .resource = reinterpret_cast<u64>(handle),
-        .range_start = offset,
-        .range_end = offset + size - 1,
-    };
+    AddressRange range = TrackedRange(handle, offset, size);
 
     constexpr static vk::AccessFlags2 READ_MASK =
         vk::AccessFlagBits2::eIndirectCommandRead | vk::AccessFlagBits2::eIndexRead |

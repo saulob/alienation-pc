@@ -319,6 +319,14 @@ target_include_directories(aln-render-lifetime-tests PRIVATE gpu/shim gpu/shadps
     gpu/third_party/gcn/include gpu/third_party/half/include gpu/third_party/xbyak)
 target_link_libraries(aln-render-lifetime-tests PRIVATE alngpu)
 
+# Focused tests of sparse buffer arenas and their barrier tracking (tools/test.ps1); not part of the default build.
+add_executable(aln-buffer-arena-tests EXCLUDE_FROM_ALL tests/buffer_arena_tests.cpp)
+set_target_properties(aln-buffer-arena-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_include_directories(aln-buffer-arena-tests PRIVATE gpu/shim gpu/shadps4 tests src ${CMAKE_BINARY_DIR}/gpu/include
+    gpu/third_party/gcn/include gpu/third_party/half/include gpu/third_party/xbyak)
+target_compile_options(aln-buffer-arena-tests PRIVATE -Wall -Wextra)
+target_link_libraries(aln-buffer-arena-tests PRIVATE alngpu)
+
 # Focused tests of the wave64 Ballot lowering on hand-built IR (tools/test.ps1); not part of the default build.
 add_executable(aln-wave64-lowering-tests EXCLUDE_FROM_ALL tests/wave64_lowering_tests.cpp)
 set_target_properties(aln-wave64-lowering-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)

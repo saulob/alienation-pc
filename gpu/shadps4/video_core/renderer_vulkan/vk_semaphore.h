@@ -16,6 +16,12 @@ namespace Vulkan {
 class Instance;
 class Scheduler;
 
+/// Ticks are handed out before they are submitted, so a payload at or past the next one was never
+/// signalled: drivers report such values once the device is lost.
+[[nodiscard]] constexpr bool IsPayloadNeverSignalled(u64 payload, u64 next_tick) noexcept {
+    return payload >= next_tick;
+}
+
 class Semaphore {
 public:
     explicit Semaphore(const Instance& instance_,

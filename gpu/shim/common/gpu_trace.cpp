@@ -217,11 +217,11 @@ void PrintEntry(u64 seq, Event event, u32 thread, const u64 (&a)[4]) noexcept {
         }
         break;
     }
-    case Event::ArenaMigration:
+    case Event::ArenaCreated:
         std::fprintf(stderr,
-                     "  #%llu tid %u buffer arena migration at %#llx, %llu bytes (from %llu + %llu)\n",
+                     "  #%llu tid %u buffer arena at %#llx, %llu bytes, aliasing %llu resident ranges\n",
                      (unsigned long long)seq, thread, (unsigned long long)a[0],
-                     (unsigned long long)a[1], (unsigned long long)a[2], (unsigned long long)a[3]);
+                     (unsigned long long)a[1], (unsigned long long)a[2]);
         break;
     case Event::CopyLayersCoerced:
         std::fprintf(stderr,
