@@ -22,6 +22,7 @@
 #include "core/libraries/videoout/driver.h"
 #include "core/memory.h"
 #include "core/platform.h"
+#include "video_core/amdgpu/command_memory.h"
 #include "video_core/amdgpu/liverpool.h"
 #include "aln_write_log.h"
 #include "video_core/amdgpu/pm4_cmds.h"
@@ -390,6 +391,39 @@ bool Liverpool::PendingFenceValue(VAddr address, u32& value) {
     return false;
 }
 
+namespace {
+std::span<const u32> IndirectBufferWords(const PM4CmdIndirectBuffer& ib) {
+    const u64 address = reinterpret_cast<u64>(ib.Address<const u32>());
+    const u32 words = ib.ib_size;
+    const auto guest = GuestCommandWords(address, words, [](u64 at, u64 bytes) {
+        return Core::Memory::Instance()->ClampRangeSize(at, bytes);
+    });
+    if (!guest) {
+        UNREACHABLE_MSG("Indirect buffer of {} dwords at {:#x} is not in mapped guest memory", words,
+                        address);
+    }
+    return *guest;
+}
+
+/// The command processor reads command memory in place, as the GPU does, so a packet may rewrite
+/// packets it has yet to reach: true when this write does.
+bool WritesUnreadCommands(const char* queue, PM4ItOpcode opcode, std::span<const u32> unread,
+                          u64 address, u64 bytes) {
+    const auto word = FirstUnreadWordWritten(unread, address, bytes);
+    if (!word) {
+        return false;
+    }
+    static std::atomic_flag reported;
+    if (!reported.test_and_set(std::memory_order_relaxed)) {
+        std::printf("GPU: %s packet %#x writes %llu bytes at %#llx into its own command buffer, %zu "
+                    "dwords ahead of the command processor\n",
+                    queue, static_cast<u32>(opcode), static_cast<unsigned long long>(bytes),
+                    static_cast<unsigned long long>(address), *word);
+    }
+    return true;
+}
+} // namespace
+
 Liverpool::Task Liverpool::ProcessCeUpdate(std::span<const u32> ccb) {
     FIBER_ENTER(ccb_task_name);
 
@@ -444,8 +478,7 @@ Liverpool::Task Liverpool::ProcessCeUpdate(std::span<const u32> ccb) {
         }
         case PM4ItOpcode::IndirectBufferConst: {
             const auto* indirect_buffer = reinterpret_cast<const PM4CmdIndirectBuffer*>(header);
-            auto task =
-                ProcessCeUpdate({indirect_buffer->Address<const u32>(), indirect_buffer->ib_size});
+            auto task = ProcessCeUpdate(IndirectBufferWords(*indirect_buffer));
             RESUME_CE(task);
 
             while (!task.handle.done()) {
@@ -1166,12 +1199,18 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 if (dma_data->dst_addr_lo == 0x3022C || !rasterizer) {
                     break;
                 }
+                const bool to_memory = dma_data->dst_sel == DmaDataDst::Memory ||
+                                       dma_data->dst_sel == DmaDataDst::MemoryUsingL2;
                 if (rasterizer->RunInOrder(&RunDmaData, dma_data, sizeof(PM4DmaData),
                                            AlnToggle::PipelinedMemoryWrites) &&
-                    (dma_data->dst_sel == DmaDataDst::Memory ||
-                     dma_data->dst_sel == DmaDataDst::MemoryUsingL2)) {
+                    to_memory) {
                     rasterizer->NotePendingGpuWrite(dma_data->DstAddress<VAddr>(),
                                                     dma_data->NumBytes());
+                    const auto unread = dcb.subspan(std::min<size_t>(count + 1, dcb.size()));
+                    if (WritesUnreadCommands("gfx", opcode, unread, dma_data->DstAddress<VAddr>(),
+                                             dma_data->NumBytes())) {
+                        rasterizer->DrainDrawPipe(static_cast<u32>(opcode));
+                    }
                 }
                 break;
             }
@@ -1189,6 +1228,11 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                         NotePendingWrite(*write_data, (count - 2) * sizeof(u32));
                         rasterizer->NotePendingGpuWrite(write_data->Address<VAddr>(),
                                                         (count - 2) * sizeof(u32));
+                        const auto unread = dcb.subspan(std::min<size_t>(count + 1, dcb.size()));
+                        if (WritesUnreadCommands("gfx", opcode, unread, write_data->Address<u64>(),
+                                                 (count - 2) * sizeof(u32))) {
+                            rasterizer->DrainDrawPipe(static_cast<u32>(opcode));
+                        }
                     }
                 } else {
                     std::memcpy(write_data->Address<u64*>(), write_data->data, (count - 2) * 4);
@@ -1272,12 +1316,11 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 if (indirect_buffer->chain) {
                     // A chained buffer replaces the current one: the CP never comes back to the
                     // rest of this buffer, which in reused segments still holds old commands.
-                    dcb = {indirect_buffer->Address<const u32>(), indirect_buffer->ib_size};
+                    dcb = IndirectBufferWords(*indirect_buffer);
                     base_addr = reinterpret_cast<uintptr_t>(dcb.data());
                     continue;
                 }
-                auto task = ProcessGraphics(
-                    {indirect_buffer->Address<const u32>(), indirect_buffer->ib_size}, {});
+                auto task = ProcessGraphics(IndirectBufferWords(*indirect_buffer), {});
                 // Tasks start suspended: the nested body (and its scan) runs on this resume.
                 g_dcb_depth = dcb_depth + 1;
                 RESUME_GFX(task);
@@ -1441,14 +1484,13 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
             const auto* indirect_buffer = reinterpret_cast<const PM4CmdIndirectBuffer*>(header);
             if constexpr (is_indirect) {
                 if (indirect_buffer->chain) {
-                    acb = {indirect_buffer->Address<const u32>(), indirect_buffer->ib_size};
+                    acb = IndirectBufferWords(*indirect_buffer);
                     base_addr = reinterpret_cast<VAddr>(acb.data());
                     acb_size = acb.size_bytes();
                     continue;
                 }
             }
-            auto task = ProcessCompute<true>(
-                {indirect_buffer->Address<const u32>(), indirect_buffer->ib_size}, vqid);
+            auto task = ProcessCompute<true>(IndirectBufferWords(*indirect_buffer), vqid);
             RESUME_ASC(task, vqid);
 
             while (!task.handle.done()) {
@@ -1496,6 +1538,9 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
                     header->type == 3 && header->type3.opcode == PM4ItOpcode::DispatchDirect) {
                     indirect_patches.emplace_back(header, src_addr);
                 } else {
+                    WritesUnreadCommands("compute", opcode,
+                                         acb.subspan(std::min<size_t>(next_dw_off, acb.size())),
+                                         dst_addr, num_bytes);
                     rasterizer->CopyBuffer(dst_addr, src_addr, num_bytes, false, false);
                 }
             } else {
@@ -1600,6 +1645,9 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
             ASSERT(write_data->dst_sel.Value() == 2 || write_data->dst_sel.Value() == 5);
             const u32 data_size = (header->type3.count.Value() - 2) * 4;
             if (!write_data->wr_one_addr.Value()) {
+                WritesUnreadCommands("compute", opcode,
+                                     acb.subspan(std::min<size_t>(next_dw_off, acb.size())),
+                                     write_data->Address<u64>(), data_size);
                 std::memcpy(write_data->Address<void*>(), write_data->data, data_size);
             } else {
                 UNREACHABLE();
@@ -1666,45 +1714,8 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
     FIBER_EXIT;
 }
 
-Liverpool::CmdBuffer Liverpool::CopyCmdBuffers(std::span<const u32> dcb, std::span<const u32> ccb) {
-    auto& queue = mapped_queues[GfxQueueId];
-    ASSERT_MSG(queue.dcb_buffer.capacity() >= queue.dcb_buffer_offset + dcb.size(),
-               "dcb copy buffer out of reserved space");
-    ASSERT_MSG(queue.ccb_buffer.capacity() >= queue.ccb_buffer_offset + ccb.size(),
-               "ccb copy buffer out of reserved space");
-
-    queue.dcb_buffer.resize(
-        std::max(queue.dcb_buffer.size(), queue.dcb_buffer_offset + dcb.size()));
-    queue.ccb_buffer.resize(
-        std::max(queue.ccb_buffer.size(), queue.ccb_buffer_offset + ccb.size()));
-
-    const u32 prev_dcb_buffer_offset = queue.dcb_buffer_offset;
-    const u32 prev_ccb_buffer_offset = queue.ccb_buffer_offset;
-    if (!dcb.empty()) {
-        std::memcpy(queue.dcb_buffer.data() + queue.dcb_buffer_offset, dcb.data(),
-                    dcb.size_bytes());
-        queue.dcb_buffer_offset += dcb.size();
-        dcb = std::span<const u32>{queue.dcb_buffer.begin() + prev_dcb_buffer_offset,
-                                   queue.dcb_buffer.begin() + queue.dcb_buffer_offset};
-    }
-
-    if (!ccb.empty()) {
-        std::memcpy(queue.ccb_buffer.data() + queue.ccb_buffer_offset, ccb.data(),
-                    ccb.size_bytes());
-        queue.ccb_buffer_offset += ccb.size();
-        ccb = std::span<const u32>{queue.ccb_buffer.begin() + prev_ccb_buffer_offset,
-                                   queue.ccb_buffer.begin() + queue.ccb_buffer_offset};
-    }
-
-    return std::make_pair(dcb, ccb);
-}
-
 void Liverpool::SubmitGfx(std::span<const u32> dcb, std::span<const u32> ccb) {
     auto& queue = mapped_queues[GfxQueueId];
-
-    if (EmulatorSettings.IsCopyGpuBuffers()) {
-        std::tie(dcb, ccb) = CopyCmdBuffers(dcb, ccb);
-    }
 
     // The copy for the draw preparation workers is made before taking the queue lock, which
     // the GPU thread needs to pick up work.

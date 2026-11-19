@@ -439,6 +439,15 @@ target_include_directories(aln-frame-pacing-tests PRIVATE gpu/shim src)
 target_compile_definitions(aln-frame-pacing-tests PRIVATE ALN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_compile_options(aln-frame-pacing-tests PRIVATE -Wall -Wextra -Werror)
 
+# Focused tests of command memory read in place and indirect buffer range validation (tools/test.ps1); not part of the
+# default build.
+add_executable(aln-command-snapshot-tests EXCLUDE_FROM_ALL tests/command_snapshot_tests.cpp)
+set_target_properties(aln-command-snapshot-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_include_directories(aln-command-snapshot-tests PRIVATE gpu/shadps4)
+target_compile_definitions(aln-command-snapshot-tests PRIVATE ALN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+target_compile_options(aln-command-snapshot-tests PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(aln-command-snapshot-tests PRIVATE Threads::Threads)
+
 # Focused tests of the AvPlayer worker threads joining themselves and each other (tools/test.ps1); not part of the default build.
 add_executable(aln-avplayer-thread-tests EXCLUDE_FROM_ALL tests/avplayer_thread_tests.cpp)
 set_target_properties(aln-avplayer-thread-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
