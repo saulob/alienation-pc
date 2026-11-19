@@ -346,6 +346,15 @@ target_include_directories(aln-buffer-arena-tests PRIVATE gpu/shim gpu/shadps4 t
 target_compile_options(aln-buffer-arena-tests PRIVATE -Wall -Wextra)
 target_link_libraries(aln-buffer-arena-tests PRIVATE alngpu)
 
+# Focused tests of the persistent pipeline cache rules: seal, corrupt-data recovery, atomic writes, IO queue, identity,
+# warm-up mode, failure policy (tools/test.ps1); not part of the default build.
+add_executable(aln-pipeline-cache-tests EXCLUDE_FROM_ALL tests/pipeline_cache_tests.cpp)
+set_target_properties(aln-pipeline-cache-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_include_directories(aln-pipeline-cache-tests PRIVATE gpu/shadps4)
+target_compile_definitions(aln-pipeline-cache-tests PRIVATE ALN_SOURCE_DIR="${CMAKE_SOURCE_DIR}" NOMINMAX WIN32_LEAN_AND_MEAN)
+target_compile_options(aln-pipeline-cache-tests PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(aln-pipeline-cache-tests PRIVATE Threads::Threads)
+
 # Focused tests of the wave64 Ballot lowering on hand-built IR (tools/test.ps1); not part of the default build.
 add_executable(aln-wave64-lowering-tests EXCLUDE_FROM_ALL tests/wave64_lowering_tests.cpp)
 set_target_properties(aln-wave64-lowering-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)

@@ -3,13 +3,22 @@
 
 #pragma once
 
-#include "common/assert.h"
 #include "common/types.h"
 
+#include <concepts>
 #include <cstddef>
+#include <cstring>
+#include <stdexcept>
+#include <string>
+#include <type_traits>
 #include <vector>
 
 namespace Serialization {
+
+/// A cache entry that does not match its format; the entry is skipped, never fatal.
+struct CorruptData : std::runtime_error {
+    CorruptData() : std::runtime_error{"invalid or corrupted shader cache entry"} {}
+};
 
 template <typename T>
 concept Container = requires(T t) {
@@ -37,13 +46,18 @@ struct Archive {
         return container.size();
     }
 
+    [[nodiscard]] size_t Remaining() const {
+        return container.size() - offset;
+    }
+
     u8* CurrPtr() {
         return container.data() + offset;
     }
 
     void Advance(size_t size) {
-        ASSERT_MSG(offset + size <= container.size(),
-                   "Invalid or corrupted deserialization container/shader cache");
+        if (size > Remaining()) {
+            throw CorruptData{};
+        }
         offset += size;
     }
 
@@ -57,10 +71,10 @@ struct Archive {
     }
 
     Archive() = default;
-    explicit Archive(std::vector<u8>&& v) : container{v} {}
+    explicit Archive(std::vector<u8>&& v) : container{std::move(v)} {}
 
 private:
-    u32 offset{};
+    size_t offset{};
     std::vector<u8> container{};
 
     friend struct Writer;
@@ -70,11 +84,14 @@ private:
 struct Writer {
     template <typename T>
     void Write(const T* ptr, size_t size) {
-        if (ar.offset + size >= ar.container.size()) {
+        if (size > ar.Remaining()) {
             ar.Grow(size);
         }
+        if (size > ar.Remaining()) {
+            throw std::length_error{"serialization writer overrun"};
+        }
         std::memcpy(ar.CurrPtr(), reinterpret_cast<const void*>(ptr), size);
-        ar.Advance(size);
+        ar.offset += size;
     }
 
     template <typename T>
@@ -102,13 +119,16 @@ struct Writer {
     Archive& ar;
 };
 
+/// Reads never pass the end of the buffer and never size an allocation from a length the
+/// remaining bytes cannot hold; anything else throws CorruptData.
 struct Reader {
     template <typename T>
     void Read(T* ptr, size_t size) {
-        ASSERT_MSG(ar.offset + size <= ar.container.size(),
-                   "Invalid or corrupted deserialization container/shader cache");
+        if (size > ar.Remaining()) {
+            throw CorruptData{};
+        }
         std::memcpy(reinterpret_cast<void*>(ptr), ar.CurrPtr(), size);
-        ar.Advance(size);
+        ar.offset += size;
     }
 
     template <typename T>
@@ -119,9 +139,14 @@ struct Reader {
     }
 
     void Read(auto& v) {
+        using Element = std::remove_cvref_t<decltype(*v.begin())>;
+        constexpr size_t min_encoded_size = Container<Element> ? sizeof(size_t) : sizeof(Element);
         size_t num_elements{};
         Read(num_elements);
-        for (int i = 0; i < num_elements; ++i) {
+        if (num_elements > ar.Remaining() / min_encoded_size) {
+            throw CorruptData{};
+        }
+        for (size_t i = 0; i < num_elements; ++i) {
             v.emplace_back();
             Read(v.back());
         }
@@ -130,8 +155,21 @@ struct Reader {
     void Read(std::string& s) {
         size_t length{};
         Read(length);
+        if (length > ar.Remaining()) {
+            throw CorruptData{};
+        }
         s.resize(length);
         Read(s.data(), length);
+    }
+
+    /// The next `size` bytes in place, for data that is not copied into a field.
+    const u8* Borrow(size_t size) {
+        if (size > ar.Remaining()) {
+            throw CorruptData{};
+        }
+        const u8* bytes = ar.CurrPtr();
+        ar.offset += size;
+        return bytes;
     }
 
     Reader() = delete;

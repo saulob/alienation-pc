@@ -695,6 +695,22 @@ const GraphicsPipeline* PipelineCache::TryPreparedPipeline(const PreparedDraw& p
     return it != graphics_pipelines.end() ? it->second.get() : nullptr;
 }
 
+// aln: a pipeline the game asks for gets one more try, with the warm-up threads paused, when the
+// driver refused it; a second refusal is as fatal as it always was.
+template <typename Make>
+auto PipelineCache::CreateGamePipeline(std::string_view kind, Make&& make) {
+    return PipelineCachePolicy::BuildGamePipeline(
+        build_gate, std::forward<Make>(make),
+        [this](const PipelineCachePolicy::BuildFailed& error) {
+            LOG_WARNING(Render_Vulkan, "Pipeline: {}; retrying with the warm-up paused",
+                        error.what());
+            PauseParallelWarmUp();
+        },
+        [kind](const PipelineCachePolicy::BuildFailed& error) {
+            ASSERT_MSG(false, "Failed to create {} pipeline: {}", kind, error.what());
+        });
+}
+
 const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectParams params,
                                                            const PreparedDraw* prepared) {
     SeedWorkerCaches();
@@ -760,9 +776,12 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
         CompileTimer timer;
 
         GraphicsPipeline::SerializationSupport sdata{};
-        it.value() = std::make_unique<GraphicsPipeline>(
-            instance, scheduler, desc_heap, profile, sel.graphics_key, *pipeline_cache, sel.infos,
-            sel.runtime_infos, sel.fetch_shader, sel.modules, sdata, false);
+        it.value() = CreateGamePipeline("graphics", [&] {
+            sdata = {};
+            return std::make_unique<GraphicsPipeline>(
+                instance, scheduler, desc_heap, profile, sel.graphics_key, *pipeline_cache,
+                sel.infos, sel.runtime_infos, sel.fetch_shader, sel.modules, sdata, false);
+        });
 
         RegisterPipelineData(sel.graphics_key, pipeline_hash, sdata);
         ++num_new_pipelines;
@@ -794,9 +813,11 @@ const ComputePipeline* PipelineCache::GetComputePipeline() {
         CompileTimer timer;
 
         ComputePipeline::SerializationSupport sdata{};
-        it.value() = std::make_unique<ComputePipeline>(instance, scheduler, desc_heap, profile,
-                                                       *pipeline_cache, compute_key, *sel.infos[0],
-                                                       sel.modules[0], sdata, false);
+        it.value() = CreateGamePipeline("compute", [&] {
+            return std::make_unique<ComputePipeline>(instance, scheduler, desc_heap, profile,
+                                                     *pipeline_cache, compute_key, *sel.infos[0],
+                                                     sel.modules[0], sdata, false);
+        });
         RegisterPipelineData(compute_key, sdata);
         ++num_new_pipelines;
 

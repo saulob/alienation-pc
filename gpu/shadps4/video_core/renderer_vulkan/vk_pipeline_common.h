@@ -5,9 +5,11 @@
 
 #include "shader_recompiler/profile.h"
 #include "shader_recompiler/runtime_info.h"
+#include "video_core/pipeline_cache_policy.h"
 #include "video_core/renderer_vulkan/vk_common.h"
 
 #include <atomic>
+#include <string>
 #include <boost/container/small_vector.hpp>
 
 namespace Shader {
@@ -25,6 +27,13 @@ static constexpr auto AllGraphicsStageBits =
 class Instance;
 class Scheduler;
 class DescriptorHeap;
+
+/// aln: the driver refused a pipeline even without the shared pipeline cache and binaries.
+struct PipelineCreationFailed : PipelineCachePolicy::BuildFailed {
+    PipelineCreationFailed(vk::Result result_, const std::string& message)
+        : BuildFailed{message}, result{result_} {}
+    vk::Result result;
+};
 
 class Pipeline {
 public:

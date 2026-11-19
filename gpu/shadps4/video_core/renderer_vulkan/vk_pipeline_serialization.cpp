@@ -13,9 +13,7 @@
 #include <unordered_map>
 #include <fstream>
 #include <map>
-#ifdef _WIN32
-#include <windows.h>
-#endif
+#include "common/elf_info.h"
 #include "common/serdes.h"
 #include "common/scope_exit.h"
 #include "video_core/renderer_vulkan/vk_pipeline_serialization.h"
@@ -24,7 +22,9 @@
 #include "core/emulator_settings.h"
 #include "shader_recompiler/frontend/fetch_shader.h"
 #include "shader_recompiler/info.h"
+#include "video_core/cache_files.h"
 #include "video_core/cache_storage.h"
+#include "video_core/pipeline_cache_policy.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include "video_core/renderer_vulkan/vk_shader_util.h"
@@ -131,35 +131,7 @@ bool Save(const std::filesystem::path& file, std::span<const u8> bytes) {
     if (error) {
         return false;
     }
-    // Unique siblings avoid concurrent writers truncating one another's temporary data.
-    static std::atomic<u64> sequence{0};
-    auto temp = file;
-    temp += "." + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) +
-            "." + std::to_string(sequence++) + ".tmp";
-    bool written = false;
-    {
-        std::ofstream stream(temp, std::ios::binary | std::ios::trunc);
-        if (stream) {
-            stream.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-            stream.flush();
-            written = bool(stream);
-            stream.close();
-            written = written && !stream.fail();
-        }
-    }
-    bool renamed = false;
-    if (written) {
-#ifdef _WIN32
-        renamed = MoveFileExW(temp.c_str(), file.c_str(), MOVEFILE_REPLACE_EXISTING) != 0;
-#else
-        std::filesystem::rename(temp, file, error);
-        renamed = !error;
-#endif
-    }
-    if (!renamed) {
-        std::filesystem::remove(temp, error);
-    }
-    return renamed;
+    return PipelineCacheFiles::WriteFileAtomically(file, bytes);
 }
 std::optional<std::vector<Binary>> Load(const std::filesystem::path& file, const Key& global,
                                         const Key& pipeline, u64 graphics_hash) {
@@ -536,6 +508,22 @@ private:
     bool closing = false;
 };
 
+namespace {
+std::string GraphicsBlobName(u64 hash) {
+    return fmt::format("g_{:#018x}", hash);
+}
+
+std::string ComputeBlobName(u64 value) {
+    return fmt::format("c_{:#018x}", value);
+}
+
+// A cached pipeline is an optimisation: one the driver refuses is dropped, and the game builds
+// it itself when it needs it.
+void DropCachedPipeline(const std::string& name) {
+    Storage::DataBase::Instance().Remove(Storage::BlobType::PipelineKey, name);
+}
+} // namespace
+
 void RegisterPipelineData(const ComputePipelineKey& key,
                           ComputePipeline::SerializationSupport& sdata) {
     if (!Storage::DataBase::Instance().IsOpened()) {
@@ -552,7 +540,7 @@ void RegisterPipelineData(const ComputePipelineKey& key,
     sdata.Serialize(ar);
 
     Storage::DataBase::Instance().Save(Storage::BlobType::PipelineKey,
-                                       fmt::format("c_{:#018x}", key.value), ar.TakeOff());
+                                       ComputeBlobName(key.value), ar.TakeOff());
 }
 
 void RegisterPipelineData(const GraphicsPipelineKey& key, u64 hash,
@@ -571,7 +559,7 @@ void RegisterPipelineData(const GraphicsPipelineKey& key, u64 hash,
     sdata.Serialize(ar);
 
     Storage::DataBase::Instance().Save(Storage::BlobType::PipelineKey,
-                                       fmt::format("g_{:#018x}", hash), ar.TakeOff());
+                                       GraphicsBlobName(hash), ar.TakeOff());
 }
 
 void RegisterShaderMeta(const Shader::Info& info,
@@ -613,24 +601,29 @@ bool LoadShaderMeta(Serialization::Archive& ar, Shader::Info& info,
                     Shader::StageSpecialization& spec, size_t& perm_idx) {
     Serialization::Reader meta{ar};
 
-    u32 meta_version{};
-    meta.Read(meta_version);
-    if (meta_version != Serialization::ShaderMetaVersion) {
+    try {
+        u32 meta_version{};
+        meta.Read(meta_version);
+        if (meta_version != Serialization::ShaderMetaVersion) {
+            return false;
+        }
+
+        u32 binary_version{};
+        meta.Read(binary_version);
+        if (binary_version != Serialization::ShaderBinaryVersion) {
+            return false;
+        }
+
+        u64 perm_hash_ar{};
+        meta.Read(perm_hash_ar);
+        meta.Read(perm_idx);
+
+        spec.Deserialize(ar);
+        info.Deserialize(ar);
+    } catch (const Serialization::CorruptData&) {
+        Storage::DataBase::Instance().ReportCorrupt("shader entry");
         return false;
     }
-
-    u32 binary_version{};
-    meta.Read(binary_version);
-    if (binary_version != Serialization::ShaderBinaryVersion) {
-        return false;
-    }
-
-    u64 perm_hash_ar{};
-    meta.Read(perm_hash_ar);
-    meta.Read(perm_idx);
-
-    spec.Deserialize(ar);
-    info.Deserialize(ar);
 
     // Motion vertex shaders embed session-local buffer device addresses. They must be
     // recompiled for the current allocation, never loaded from a previous process.
@@ -664,6 +657,10 @@ bool ComputePipeline::SerializationSupport::Deserialize(Serialization::Archive& 
 }
 
 bool PipelineCache::LoadComputePipeline(Serialization::Archive& ar) {
+    SCOPE_EXIT {
+        sel.infos.fill(nullptr);
+        sel.modules.fill(nullptr);
+    };
     compute_key.Deserialize(ar);
 
     ComputePipeline::SerializationSupport sdata{};
@@ -682,16 +679,19 @@ bool PipelineCache::LoadComputePipeline(Serialization::Archive& ar) {
         return false;
     }
 
-    const auto [it, is_new] = compute_pipelines.try_emplace(compute_key);
+    std::unique_ptr<ComputePipeline> pipeline;
+    try {
+        pipeline = std::make_unique<ComputePipeline>(instance, scheduler, desc_heap, profile,
+                                                     *pipeline_cache, compute_key, *sel.infos[0],
+                                                     sel.modules[0], sdata, true);
+    } catch (const PipelineCreationFailed& error) {
+        LOG_WARNING(Render_Vulkan, "Pipeline warm-up: {}; left to the game", error.what());
+        DropCachedPipeline(ComputeBlobName(compute_key.value));
+        return false;
+    }
+
+    const bool is_new = compute_pipelines.try_emplace(compute_key, std::move(pipeline)).second;
     ASSERT(is_new);
-
-    it.value() = std::make_unique<ComputePipeline>(instance, scheduler, desc_heap, profile,
-                                                   *pipeline_cache, compute_key, *sel.infos[0],
-                                                   sel.modules[0], sdata, true);
-
-    sel.infos.fill(nullptr);
-    sel.modules.fill(nullptr);
-
     return true;
 }
 
@@ -705,6 +705,9 @@ bool GraphicsPipelineKey::Deserialize(Serialization::Archive& ar) {
     Serialization::Reader key{ar};
 
     key.Read(this, sizeof(*this));
+    if (num_color_attachments > AmdGpu::NUM_COLOR_BUFFERS) {
+        throw Serialization::CorruptData{};
+    }
     return true;
 }
 
@@ -728,10 +731,20 @@ bool GraphicsPipeline::SerializationSupport::Deserialize(Serialization::Archive&
     sdata.Read(multisampling);
     sdata.Read(tcs);
     sdata.Read(tes);
+    if (vertex_attributes.size() > MaxVertexBufferCount ||
+        vertex_bindings.size() > MaxVertexBufferCount || divisors.size() > MaxVertexBufferCount ||
+        multisampling.pNext || multisampling.pSampleMask) {
+        throw Serialization::CorruptData{};
+    }
     return true;
 }
 
 bool PipelineCache::LoadGraphicsPipeline(Serialization::Archive& ar) {
+    SCOPE_EXIT {
+        sel.infos.fill(nullptr);
+        sel.modules.fill(nullptr);
+        sel.fetch_shader.reset();
+    };
     sel.graphics_key.Deserialize(ar);
 
     GraphicsPipeline::SerializationSupport sdata{};
@@ -757,17 +770,20 @@ bool PipelineCache::LoadGraphicsPipeline(Serialization::Archive& ar) {
         }
     }
 
-    const auto [it, is_new] = graphics_pipelines.try_emplace(sel.graphics_key);
+    std::unique_ptr<GraphicsPipeline> pipeline;
+    try {
+        pipeline = std::make_unique<GraphicsPipeline>(
+            instance, scheduler, desc_heap, profile, sel.graphics_key, *pipeline_cache, sel.infos,
+            sel.runtime_infos, sel.fetch_shader, sel.modules, sdata, true);
+    } catch (const PipelineCreationFailed& error) {
+        LOG_WARNING(Render_Vulkan, "Pipeline warm-up: {}; left to the game", error.what());
+        DropCachedPipeline(GraphicsBlobName(std::hash<GraphicsPipelineKey>{}(sel.graphics_key)));
+        return false;
+    }
+
+    const bool is_new =
+        graphics_pipelines.try_emplace(sel.graphics_key, std::move(pipeline)).second;
     ASSERT(is_new);
-
-    it.value() = std::make_unique<GraphicsPipeline>(
-        instance, scheduler, desc_heap, profile, sel.graphics_key, *pipeline_cache, sel.infos,
-        sel.runtime_infos, sel.fetch_shader, sel.modules, sdata, true);
-
-    sel.infos.fill(nullptr);
-    sel.modules.fill(nullptr);
-    sel.fetch_shader.reset();
-
     return true;
 }
 
@@ -829,42 +845,96 @@ bool PipelineCache::CheckCacheProfile() {
         return false;
     }
 
-    Storage::DataBase::Instance().Open();
+    using namespace PipelineCachePolicy;
+    auto& db = Storage::DataBase::Instance();
+    db.Open();
 
-    // Check if cache is compatible
-    std::vector<u8> profile_data{};
-    Storage::DataBase::Instance().Load(Storage::BlobType::ShaderProfile, "profile", profile_data);
-    if (profile_data.empty()) {
-        Storage::DataBase::Instance().FinishPreload();
-
-        profile_data.resize(sizeof(profile));
-        std::memcpy(profile_data.data(), &profile, sizeof(profile));
-        Storage::DataBase::Instance().Save(Storage::BlobType::ShaderProfile, "profile",
-                                           std::move(profile_data));
-        return false;
-    }
-    if (profile_data.size() != sizeof(Shader::Profile)) {
-        LOG_WARNING(Render, "Pipeline cache profile has unexpected size ({} != {})",
-                    profile_data.size(), sizeof(Shader::Profile));
-    }
-    Shader::Profile cached_profile{};
+    std::vector<u8> profile_data, identity_data;
+    db.Load(Storage::BlobType::ShaderProfile, "profile", profile_data);
+    db.Load(Storage::BlobType::ShaderProfile, "identity", identity_data);
+    const auto& game = Common::ElfInfo::Instance();
+    const auto current = CurrentStoreIdentity(
+        game.GameSerial(), game.AppVer(), Serialization::ShaderBinaryVersion,
+        Serialization::ShaderMetaVersion, Serialization::PipelineKeyVersion,
+        sizeof(Shader::Profile));
+    const auto verdict = CheckStore(identity_data, current);
+    bool profile_match = false;
     if (profile_data.size() == sizeof(Shader::Profile)) {
+        Shader::Profile cached_profile{};
         std::memcpy(&cached_profile, profile_data.data(), sizeof(cached_profile));
+        profile_match = cached_profile == profile;
     }
-    if (profile_data.size() != sizeof(Shader::Profile) || cached_profile != profile) {
-        // aln: upstream closed the cache for the session here, so it was never rewritten
-        // and every later session compiled every shader again (stutters on each new area).
-        // Start a fresh cache for this build and GPU instead.
-        LOG_WARNING(Render, "Pipeline cache isn't compatible with current system: rebuilding it");
-        Storage::DataBase::Instance().Clear();
-        Storage::DataBase::Instance().FinishPreload();
-        profile_data.resize(sizeof(profile));
-        std::memcpy(profile_data.data(), &profile, sizeof(profile));
-        Storage::DataBase::Instance().Save(Storage::BlobType::ShaderProfile, "profile",
-                                           std::move(profile_data));
-        return false;
+    const bool reusable = verdict == StoreVerdict::Reuse && profile_match;
+    const auto action =
+        DecideStoreAction(verdict, !profile_data.empty(), profile_match, !reusable && db.IsEmpty());
+    if (action == StoreAction::Reuse) {
+        return true;
     }
-    return true;
+
+    // aln: upstream closed the cache for the session here, so it was never rewritten and every
+    // later session compiled every shader again (stutters on each new area). Start a fresh
+    // cache for this build and GPU instead.
+    std::vector<u8> warmup_data;
+    if (action == StoreAction::Rebuild) {
+        std::printf("Pipeline cache: %s, rebuilding\n",
+                    verdict != StoreVerdict::Reuse ? std::string(ToString(verdict)).c_str()
+                                                   : "shader profile changed");
+        db.Load(Storage::BlobType::ShaderProfile, "warmup", warmup_data);
+        db.Clear();
+    }
+    db.FinishPreload();
+    profile_data.resize(sizeof(profile));
+    std::memcpy(profile_data.data(), &profile, sizeof(profile));
+    db.Save(Storage::BlobType::ShaderProfile, "profile", std::move(profile_data));
+    db.Save(Storage::BlobType::ShaderProfile, "identity", EncodeStoreIdentity(current));
+    if (!warmup_data.empty()) {
+        db.Save(Storage::BlobType::ShaderProfile, "warmup", std::move(warmup_data));
+    }
+    return false;
+}
+
+namespace {
+PipelineCachePolicy::GpuIdentity CurrentGpu(const Instance& instance) {
+    return {
+        .vendor_id = instance.GetVendorID(),
+        .device_id = instance.GetDeviceID(),
+        .driver_id = u32(instance.GetDriverID()),
+        .driver_version = instance.GetDriverVersion(),
+        .api_version = instance.ApiVersion(),
+    };
+}
+
+// The game's own pipelines wait this long for the warm-up builds already running; a driver that
+// takes longer is not going to answer a retry either.
+constexpr auto WarmupPauseLimit = std::chrono::seconds(10);
+} // namespace
+
+void PipelineCache::ChooseWarmupMode() {
+    using namespace PipelineCachePolicy;
+    std::vector<u8> stored;
+    Storage::DataBase::Instance().Load(Storage::BlobType::ShaderProfile, "warmup", stored);
+    if (stored.empty()) {
+        return;
+    }
+    if (PipelineCachePolicy::ChooseWarmupMode(stored, CurrentGpu(instance)) == WarmupMode::Serial) {
+        build_gate.EnableSerial();
+        std::printf("Pipeline warm-up: one pipeline at a time on this driver (a parallel build "
+                    "failed before)\n");
+    } else if (DecodeWarmupPolicy(stored)) {
+        std::printf("Pipeline warm-up: another GPU or driver than the one that failed, parallel "
+                    "builds\n");
+    }
+}
+
+void PipelineCache::EnableSerialBuilds(std::string_view reason) {
+    if (!build_gate.EnableSerial()) {
+        return;
+    }
+    std::printf("Pipeline warm-up: %.*s; building one pipeline at a time from now on\n",
+                int(reason.size()), reason.data());
+    const PipelineCachePolicy::WarmupPolicy policy{CurrentGpu(instance), 1};
+    Storage::DataBase::Instance().Save(Storage::BlobType::ShaderProfile, "warmup",
+                                       PipelineCachePolicy::EncodeWarmupPolicy(policy));
 }
 
 void PipelineCache::WarmUp(const std::function<void(u32, u32)>& progress) {
@@ -883,32 +953,32 @@ void PipelineCache::WarmUp(const std::function<void(u32, u32)>& progress) {
         }
     };
 
-    Storage::DataBase::Instance().ForEachBlob(
-        Storage::BlobType::PipelineKey, [&](std::vector<u8>&& data) {
+    auto& db = Storage::DataBase::Instance();
+    db.ForEachBlob(
+        Storage::BlobType::PipelineKey, [&](std::vector<u8>&& data, const std::string& name) {
             ++num_total_pipelines;
             report();
 
             Serialization::Archive ar{std::move(data)};
             Serialization::Reader pldata{ar};
 
-            u32 version{};
-            pldata.Read(version);
-            if (version != Serialization::PipelineKeyVersion) {
-                return;
-            }
+            try {
+                u32 version{};
+                pldata.Read(version);
+                if (version != Serialization::PipelineKeyVersion) {
+                    return;
+                }
 
-            u32 is_compute{};
-            pldata.Read(is_compute);
+                u32 is_compute{};
+                pldata.Read(is_compute);
 
-            bool result{};
-            if (is_compute) {
-                result = LoadComputePipeline(ar);
-            } else {
-                result = LoadGraphicsPipeline(ar);
-            }
-
-            if (result) {
-                ++num_pipelines;
+                const bool result = is_compute ? LoadComputePipeline(ar) : LoadGraphicsPipeline(ar);
+                if (result) {
+                    ++num_pipelines;
+                }
+            } catch (const Serialization::CorruptData&) {
+                db.ReportCorrupt("pipeline entry");
+                db.Remove(Storage::BlobType::PipelineKey, name);
             }
         });
 
@@ -996,6 +1066,7 @@ bool PipelineCache::StartBackgroundWarmUp() {
     if (!CheckCacheProfile()) {
         return true; // nothing cached yet
     }
+    ChooseWarmupMode();
     background = new BackgroundWarmup;
     auto& warm = *background;
     warm.started = std::chrono::steady_clock::now();
@@ -1008,7 +1079,9 @@ bool PipelineCache::StartBackgroundWarmUp() {
         warm.total = u32(db.CountBlobs(Storage::BlobType::PipelineKey));
         db.ForEachBlob(
             Storage::BlobType::PipelineKey,
-            [&](std::vector<u8>&& data) { ReadWarmEntry(warm, std::move(data)); },
+            [&](std::vector<u8>&& data, const std::string& name) {
+                ReadWarmEntry(warm, std::move(data), name);
+            },
             [&] { return warm.stopping.load(std::memory_order_relaxed); });
         warm.stages.clear();
         warm.reader_ns = ElapsedNs(reader_started);
@@ -1019,34 +1092,41 @@ bool PipelineCache::StartBackgroundWarmUp() {
     return true;
 }
 
-void PipelineCache::ReadWarmEntry(BackgroundWarmup& warm, std::vector<u8>&& data) {
+void PipelineCache::ReadWarmEntry(BackgroundWarmup& warm, std::vector<u8>&& data,
+                                  const std::string& name) {
     const auto entry_started = std::chrono::steady_clock::now();
     SCOPE_EXIT { warm.entry_ns += ElapsedNs(entry_started); ++warm.entries; };
     const auto skip = [&] { warm.done.fetch_add(1, std::memory_order_relaxed); };
     Serialization::Archive ar{std::move(data)};
     Serialization::Reader pldata{ar};
-    u32 version{};
-    pldata.Read(version);
-    if (version != Serialization::PipelineKeyVersion) {
-        return skip();
-    }
-    u32 is_compute{};
-    pldata.Read(is_compute);
-
     BackgroundWarmup::Entry entry{};
-    entry.compute = is_compute != 0;
     std::array<u64, MaxShaderStages> hashes{};
-    if (entry.compute) {
-        entry.compute_key.Deserialize(ar);
-        ComputePipeline::SerializationSupport sdata{};
-        sdata.Deserialize(ar);
-        hashes[0] = entry.compute_key.value;
-    } else {
-        entry.graphics_key.Deserialize(ar);
-        entry.sdata.Deserialize(ar);
-        for (u32 i = 0; i < MaxShaderStages; ++i) {
-            hashes[i] = entry.graphics_key.stage_hashes[i];
+    try {
+        u32 version{};
+        pldata.Read(version);
+        if (version != Serialization::PipelineKeyVersion) {
+            return skip();
         }
+        u32 is_compute{};
+        pldata.Read(is_compute);
+
+        entry.compute = is_compute != 0;
+        if (entry.compute) {
+            entry.compute_key.Deserialize(ar);
+            ComputePipeline::SerializationSupport sdata{};
+            sdata.Deserialize(ar);
+            hashes[0] = entry.compute_key.value;
+        } else {
+            entry.graphics_key.Deserialize(ar);
+            entry.sdata.Deserialize(ar);
+            for (u32 i = 0; i < MaxShaderStages; ++i) {
+                hashes[i] = entry.graphics_key.stage_hashes[i];
+            }
+        }
+    } catch (const Serialization::CorruptData&) {
+        Storage::DataBase::Instance().ReportCorrupt("pipeline entry");
+        Storage::DataBase::Instance().Remove(Storage::BlobType::PipelineKey, name);
+        return skip();
     }
 
     auto& db = Storage::DataBase::Instance();
@@ -1208,16 +1288,32 @@ void PipelineCache::PumpWarmUp() {
             const auto build_started = std::chrono::steady_clock::now();
             warm.build_queue_ns += ElapsedNs(queued);
             SCOPE_EXIT { warm.build_ns += ElapsedNs(build_started); ++warm.completed; };
+            const PipelineCachePolicy::BuildGate::Slot slot{
+                build_gate, PipelineCachePolicy::BuildGate::Kind::Warmup};
             BackgroundWarmup::Built built{graphics_key, compute_key};
-            if (compute) {
-                ComputePipeline::SerializationSupport compute_data{};
-                built.compute = std::make_unique<ComputePipeline>(
-                    instance, scheduler, desc_heap, profile, *pipeline_cache, compute_key,
-                    *infos[0], modules[0], compute_data, true);
-            } else {
-                built.graphics = std::make_unique<GraphicsPipeline>(
-                    instance, scheduler, desc_heap, profile, graphics_key, *pipeline_cache, infos,
-                    no_runtime_infos, fetch, modules, sdata, true);
+            try {
+                if (compute) {
+                    ComputePipeline::SerializationSupport compute_data{};
+                    built.compute = std::make_unique<ComputePipeline>(
+                        instance, scheduler, desc_heap, profile, *pipeline_cache, compute_key,
+                        *infos[0], modules[0], compute_data, true);
+                } else {
+                    built.graphics = std::make_unique<GraphicsPipeline>(
+                        instance, scheduler, desc_heap, profile, graphics_key, *pipeline_cache,
+                        infos, no_runtime_infos, fetch, modules, sdata, true);
+                }
+            } catch (const PipelineCreationFailed& error) {
+                LOG_WARNING(Render_Vulkan, "Pipeline warm-up: {}; left to the game", error.what());
+                const auto failure = PipelineCachePolicy::OnWarmupBuildFailure(slot.Overlapped());
+                if (failure.drop_entry) {
+                    DropCachedPipeline(
+                        compute ? ComputeBlobName(compute_key.value)
+                                : GraphicsBlobName(std::hash<GraphicsPipelineKey>{}(graphics_key)));
+                }
+                if (failure.record_serial) {
+                    EnableSerialBuilds("a pipeline failed in a parallel build");
+                }
+                return false;
             }
             warm.built.Push(std::move(built));
             return true;
@@ -1270,6 +1366,15 @@ void PipelineCache::PumpWarmUp() {
     Storage::DataBase::Instance().FinishPreload();
 }
 
+void PipelineCache::PauseParallelWarmUp() {
+    if (background && !background->finished) {
+        EnableSerialBuilds("a game pipeline failed during the warm-up");
+    }
+    if (!build_gate.WaitForParallelBuilds(WarmupPauseLimit)) {
+        LOG_WARNING(Render_Vulkan, "Pipeline warm-up: parallel builds still running, retrying anyway");
+    }
+}
+
 void PipelineCache::StopWarmUp() {
     if (!background) {
         return;
@@ -1293,6 +1398,11 @@ void PipelineCache::Sync() {
 
 namespace Shader {
 
+namespace {
+constexpr size_t MaxWalkerCodeBytes = 1u << 20;
+constexpr u32 MaxFlattenedUserDataDwords = 1u << 16;
+} // namespace
+
 void Info::Serialize(Serialization::Archive& ar) const {
     Serialization::Writer info{ar};
 
@@ -1306,6 +1416,11 @@ bool Info::Deserialize(Serialization::Archive& ar) {
 
     info.Read(this, sizeof(Shader::InfoPersistent));
     info.Read(flattened_ud_buf);
+    if (buffers.size() > buffers.capacity() || images.size() > images.capacity() ||
+        samplers.size() > samplers.capacity() || fmasks.size() > fmasks.capacity() ||
+        u32(sw_stage) >= MaxStageTypes) {
+        throw Serialization::CorruptData{};
+    }
 
     return srt_info.Deserialize(ar);
 }
@@ -1344,10 +1459,12 @@ bool PersistentSrtInfo::Deserialize(Serialization::Archive& ar) {
     Serialization::Reader srt{ar};
 
     srt.Read(this, sizeof(*this));
+    if (flattened_bufsize_dw > MaxFlattenedUserDataDwords || walker_func_size > MaxWalkerCodeBytes) {
+        throw Serialization::CorruptData{};
+    }
 
     if (walker_func_size) {
-        walker_func = RegisterWalkerCode(ar.CurrPtr(), walker_func_size);
-        ar.Advance(walker_func_size);
+        walker_func = RegisterWalkerCode(srt.Borrow(walker_func_size), walker_func_size);
     }
 
     return true;
@@ -1383,6 +1500,9 @@ bool StageSpecialization::Deserialize(Serialization::Archive& ar) {
 
     std::string bits{};
     spec.Read(bits);
+    if (bits.size() != MaxStageResources || bits.find_first_not_of("01") != std::string::npos) {
+        throw Serialization::CorruptData{};
+    }
     bitset = std::bitset<MaxStageResources>(bits);
 
     u64 fetch_data_size{};

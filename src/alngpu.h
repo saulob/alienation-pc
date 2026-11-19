@@ -15,6 +15,7 @@ typedef struct {
     int32_t width, height;      /* initial window size */
     uint32_t features;          /* ALN_GPU_FEATURE_*: what the game build supports (the Options menu shows only those) */
     int32_t render_width, render_height; /* the game's render size: the display sceVideoOutGetResolutionStatus reports */
+    const char *build_version;  /* "1.06": which build of the title this is, so each keeps its own pipeline cache; "" if unknown */
 } AlnGpuConfig;
 #define ALN_GPU_FEATURE_RENDER_RESOLUTION (1u << 0)
 /* 1 when a video core is linked in, 0 for the stub. */
