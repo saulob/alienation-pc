@@ -138,6 +138,14 @@ static u32 MapOutputs(std::span<Shader::OutputMap, 3> outputs, const AmdGpu::VsO
     return num_outputs;
 }
 
+bool PipelineCache::FragmentClipDistanceEmulation(const AmdGpu::Regs& regs) const {
+    return Shader::FragmentClipDistanceEmulation(
+        regs.stage_enable.IsStageEnabled(static_cast<u32>(HwStage::Local)),
+        regs.stage_enable.IsStageEnabled(static_cast<u32>(HwStage::Geometry)),
+        regs.vs_output_control.clip_distance_enable, regs.clipper_control.user_clip_plane_enable,
+        profile.needs_clip_distance_emulation);
+}
+
 const Shader::RuntimeInfo& PipelineCache::BuildRuntimeInfo(PipelineSelection& sel, HwStage stage,
                                                              SwStage l_stage) {
     auto& info = sel.runtime_infos[u32(l_stage)];
@@ -259,17 +267,7 @@ const Shader::RuntimeInfo& PipelineCache::BuildRuntimeInfo(PipelineSelection& se
         for (u32 i = 0; i < Shader::MaxColorBuffers; i++) {
             info.hw.fs.color_buffers[i] = sel.graphics_key.color_buffers[i];
         }
-        // Lowered user clip planes ride the same emulation path as guest-exported distances, so
-        // the fragment side arms whenever the hardware vertex stage lowers them, keeping its input
-        // locations in sync with the shifted vertex outputs.
-        const bool lowers_user_clip_planes =
-            regs.clipper_control.user_clip_plane_enable &&
-            !regs.stage_enable.IsStageEnabled(static_cast<u32>(HwStage::Geometry));
-        info.hw.fs.clip_distance_emulation =
-            ((regs.vs_output_control.clip_distance_enable &&
-              !regs.stage_enable.IsStageEnabled(static_cast<u32>(HwStage::Local))) ||
-             lowers_user_clip_planes) &&
-            profile.needs_clip_distance_emulation;
+        info.hw.fs.clip_distance_emulation = FragmentClipDistanceEmulation(regs);
         break;
     }
     case HwStage::Compute: {
@@ -950,7 +948,12 @@ bool PipelineCache::RefreshGraphicsStages(PipelineSelection& sel) {
     sel.infos.fill(nullptr);
     sel.modules.fill(nullptr);
 
-    bind_stage(HwStage::Fragment, SwStage::Fragment);
+    if (!bind_stage(HwStage::Fragment, SwStage::Fragment)) {
+        // A pipeline without a pixel shader must not inherit the previous draw's fragment state.
+        auto& fragment = sel.runtime_infos[static_cast<u32>(SwStage::Fragment)];
+        fragment.Initialize(HwStage::Fragment, SwStage::Fragment);
+        fragment.hw.fs.clip_distance_emulation = FragmentClipDistanceEmulation(regs);
+    }
     if (sel.compilation_pending) {
         return false;
     }

@@ -37,6 +37,28 @@ enum class SwStage : u32 {
 constexpr u32 MaxStageTypes = static_cast<u32>(SwStage::NumLogicalStages);
 constexpr auto MaxEmulatedClipDistances = 4u;
 
+/// The program the hardware VS stage runs for a pipeline: the GS copy path with a geometry stage,
+/// the domain shader with tessellation, otherwise the guest vertex shader.
+constexpr SwStage HardwareVsProgram(bool tessellation, bool geometry) noexcept {
+    return geometry ? SwStage::Geometry : tessellation ? SwStage::TessellationEval : SwStage::Vertex;
+}
+
+/// Clip distances travel as an extra attribute ahead of the parameters (NVIDIA interpolates them
+/// wrongly), written only by the guest vertex shader running on the hardware VS. The fragment
+/// shader must read them under exactly the same condition, or every input location is off by one.
+constexpr bool EmulatesClipDistances(HwStage hw_stage, SwStage sw_stage, bool needs_emulation) noexcept {
+    return needs_emulation && hw_stage == HwStage::Vertex && sw_stage == SwStage::Vertex;
+}
+
+/// Taken from the pipeline's own registers, never from an earlier draw: pipelines without a
+/// pixel shader get a discard-only one under the same rule.
+constexpr bool FragmentClipDistanceEmulation(bool tessellation, bool geometry, bool clip_distances,
+                                             bool user_clip_planes, bool needs_emulation) noexcept {
+    return EmulatesClipDistances(HwStage::Vertex, HardwareVsProgram(tessellation, geometry),
+                                 needs_emulation) &&
+           (clip_distances || user_clip_planes);
+}
+
 constexpr HwStage StageFromIndex(size_t index) noexcept {
     return static_cast<HwStage>(index);
 }

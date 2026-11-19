@@ -590,9 +590,8 @@ void EmitContext::DefineVertexBlock() {
     const std::array<Id, 8> zero{f32_zero_value, f32_zero_value, f32_zero_value, f32_zero_value,
                                  f32_zero_value, f32_zero_value, f32_zero_value, f32_zero_value};
     output_position = DefineVariable(F32[4], spv::BuiltIn::Position, spv::StorageClass::Output);
-    const bool needs_clip_distance_emulation = sw_stage == SwStage::Vertex &&
-                                               hw_stage == HwStage::Vertex &&
-                                               profile.needs_clip_distance_emulation;
+    const bool needs_clip_distance_emulation =
+        EmulatesClipDistances(hw_stage, sw_stage, profile.needs_clip_distance_emulation);
     const auto has_clip_distance_outputs = info.stores.GetAny(IR::Attribute::ClipDistance);
     if (has_clip_distance_outputs && !needs_clip_distance_emulation) {
         const Id type{TypeArray(F32[1], ConstU32(8U))};
@@ -632,8 +631,7 @@ void EmitContext::DefineOutputs() {
             }
         } else {
             const bool needs_clip_distance_emulation =
-                hw_stage == HwStage::Vertex && profile.needs_clip_distance_emulation &&
-                info.stores.GetAny(IR::Attribute::ClipDistance);
+                EmitsEmulatedClipDistances(&info, profile.needs_clip_distance_emulation);
             u32 num_attrs = 0u;
             for (u32 i = 0; i < IR::NumParams; i++) {
                 const IR::Attribute param{IR::Attribute::Param0 + i};

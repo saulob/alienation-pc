@@ -21,7 +21,7 @@ void CopyNV12Data(u8* dst, u64 max_size, const AVFrame& src) {
     const auto luma_dst = dst;
     const auto chroma_dst = dst + dst_pitch * dst_height;
 
-    if (src.width != dst_pitch) {
+    if (src.linesize[0] != s32(dst_pitch) || src.linesize[1] != s32(dst_pitch)) {
         for (u32 y = 0; y < src.height; ++y) {
             std::memcpy(luma_dst + y * dst_pitch, src.data[0] + y * src.linesize[0], src.width);
         }
@@ -29,8 +29,8 @@ void CopyNV12Data(u8* dst, u64 max_size, const AVFrame& src) {
             std::memcpy(chroma_dst + y * dst_pitch, src.data[1] + y * src.linesize[1], src.width);
         }
     } else {
-        std::memcpy(luma_dst, src.data[0], src.width * src.height);
-        std::memcpy(chroma_dst, src.data[1], (src.width * src.height) / 2);
+        std::memcpy(luma_dst, src.data[0], dst_pitch * src.height);
+        std::memcpy(chroma_dst, src.data[1], dst_pitch * (src.height / 2));
     }
 
     if (src.height != dst_height) {

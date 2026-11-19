@@ -6,7 +6,11 @@ upscaler (FSR 3.1, FSR 4, DLSS, TAA) with its camera and object motion is not pa
 built (the game does not import it).
 libSceAvPlayer (FFmpeg): src/core/libraries/avplayer, src/core/libraries/videodec/video_utils.{h,cpp} and
 src/common/support/avdec.h from upstream commit a808e762. Local changes: worker threads attach a guest TCB before they
-run (avplayer_thread.h), media files open through the runtime's /app0 mapping, the handle streamer is not used.
+run (avplayer_thread.h), media files open through the runtime's /app0 mapping, the handle streamer is not used,
+and CopyNV12Data copies whole rows only when both source planes are already at the guest pitch.
+Clip-distance emulation (NVIDIA): the fragment side follows the stage that writes the emulated attribute
+(HardwareVsProgram/EmulatesClipDistances in runtime_info.h), and a pipeline without a pixel shader takes it from its
+own registers instead of the previous draw's fragment state.
 Local changes are marked with "aln:" comments.
 Backported from upstream after b4e7ae7 (2026-09-24), recompiler correctness fixes:
   233562929 V_INTERP_MOV_F32 P10/P20 selectors (#5087), d96278e1e compute shader floating-point

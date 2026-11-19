@@ -319,6 +319,19 @@ target_include_directories(aln-render-lifetime-tests PRIVATE gpu/shim gpu/shadps
     gpu/third_party/gcn/include gpu/third_party/half/include gpu/third_party/xbyak)
 target_link_libraries(aln-render-lifetime-tests PRIVATE alngpu)
 
+# Focused tests of decoded video frame layout (tools/test.ps1); not part of the default build.
+add_executable(aln-video-frame-tests EXCLUDE_FROM_ALL tests/video_frame_tests.cpp)
+set_target_properties(aln-video-frame-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_include_directories(aln-video-frame-tests PRIVATE gpu/shim gpu/shadps4 tests src ${CMAKE_BINARY_DIR}/gpu/include)
+target_link_libraries(aln-video-frame-tests PRIVATE alngpu)
+
+# Focused tests of the interface between shader stages (tools/test.ps1); not part of the default build.
+add_executable(aln-shader-interface-tests EXCLUDE_FROM_ALL tests/shader_interface_tests.cpp)
+set_target_properties(aln-shader-interface-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_include_directories(aln-shader-interface-tests PRIVATE gpu/shim gpu/shadps4 tests src ${CMAKE_BINARY_DIR}/gpu/include
+    gpu/third_party/gcn/include gpu/third_party/half/include gpu/third_party/xbyak)
+target_link_libraries(aln-shader-interface-tests PRIVATE alngpu)
+
 # Focused tests of sparse buffer arenas and their barrier tracking (tools/test.ps1); not part of the default build.
 add_executable(aln-buffer-arena-tests EXCLUDE_FROM_ALL tests/buffer_arena_tests.cpp)
 set_target_properties(aln-buffer-arena-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)

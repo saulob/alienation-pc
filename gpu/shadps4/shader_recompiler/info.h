@@ -261,4 +261,11 @@ struct Info : InfoPersistent {
 };
 DECLARE_ENUM_FLAG_OPERATORS(Info::ReadConstType);
 
+/// The stage writes its clip distances as the emulated attribute, which only a fragment shader
+/// discards on: with no pixel shader bound the pipeline needs a discard-only one.
+inline bool EmitsEmulatedClipDistances(const Info* stage, bool needs_emulation) {
+    return stage && EmulatesClipDistances(stage->hw_stage, stage->sw_stage, needs_emulation) &&
+           stage->stores.GetAny(IR::Attribute::ClipDistance);
+}
+
 } // namespace Shader

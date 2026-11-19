@@ -333,6 +333,8 @@ static void classification(void) {
     CHECK(aln_crash_classify(0xC00000FDu, 0, 0) == ALN_FAULT_CRASH);
     CHECK(aln_crash_classify(0x80000003u, 1, 1) == ALN_FAULT_IGNORE);
     CHECK(aln_crash_classify(0xE06D7363u, 1, 1) == ALN_FAULT_IGNORE);
+    /* ALN-VUK9PE: the thread-naming exception (MS_VC_EXCEPTION) is left to the __try that raises it. */
+    CHECK(aln_crash_classify(0x406D1388u, 1, 1) == ALN_FAULT_IGNORE);
     char path[100];
     CHECK(aln_crash_dump_path(path, sizeof(path), "C:\\logs\\alienation_017.log", 1) && !strcmp(path, "C:\\logs\\alienation_017.dmp"));
     CHECK(aln_crash_dump_path(path, sizeof(path), "C:\\logs\\alienation_017.log", 3) && !strcmp(path, "C:\\logs\\alienation_017_3.dmp"));
