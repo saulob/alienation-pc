@@ -52,6 +52,109 @@ inline std::uint32_t ImageCount(std::uint32_t surface_min, std::uint32_t surface
     return count;
 }
 
+/// A swapchain acquire or present result as the frame sees it. OutOfDate also covers a lost surface.
+enum class SwapResult { Success, Suboptimal, OutOfDate, Failure };
+
+struct SwapStep {
+    bool usable;   ///< acquire: the image can be drawn and presented; present: the image was queued for display
+    bool recreate; ///< the swapchain is to be recreated once the frame in hand is presented
+};
+
+/// Values of VkResult.
+inline constexpr int kVkSuccess = 0;
+inline constexpr int kVkErrorUnknown = -13;
+inline constexpr int kVkErrorSurfaceLost = -1000000000;
+inline constexpr int kVkSuboptimal = 1000001003;
+inline constexpr int kVkErrorOutOfDate = -1000001004;
+
+inline SwapResult ClassifyAcquire(int vk_result) {
+    switch (vk_result) {
+    case kVkSuccess:
+        return SwapResult::Success;
+    case kVkSuboptimal:
+        return SwapResult::Suboptimal;
+    case kVkErrorOutOfDate:
+    case kVkErrorSurfaceLost:
+    case kVkErrorUnknown:
+        return SwapResult::OutOfDate;
+    default:
+        return SwapResult::Failure;
+    }
+}
+
+inline SwapResult ClassifyPresent(int vk_result) {
+    switch (vk_result) {
+    case kVkSuccess:
+        return SwapResult::Success;
+    case kVkSuboptimal:
+        return SwapResult::Suboptimal;
+    case kVkErrorOutOfDate:
+        return SwapResult::OutOfDate;
+    default:
+        return SwapResult::Failure;
+    }
+}
+
+/// The acquire handed out an image and will signal its semaphore: it is drawn and presented, suboptimal or not.
+inline bool AcquireHandsOutImage(SwapResult result) {
+    return result == SwapResult::Success || result == SwapResult::Suboptimal;
+}
+
+/// Suboptimal is a success code that asks for one recreation. A replacement that is suboptimal again is kept until a
+/// clean frame, or a compositor that always reports it (Gamescope) would get a new swapchain every frame. A required
+/// recreation (out of date, resize, VSync, HDR) is never held back by that.
+class SwapchainHealth {
+public:
+    SwapStep Acquire(SwapResult result) {
+        clean_acquire = result == SwapResult::Success;
+        return Step(result);
+    }
+
+    SwapStep Present(SwapResult result) {
+        if (result == SwapResult::Success && clean_acquire) {
+            replaced_suboptimal = false;
+        }
+        return Step(result);
+    }
+
+    void Recreated() {
+        replaced_suboptimal = recreate && suboptimal_only;
+        recreate = false;
+        suboptimal_only = false;
+        clean_acquire = false;
+    }
+
+    bool NeedsRecreation() const {
+        return recreate;
+    }
+
+private:
+    SwapStep Step(SwapResult result) {
+        switch (result) {
+        case SwapResult::Success:
+            return {true, recreate};
+        case SwapResult::Suboptimal:
+            if (!replaced_suboptimal && !recreate) {
+                recreate = true;
+                suboptimal_only = true;
+            }
+            return {true, recreate};
+        case SwapResult::OutOfDate:
+            recreate = true;
+            suboptimal_only = false;
+            return {false, true};
+        case SwapResult::Failure:
+            break;
+        }
+        return {false, recreate};
+    }
+
+    bool recreate = false;
+    bool suboptimal_only = false;     ///< only a suboptimal result asked for the pending recreation
+    bool replaced_suboptimal = false; ///< this swapchain replaced a suboptimal one and stays even if suboptimal
+    bool clean_acquire = false;
+};
+
 /// Linux session facts that change presentation; values that look like paths are not shown.
 template <typename GetEnv>
 std::string DescribeSession(bool gamescope, GetEnv get_env) {

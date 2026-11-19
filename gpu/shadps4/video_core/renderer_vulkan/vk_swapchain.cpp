@@ -38,6 +38,12 @@ static_assert(vk::PresentModeKHR(AlnPresent::Mode::Immediate) == vk::PresentMode
               vk::PresentModeKHR(AlnPresent::Mode::Mailbox) == vk::PresentModeKHR::eMailbox &&
               vk::PresentModeKHR(AlnPresent::Mode::Fifo) == vk::PresentModeKHR::eFifo);
 
+static_assert(AlnPresent::kVkSuccess == int(vk::Result::eSuccess) &&
+              AlnPresent::kVkSuboptimal == int(vk::Result::eSuboptimalKHR) &&
+              AlnPresent::kVkErrorOutOfDate == int(vk::Result::eErrorOutOfDateKHR) &&
+              AlnPresent::kVkErrorSurfaceLost == int(vk::Result::eErrorSurfaceLostKHR) &&
+              AlnPresent::kVkErrorUnknown == int(vk::Result::eErrorUnknown));
+
 Swapchain::Swapchain(const Instance& instance_, const Frontend::WindowSDL& window_)
     : instance{instance_}, window{window_}, surface{CreateSurface(instance.GetInstance(), window)},
       gamescope{AlnPresent::GamescopeSession()} {
@@ -58,7 +64,7 @@ Swapchain::~Swapchain() {
 void Swapchain::Create(u32 width_, u32 height_) {
     width = width_;
     height = height_;
-    needs_recreation = false;
+    health.Recreated();
 
     Destroy();
 
@@ -136,7 +142,7 @@ void Swapchain::SetHDR(bool hdr) {
 }
 
 bool AcquireHandsOutImage(vk::Result result) {
-    return result == vk::Result::eSuccess || result == vk::Result::eSuboptimalKHR;
+    return AlnPresent::AcquireHandsOutImage(AlnPresent::ClassifyAcquire(int(result)));
 }
 
 bool Swapchain::AcquireNextImage() {
@@ -145,24 +151,15 @@ bool Swapchain::AcquireNextImage() {
         device.acquireNextImageKHR(swapchain, std::numeric_limits<u64>::max(),
                                    image_acquired[frame_index], VK_NULL_HANDLE, &image_index);
 
-    if (AcquireHandsOutImage(result)) {
-        needs_recreation |= result == vk::Result::eSuboptimalKHR;
-        return true;
-    }
-    switch (result) {
-    case vk::Result::eErrorSurfaceLostKHR:
-    case vk::Result::eErrorOutOfDateKHR:
-    case vk::Result::eErrorUnknown:
-        needs_recreation = true;
-        break;
-    default:
+    const AlnPresent::SwapResult kind = AlnPresent::ClassifyAcquire(int(result));
+    if (kind == AlnPresent::SwapResult::Failure) {
         Common::GpuTrace::VulkanFailure("acquire", s32(result), 0,
                                         Common::GpuTrace::Timeline::Present);
         ASSERT_MSG(false, "Swapchain image acquisition failed: {}", vk::to_string(result));
-        break;
     }
-
-    return !needs_recreation;
+    const AlnPresent::SwapStep step = health.Acquire(kind);
+    LogKeptSuboptimal(kind, step);
+    return step.usable;
 }
 
 bool Swapchain::Present() {
@@ -175,17 +172,26 @@ bool Swapchain::Present() {
     };
 
     auto result = instance.GetPresentQueue().presentKHR(present_info);
-    if (result == vk::Result::eErrorOutOfDateKHR || result == vk::Result::eSuboptimalKHR) {
-        needs_recreation = true;
-    } else if (result != vk::Result::eSuccess) {
+    const AlnPresent::SwapResult kind = AlnPresent::ClassifyPresent(int(result));
+    if (kind == AlnPresent::SwapResult::Failure) {
         Common::GpuTrace::VulkanFailure("present", s32(result), 0,
                                         Common::GpuTrace::Timeline::Present);
         ASSERT_MSG(false, "Swapchain presentation failed: {}", vk::to_string(result));
     }
+    LogKeptSuboptimal(kind, health.Present(kind));
 
     frame_index = (frame_index + 1) % image_count;
 
-    return !needs_recreation;
+    return !health.NeedsRecreation();
+}
+
+void Swapchain::LogKeptSuboptimal(AlnPresent::SwapResult kind, AlnPresent::SwapStep step) {
+    if (kind != AlnPresent::SwapResult::Suboptimal || step.recreate || logged_kept_suboptimal) {
+        return;
+    }
+    logged_kept_suboptimal = true;
+    std::printf("Swapchain: the surface stays suboptimal after recreation; presenting with it (%ux%u)\n",
+                extent.width, extent.height);
 }
 
 void Swapchain::FindPresentFormat() {

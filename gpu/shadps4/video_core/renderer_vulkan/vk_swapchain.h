@@ -6,6 +6,7 @@
 #include <mutex>
 #include <string>
 #include <vector>
+#include "aln_present.h"
 #include "common/types.h"
 #include "video_core/renderer_vulkan/vk_common.h"
 
@@ -18,8 +19,6 @@ namespace Vulkan {
 class Instance;
 class Scheduler;
 
-/// The acquire gave out an image and will signal its semaphore, so the image must be presented
-/// (a suboptimal one too) before the swapchain is recreated.
 bool AcquireHandsOutImage(vk::Result result);
 
 class Swapchain {
@@ -79,6 +78,10 @@ public:
         return extent;
     }
 
+    bool NeedsRecreation() const {
+        return health.NeedsRecreation();
+    }
+
     [[nodiscard]] vk::Semaphore GetImageAcquiredSemaphore() const {
         return image_acquired[frame_index];
     }
@@ -122,6 +125,8 @@ private:
 
     void LogImages();
 
+    void LogKeptSuboptimal(AlnPresent::SwapResult kind, AlnPresent::SwapStep step);
+
 private:
     const Instance& instance;
     const Frontend::WindowSDL& window;
@@ -149,7 +154,8 @@ private:
     std::string logged_images;
     u32 image_index = 0;
     u32 frame_index = 0;
-    bool needs_recreation = true;
+    AlnPresent::SwapchainHealth health;
+    bool logged_kept_suboptimal = false;
     bool needs_hdr = false;    // The game requested HDR swapchain
     bool supports_hdr = false; // SC supports HDR output
 };

@@ -1,9 +1,10 @@
 // Focused tests of the swapchain image count, the present mode choice, Gamescope detection, the Gamescope-only flip
-// pacing and the latency trace switch.
+// pacing, the latency trace switch and the swapchain health rules (suboptimal acquire and present, recreation).
 #include <cstdio>
 #include <cstring>
 #include <deque>
 #include <fstream>
+#include <functional>
 #include <sstream>
 #include <string>
 
@@ -34,6 +35,14 @@ std::string ReadSource(const char* path) {
 
 bool Contains(const std::string& text, const std::string& needle) {
     return text.find(needle) != std::string::npos;
+}
+
+std::size_t Count(const std::string& text, const std::string& needle) {
+    std::size_t count = 0;
+    for (auto at = text.find(needle); at != std::string::npos; at = text.find(needle, at + 1)) {
+        ++count;
+    }
+    return count;
 }
 
 bool InOrder(const std::string& text, const char* first, const char* second) {
@@ -222,6 +231,310 @@ void TestSwapchainRecreation() {
     CHECK(InOrder(swapchain, "void Swapchain::Recreate(u32 width_, u32 height_) {", "    Create(width_, height_);"));
 }
 
+using AlnPresent::SwapchainHealth;
+using AlnPresent::SwapResult;
+using AlnPresent::SwapStep;
+
+bool Same(SwapStep step, bool usable, bool recreate) {
+    return step.usable == usable && step.recreate == recreate;
+}
+
+void TestResultClassification() {
+    using namespace AlnPresent;
+    CHECK(ClassifyAcquire(0) == SwapResult::Success && ClassifyAcquire(1000001003) == SwapResult::Suboptimal);
+    CHECK(ClassifyAcquire(-1000001004) == SwapResult::OutOfDate && ClassifyAcquire(-1000000000) == SwapResult::OutOfDate);
+    CHECK(ClassifyAcquire(-13) == SwapResult::OutOfDate);
+    // Everything else stays a failure: device lost, out of memory, timeout, not ready, incomplete.
+    for (const int other : {-4, -1, -2, 1, 2, 5, -1000001001, -12345}) {
+        CHECK(ClassifyAcquire(other) == SwapResult::Failure && ClassifyPresent(other) == SwapResult::Failure);
+    }
+    CHECK(ClassifyPresent(0) == SwapResult::Success && ClassifyPresent(1000001003) == SwapResult::Suboptimal);
+    CHECK(ClassifyPresent(-1000001004) == SwapResult::OutOfDate);
+    // A lost surface or an unknown error is a recreation condition on acquire, and stays fatal on present.
+    CHECK(ClassifyPresent(-1000000000) == SwapResult::Failure && ClassifyPresent(-13) == SwapResult::Failure);
+    // Suboptimal is no OutOfDate: it differs in the step it asks for.
+    CHECK(ClassifyAcquire(1000001003) != ClassifyAcquire(-1000001004));
+}
+
+void TestAcquireSteps() {
+    {
+        SwapchainHealth health;
+        CHECK(Same(health.Acquire(SwapResult::Success), true, false) && !health.NeedsRecreation());
+    }
+    {
+        SwapchainHealth health;
+        CHECK(Same(health.Acquire(SwapResult::Suboptimal), true, true) && health.NeedsRecreation());
+    }
+    {
+        SwapchainHealth health;
+        CHECK(Same(health.Acquire(SwapResult::OutOfDate), false, true) && health.NeedsRecreation());
+    }
+    {
+        SwapchainHealth health;
+        CHECK(Same(health.Acquire(SwapResult::Failure), false, false) && !health.NeedsRecreation());
+    }
+}
+
+void TestPresentSteps() {
+    {
+        SwapchainHealth health;
+        health.Acquire(SwapResult::Success);
+        CHECK(Same(health.Present(SwapResult::Success), true, false) && !health.NeedsRecreation());
+    }
+    {
+        SwapchainHealth health;
+        health.Acquire(SwapResult::Success);
+        CHECK(Same(health.Present(SwapResult::Suboptimal), true, true) && health.NeedsRecreation());
+    }
+    {
+        SwapchainHealth health;
+        health.Acquire(SwapResult::Success);
+        CHECK(Same(health.Present(SwapResult::OutOfDate), false, true) && health.NeedsRecreation());
+    }
+    {
+        SwapchainHealth health;
+        health.Acquire(SwapResult::Success);
+        CHECK(Same(health.Present(SwapResult::Failure), false, false) && !health.NeedsRecreation());
+    }
+}
+
+// The presenter's frame, as Presenter::Present runs it: acquire, recreate once and retry when it handed out nothing,
+// present, recreate after the present when asked. The results of each call come from the surface's generation.
+struct FrameModel {
+    SwapchainHealth health;
+    int generation = 0;
+    int recreations = 0, optional_recreations = 0;
+    int presented = 0, skipped = 0, not_queued = 0;
+    int unconsumed_acquires = 0;
+
+    void Recreate() {
+        if (health.NeedsRecreation()) {
+            ++optional_recreations;
+        }
+        health.Recreated();
+        ++generation;
+        ++recreations;
+    }
+
+    using Source = std::function<SwapResult(int generation)>;
+
+    void Frame(const Source& acquire, const Source& present, bool loading = false) {
+        if (loading && health.NeedsRecreation()) {
+            Recreate();
+        }
+        SwapStep step = health.Acquire(acquire(generation));
+        if (!step.usable && !loading) {
+            Recreate();
+            step = health.Acquire(acquire(generation));
+        }
+        if (!step.usable) {
+            ++skipped;
+            return;
+        }
+        const SwapStep done = health.Present(present(generation));
+        presented += done.usable;
+        not_queued += !done.usable;
+        if (!loading && health.NeedsRecreation()) {
+            Recreate();
+        }
+    }
+};
+
+void TestPersistentSuboptimalIsKeptWithoutRecreatingEveryFrame() {
+    FrameModel model;
+    const auto always = [](int) { return SwapResult::Suboptimal; };
+    for (int frame = 0; frame < 120; ++frame) {
+        model.Frame(always, always);
+    }
+    std::printf("120 suboptimal frames: %d recreation, %d presented, %d skipped\n", model.recreations, model.presented,
+                model.skipped);
+    CHECK(model.recreations == 1 && model.optional_recreations == 1);
+    CHECK(model.presented == 120 && model.skipped == 0 && model.not_queued == 0);
+    CHECK(!model.health.NeedsRecreation());
+
+    // The same run through the loading frame path.
+    FrameModel loading;
+    for (int frame = 0; frame < 120; ++frame) {
+        loading.Frame(always, always, true);
+    }
+    CHECK(loading.recreations == 1 && loading.presented == 120 && loading.skipped == 0);
+}
+
+void TestSuboptimalRecoversWhenTheReplacementIsClean() {
+    FrameModel model;
+    const auto surface = [](int generation) { return generation == 0 ? SwapResult::Suboptimal : SwapResult::Success; };
+    for (int frame = 0; frame < 60; ++frame) {
+        model.Frame(surface, surface);
+    }
+    CHECK(model.recreations == 1 && model.presented == 60 && model.skipped == 0 && !model.health.NeedsRecreation());
+
+    // A later suboptimal result is allowed one new recreation.
+    const auto later = [](int) { return SwapResult::Suboptimal; };
+    for (int frame = 0; frame < 40; ++frame) {
+        model.Frame(later, later);
+    }
+    CHECK(model.recreations == 2 && model.presented == 100 && model.skipped == 0);
+}
+
+void TestSuppressionEndsOnlyAfterCleanOperation() {
+    FrameModel model;
+    const auto subopt = [](int) { return SwapResult::Suboptimal; };
+    const auto clean = [](int) { return SwapResult::Success; };
+    for (int frame = 0; frame < 50; ++frame) {
+        model.Frame(subopt, subopt);
+    }
+    CHECK(model.recreations == 1);
+    // Half clean frames: a clean acquire with a suboptimal present, or the reverse, change nothing.
+    for (int frame = 0; frame < 20; ++frame) {
+        model.Frame(clean, subopt);
+        model.Frame(subopt, clean);
+    }
+    for (int frame = 0; frame < 20; ++frame) {
+        model.Frame(subopt, subopt);
+    }
+    CHECK(model.recreations == 1 && model.skipped == 0);
+    // A clean acquire and present ends it: the next suboptimal result recreates once more, and then is kept again.
+    model.Frame(clean, clean);
+    CHECK(model.recreations == 1);
+    for (int frame = 0; frame < 50; ++frame) {
+        model.Frame(subopt, subopt);
+    }
+    CHECK(model.recreations == 2 && model.presented == 50 + 40 + 20 + 1 + 50 && model.skipped == 0);
+    // A suboptimal present after a clean acquire is the same event as a suboptimal acquire.
+    FrameModel present_only;
+    for (int frame = 0; frame < 30; ++frame) {
+        present_only.Frame(clean, subopt);
+    }
+    CHECK(present_only.recreations == 1 && present_only.presented == 30);
+}
+
+void TestOutOfDateOverridesTheSuppression() {
+    FrameModel model;
+    const auto subopt = [](int) { return SwapResult::Suboptimal; };
+    for (int frame = 0; frame < 30; ++frame) {
+        model.Frame(subopt, subopt);
+    }
+    CHECK(model.recreations == 1);
+
+    // Out of date at acquire: recreated at once, the retry gets an image, nothing is skipped.
+    int calls = 0;
+    model.Frame([&](int) { return calls++ == 0 ? SwapResult::OutOfDate : SwapResult::Success; },
+                [](int) { return SwapResult::Success; });
+    CHECK(model.recreations == 2 && model.presented == 31 && model.skipped == 0);
+
+    // Suppressed again, then out of date at present.
+    FrameModel at_present;
+    for (int frame = 0; frame < 30; ++frame) {
+        at_present.Frame(subopt, subopt);
+    }
+    at_present.Frame(subopt, [](int) { return SwapResult::OutOfDate; });
+    CHECK(at_present.recreations == 2 && at_present.not_queued == 1 && at_present.presented == 30);
+    at_present.Frame([](int) { return SwapResult::Success; }, [](int) { return SwapResult::Success; });
+    CHECK(at_present.recreations == 2 && at_present.presented == 31);
+
+    // A second out of date after the recreation skips that frame only, and the next one recovers.
+    FrameModel stuck;
+    stuck.Frame([](int) { return SwapResult::OutOfDate; }, [](int) { return SwapResult::Success; });
+    CHECK(stuck.skipped == 1 && stuck.recreations == 1 && stuck.health.NeedsRecreation());
+    stuck.Frame([](int) { return SwapResult::Success; }, [](int) { return SwapResult::Success; });
+    CHECK(stuck.presented == 1 && stuck.skipped == 1);
+
+    // Out of date is a required recreation whether or not suboptimal ones are being kept.
+    SwapchainHealth health;
+    health.Acquire(SwapResult::Suboptimal);
+    health.Present(SwapResult::Suboptimal);
+    health.Recreated();
+    CHECK(Same(health.Acquire(SwapResult::Suboptimal), true, false));
+    CHECK(Same(health.Acquire(SwapResult::OutOfDate), false, true));
+}
+
+void TestRequiredRecreationsAreNotHeldBack() {
+    // A resize, VSync or HDR change calls Recreated() on its own: the swapchain is replaced whatever the state.
+    SwapchainHealth health;
+    health.Acquire(SwapResult::Suboptimal);
+    health.Recreated();
+    for (int frame = 0; frame < 10; ++frame) {
+        CHECK(Same(health.Acquire(SwapResult::Suboptimal), true, false));
+    }
+    health.Recreated(); // resize
+    CHECK(!health.NeedsRecreation());
+    CHECK(Same(health.Acquire(SwapResult::Suboptimal), true, true));
+}
+
+void TestAcquiredImageIsAlwaysConsumed() {
+    // ALN-XXJJ7R: an acquire that handed out an image signals its semaphore, so that image is presented. The
+    // production decision for "the image is usable" is the same one for Success and Suboptimal, and only those.
+    for (const int vk_result : {0, 1000001003, -1000001004, -1000000000, -13, -4, 2, 1, 5}) {
+        const SwapResult kind = AlnPresent::ClassifyAcquire(vk_result);
+        SwapchainHealth health;
+        const bool usable = health.Acquire(kind).usable;
+        CHECK(usable == AlnPresent::AcquireHandsOutImage(kind));
+        CHECK(usable == (vk_result == 0 || vk_result == 1000001003));
+    }
+    for (int frame = 0; frame < 120; ++frame) {
+        SwapchainHealth health;
+        CHECK(health.Acquire(SwapResult::Suboptimal).usable);
+    }
+
+    const std::string swapchain = ReadSource("gpu/shadps4/video_core/renderer_vulkan/vk_swapchain.cpp");
+    const std::string presenter = ReadSource("gpu/shadps4/video_core/renderer_vulkan/vk_presenter.cpp");
+    CHECK(Contains(swapchain, "return AlnPresent::AcquireHandsOutImage(AlnPresent::ClassifyAcquire(int(result)));"));
+    CHECK(InOrder(swapchain, "bool Swapchain::AcquireNextImage() {", "AlnPresent::ClassifyAcquire(int(result))"));
+    CHECK(InOrder(swapchain, "health.Acquire(kind)", "return step.usable;"));
+    CHECK(!Contains(swapchain, "needs_recreation"));
+    // The present path only follows an acquire that handed out an image; a failed one recreates or skips.
+    CHECK(InOrder(presenter, "    if (!swapchain.AcquireNextImage()) {\n        swapchain.Recreate(", "Skipping frame!"));
+    CHECK(InOrder(presenter, "Skipping frame!", "info.AddWait(swapchain.GetImageAcquiredSemaphore());"));
+    CHECK(InOrder(presenter, "info.AddWait(swapchain.GetImageAcquiredSemaphore());", "presented = swapchain.Present();"));
+    // The frame index moves after every present, suboptimal and out of date ones included.
+    CHECK(InOrder(swapchain, "health.Present(kind)", "frame_index = (frame_index + 1) % image_count;"));
+    // The kept-suboptimal line is printed once, and neither acquire nor present waits for the device.
+    CHECK(Contains(swapchain, "Swapchain: the surface stays suboptimal after recreation; presenting with it"));
+    CHECK(Contains(swapchain, "logged_kept_suboptimal) {\n        return;"));
+    const std::size_t begin = swapchain.find("bool Swapchain::AcquireNextImage() {");
+    const std::size_t end = swapchain.find("void Swapchain::FindPresentFormat() {");
+    CHECK(begin != std::string::npos && end > begin);
+    const std::string frame_path = swapchain.substr(begin, end - begin);
+    CHECK(!Contains(frame_path, "WaitDeviceIdle") && !Contains(frame_path, "waitIdle") && !Contains(frame_path, "Recreate("));
+}
+
+void TestLoadingFrameHonorsPendingRecreation() {
+    const std::string presenter = ReadSource("gpu/shadps4/video_core/renderer_vulkan/vk_presenter.cpp");
+    const std::size_t begin = presenter.find("void Presenter::PresentLoadingFrame() {");
+    const std::size_t end = presenter.find("    present_scheduler.Finish();", begin);
+    CHECK(begin != std::string::npos && end > begin);
+    const std::string loading = presenter.substr(begin, end - begin);
+    CHECK(InOrder(loading, "swapchain.NeedsRecreation()) {\n        swapchain.Recreate(", "if (!swapchain.AcquireNextImage()) {"));
+    CHECK(Contains(loading, "window.GetWidth() != swapchain.GetWidth() || window.GetHeight() != swapchain.GetHeight() ||"));
+    CHECK(Count(loading, "swapchain.Recreate(") == 1);
+
+    // After an out of date acquire the loading screen recovers on its next frame instead of staying frozen.
+    FrameModel model;
+    model.Frame([](int) { return SwapResult::OutOfDate; }, [](int) { return SwapResult::Success; }, true);
+    CHECK(model.skipped == 1 && model.recreations == 0);
+    model.Frame([](int) { return SwapResult::Success; }, [](int) { return SwapResult::Success; }, true);
+    CHECK(model.recreations == 1 && model.presented == 1);
+}
+
+void TestWindowAndVsyncRecreationsStayRequired() {
+    const std::string presenter = ReadSource("gpu/shadps4/video_core/renderer_vulkan/vk_presenter.cpp");
+    const std::string swapchain = ReadSource("gpu/shadps4/video_core/renderer_vulkan/vk_swapchain.cpp");
+    // The presenter recreates for a size mismatch before it acquires, and never asks the health state first.
+    CHECK(InOrder(presenter, "    swapchain.UpdateVsync();\n    if (window.GetWidth() != swapchain.GetWidth() || window.GetHeight() != swapchain.GetHeight()) {\n        swapchain.Recreate(",
+                  "    if (!swapchain.AcquireNextImage()) {\n        swapchain.Recreate("));
+    CHECK(Count(presenter, "NeedsRecreation()") == 1);
+    CHECK(!Contains(presenter, "SwapchainHealth"));
+    // Every recreation, wanted by the health state or not, goes through Create, which only resets it.
+    CHECK(Count(swapchain, "health.Recreated();") == 1 && Count(swapchain, "health.NeedsRecreation()") == 1);
+    CHECK(InOrder(swapchain, "void Swapchain::Create(u32 width_, u32 height_) {", "    health.Recreated();"));
+    CHECK(InOrder(swapchain, "void Swapchain::UpdateVsync() {", "    FindPresentMode();\n    Recreate(width, height);"));
+    CHECK(InOrder(swapchain, "void Swapchain::SetHDR(bool hdr) {", "    Recreate(width, height);"));
+    // Persistent suboptimal handling is generic: no Gamescope branch in the helper or the swapchain's frame path.
+    const std::string header = ReadSource("gpu/shim/aln_present.h");
+    const std::size_t health = header.find("class SwapchainHealth {");
+    CHECK(health != std::string::npos && !Contains(header.substr(health, header.find("/// Linux session facts") - health), "Gamescope()"));
+}
+
 void TestPadSamplingUntouched() {
     const std::string pad = ReadSource("src/runtime_pad.c");
     CHECK(!Contains(pad, "Gamescope") && !Contains(pad, "gamescope"));
@@ -244,6 +557,17 @@ int main() {
     TestFlipPacingModel();
     TestFlipPacingIsGamescopeOnly();
     TestSwapchainRecreation();
+    TestResultClassification();
+    TestAcquireSteps();
+    TestPresentSteps();
+    TestPersistentSuboptimalIsKeptWithoutRecreatingEveryFrame();
+    TestSuboptimalRecoversWhenTheReplacementIsClean();
+    TestSuppressionEndsOnlyAfterCleanOperation();
+    TestOutOfDateOverridesTheSuppression();
+    TestRequiredRecreationsAreNotHeldBack();
+    TestAcquiredImageIsAlwaysConsumed();
+    TestLoadingFrameHonorsPendingRecreation();
+    TestWindowAndVsyncRecreationsStayRequired();
     TestPadSamplingUntouched();
     if (g_failures) {
         std::printf("%d present test(s) failed\n", g_failures);
