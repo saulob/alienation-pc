@@ -122,7 +122,7 @@ Add-Exes $s @(
     , @('aln-tiling-tests', 'GPU tiling')
     , @('aln-gds-lane-offset-tests', 'GPU GDS lane offset')
     , @('aln-render-lifetime-tests', 'ALN-XXJJ7R: texture cache eviction stays bounded past pinned render targets and under critical pressure, LRU list whole under concurrent touch and free, frame image budget fallback, suboptimal images presented')
-    , @('aln-wave64-lowering-tests', 'ALN-XXJJ7R: wave64 Ballot lowering adds no workgroup barrier under conditions from atomics, GDS append, shared memory, wave-uniform values or written buffers, nested or not')
+    , @('aln-wave64-lowering-tests', 'ALN-NKBTJV: the GDS append idiom of the report''s compute shaders keeps its Ballot subgroup-wide, with no barrier and an append index free of it, in nested branches and a loop; ALN-XXJJ7R: wave64 Ballot lowering adds no workgroup barrier under conditions from atomics, GDS append, shared memory, wave-uniform values or written buffers, nested or not')
     , @('aln-gpu-crash-trace-tests', 'GPU crash trace and geometry output; ALN-2RDFRU: pipelines of unfinished ticks, heap kinds and budget crossings, buffer fallbacks; ALN-XXJJ7R: a GPU assertion ends through the fatal stop after the GPU trace')
     , @('aln-gpu-recording-tests', 'GPU deferred command recording')
     , @('aln-renderer-selection-tests', 'renderer selection')
