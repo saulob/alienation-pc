@@ -439,6 +439,14 @@ target_include_directories(aln-frame-pacing-tests PRIVATE gpu/shim src)
 target_compile_definitions(aln-frame-pacing-tests PRIVATE ALN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_compile_options(aln-frame-pacing-tests PRIVATE -Wall -Wextra -Werror)
 
+# Focused tests of the stale audio backlog protection (tools/test.ps1); no SDL, no audio device. Not part of the default
+# build.
+add_executable(aln-audio-backlog-tests EXCLUDE_FROM_ALL tests/audio_backlog_tests.cpp)
+set_target_properties(aln-audio-backlog-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_include_directories(aln-audio-backlog-tests PRIVATE src)
+target_compile_definitions(aln-audio-backlog-tests PRIVATE ALN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+target_compile_options(aln-audio-backlog-tests PRIVATE -Wall -Wextra -Werror)
+
 # Focused tests of command memory read in place and indirect buffer range validation (tools/test.ps1); not part of the
 # default build.
 add_executable(aln-command-snapshot-tests EXCLUDE_FROM_ALL tests/command_snapshot_tests.cpp)
