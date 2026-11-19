@@ -124,6 +124,68 @@ void PinnedImagesDoNotStopEviction() {
     CHECK(cache.lru.Size() == cache.Live(true) + cache.Live(false));
 }
 
+// ALN-MKL8FP: the report's thresholds (trigger 0, pressure 2608 MiB, critical 5216 MiB) with 1.9 GiB of
+// non-image usage keep every pass pressured and never critical. Forty render targets of an earlier area sit
+// at the head of the LRU list, more than a pressured pass's budget, while streamed textures keep arriving.
+// Every pressured pass that has an idle evictable image behind them must evict, and the cache must shrink.
+void PressuredPassesReachPastPinnedPrefix() {
+    constexpr u64 MiB = 1ull << 20;
+    constexpr u64 base = 1910 * MiB;
+    const GcLimits limits{.pressure = 2608 * MiB - base, .critical = 5216 * MiB - base};
+    constexpr u64 ticks = 6000;
+    ImageCache cache;
+    std::vector<u64> used_until;
+    std::mt19937_64 random{0x4D4B4C38};
+    const auto add = [&](u64 bytes, bool pinned, u64 tick, u64 use_for) {
+        cache.Add(bytes, pinned, tick);
+        used_until.push_back(tick + use_for);
+    };
+    for (int i = 0; i < 40; ++i) {
+        add(4 * MiB, true, 0, 0);
+    }
+    for (int i = 0; i < 979; ++i) {
+        add(MiB, false, 1, 50 + random() % 400);
+    }
+    const u64 initial_usage = cache.usage;
+    size_t stalled_passes = 0, critical_passes = 0, evictions = 0, late_peak = 0;
+    for (u64 tick = 2; tick <= ticks; ++tick) {
+        if (tick % 4 == 0) {
+            add(MiB + (random() % 512) * 1024, false, tick, 30 + random() % 600);
+        }
+        if (tick % 250 == 0) {
+            add(4 * MiB, true, tick, 0);
+        }
+        for (u32 id = 0; id < cache.images.size(); ++id) {
+            const StandInImage& image = cache.images[id];
+            if (image.alive && !image.pinned && used_until[id] >= tick && (random() & 7) == 0) {
+                cache.lru.Touch(image.lru_id, tick);
+            }
+        }
+        const bool pressured = cache.usage >= limits.pressure;
+        critical_passes += cache.usage >= limits.critical;
+        bool idle_evictable = false;
+        cache.lru.ForEachItemBelow(tick - GcMinimumAge(true, false), [&](u32 id) {
+            idle_evictable = !cache.images[id].pinned;
+            return idle_evictable;
+        });
+        const GcRun run = cache.Collect(tick, limits);
+        evictions += run.evicted;
+        stalled_passes += pressured && idle_evictable && run.evicted == 0;
+        if (tick > ticks / 2) {
+            late_peak = std::max(late_peak, cache.Live(false));
+        }
+    }
+    std::printf("  ALN-MKL8FP: %zu evictions, %zu stalled pressured passes, %zu evictable live at most in the second "
+                "half, %zu pinned live, %llu MiB cached at the end (%llu at the start)\n",
+                evictions, stalled_passes, late_peak, cache.Live(true), (unsigned long long)(cache.usage / MiB),
+                (unsigned long long)(initial_usage / MiB));
+    CHECK(critical_passes == 0);
+    CHECK(stalled_passes == 0);
+    CHECK(cache.usage < limits.pressure);
+    CHECK(late_peak < 979);
+    CHECK(cache.Live(true) == 40 + ticks / 250);
+}
+
 void FreedEntriesStayFreed() {
     Lru lru;
     const size_t a = lru.Insert(1, 1);
@@ -320,6 +382,7 @@ int main() {
     AgesShrinkWithPressure();
     CriticalPressureEvictsRecentImages();
     PinnedImagesDoNotStopEviction();
+    PressuredPassesReachPastPinnedPrefix();
     FreedEntriesStayFreed();
     ScanStopsWhenAsked();
     ConcurrentTouchAndFreeKeepTheListWhole();
