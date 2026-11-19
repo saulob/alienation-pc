@@ -16,6 +16,7 @@
 #include "aln_toggles.h"
 #include "video_core/renderer_vulkan/vk_wait_diagnostics.h"
 #include "common/assert.h"
+#include "common/device_lost.h"
 #include "common/gpu_trace.h"
 #include "common/debug.h"
 #include "common/thread.h"
@@ -478,7 +479,24 @@ void Scheduler::AllocateWorkerCommandBuffers() {
 #endif
 }
 
+void Scheduler::TraceSubmission(u64 signal_value, const SubmitInfo& info, vk::Result result) {
+    const auto trace_timeline = work_semaphore.GetTimeline();
+    Common::GpuTrace::Record(Common::GpuTrace::Event::Submit, signal_value, info.num_wait_semas,
+                             info.num_wait_semas ? info.wait_ticks[0] : 0,
+                             u32(result) | u64(trace_timeline) << 32);
+    Common::GpuTrace::SetSubmittedTick(trace_timeline, signal_value);
+    if (trace_timeline == Common::GpuTrace::Timeline::Draw) {
+        Common::GpuTrace::SetPendingWork(num_pending_ops.load(std::memory_order_relaxed),
+                                         queued_chunks.load(std::memory_order_relaxed));
+        Common::GpuTrace::SetRecordingOwner(recording_owner.Owner(), recording_owner.Changes(),
+                                            recording_takeovers.load(std::memory_order_relaxed));
+    }
+}
+
 void Scheduler::SubmitExecution(SubmitInfo& info) {
+    if (Common::DeviceLost::IsLost()) {
+        Common::DeviceLost::Global().Observe("vkQueueSubmit");
+    }
     std::scoped_lock lk{submit_mutex};
     const u64 signal_value = work_semaphore.NextTick();
 
@@ -534,24 +552,19 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
     };
 
     ImGui::Core::TextureManager::Submit();
-    auto submit_result = instance.GetGraphicsQueue().submit(submit_info, info.fence);
     const auto trace_timeline = work_semaphore.GetTimeline();
-    Common::GpuTrace::Record(Common::GpuTrace::Event::Submit, signal_value, info.num_wait_semas,
-                             info.num_wait_semas ? info.wait_ticks[0] : 0,
-                             u32(submit_result) | u64(trace_timeline) << 32);
-    Common::GpuTrace::SetSubmittedTick(trace_timeline, signal_value);
-    if (trace_timeline == Common::GpuTrace::Timeline::Draw) {
-        Common::GpuTrace::SetPendingWork(num_pending_ops.load(std::memory_order_relaxed),
-                                         queued_chunks.load(std::memory_order_relaxed));
-        Common::GpuTrace::SetRecordingOwner(recording_owner.Owner(), recording_owner.Changes(),
-                                            recording_takeovers.load(std::memory_order_relaxed));
+    const s32 submit_result = Common::DeviceLost::CallWhileHealthy(
+        Common::DeviceLost::Global(), Common::DeviceLost::Operation::QueueSubmit, "submit",
+        signal_value, trace_timeline, [&] {
+            const vk::Result result = instance.GetGraphicsQueue().submit(submit_info, info.fence);
+            TraceSubmission(signal_value, info, result);
+            return result;
+        });
+    if (submit_result != Common::DeviceLost::Success) {
+        Common::GpuTrace::VulkanFailure("submit", submit_result, signal_value, trace_timeline);
     }
-    if (submit_result != vk::Result::eSuccess) {
-        Common::GpuTrace::VulkanFailure("submit", s32(submit_result), signal_value, trace_timeline);
-    }
-    ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
-    ASSERT_MSG(submit_result == vk::Result::eSuccess, "Queue submit failed: {}",
-               vk::to_string(submit_result));
+    ASSERT_MSG(submit_result == Common::DeviceLost::Success, "Queue submit failed: {}",
+               vk::to_string(vk::Result(submit_result)));
 
     work_semaphore.Refresh();
     AllocateWorkerCommandBuffers();

@@ -61,7 +61,10 @@ void SetLastDispatch(u64 cs, u32 x, u32 y, u32 z) noexcept;
 // Where the command being replayed into the command buffer was recorded; null when idle.
 void SetReplaySite(const char* file, u32 line) noexcept;
 
+const char* TimelineName(Timeline timeline) noexcept;
+
 void SetDeviceIdentity(const char* identity) noexcept;
+const char* DeviceIdentity() noexcept;
 void SetLayerSummary(const char* summary) noexcept;
 void SetDispatchSummary(const char* summary) noexcept;
 // Called once after a fatal Vulkan result, after the trace (driver fault report).

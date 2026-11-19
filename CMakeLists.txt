@@ -372,6 +372,16 @@ target_include_directories(aln-gpu-crash-trace-tests PRIVATE gpu/shim gpu/shadps
     gpu/third_party/gcn/include gpu/third_party/half/include gpu/third_party/xbyak)
 target_link_libraries(aln-gpu-crash-trace-tests PRIVATE alngpu)
 
+# Focused tests of the graceful device-lost path: first-fault ownership, stopped submissions and waits, the crash report
+# reason (tools/test.ps1); no Vulkan device. Not part of the default build.
+add_executable(aln-device-lost-tests EXCLUDE_FROM_ALL tests/device_lost_tests.cpp)
+set_target_properties(aln-device-lost-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_include_directories(aln-device-lost-tests PRIVATE gpu/shim gpu/shadps4 tests src ${CMAKE_BINARY_DIR}/gpu/include
+    gpu/third_party/gcn/include gpu/third_party/half/include gpu/third_party/xbyak)
+target_compile_definitions(aln-device-lost-tests PRIVATE ALN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+target_compile_options(aln-device-lost-tests PRIVATE -Wall -Wextra)
+target_link_libraries(aln-device-lost-tests PRIVATE alngpu)
+
 # Focused tests of the deferred Vulkan command recording (tools/test.ps1); not part of the default build.
 add_executable(aln-gpu-recording-tests EXCLUDE_FROM_ALL tests/gpu_recording_tests.cpp)
 set_target_properties(aln-gpu-recording-tests PROPERTIES CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)

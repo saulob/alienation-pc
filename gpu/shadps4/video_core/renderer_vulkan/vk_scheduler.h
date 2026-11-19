@@ -962,6 +962,7 @@ private:
     void RecorderThread(std::stop_token stoken);
 
     void SubmitExecution(SubmitInfo& info);
+    void TraceSubmission(u64 signal_value, const SubmitInfo& info, vk::Result result);
 
     void PriorityPendingOpsThread(std::stop_token stoken);
 

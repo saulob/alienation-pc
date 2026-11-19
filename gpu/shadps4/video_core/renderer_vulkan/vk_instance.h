@@ -16,6 +16,10 @@ class WindowSDL;
 struct WindowSystemInfo;
 }
 
+namespace Common::DeviceLost {
+struct FaultInfo;
+}
+
 VK_DEFINE_HANDLE(VmaAllocator)
 
 namespace Vulkan {
@@ -356,6 +360,8 @@ public:
 
     /// Logs heap budgets and the driver's fault report (VK_EXT_device_fault) after device loss.
     void ReportDeviceFault() const;
+    /// The driver's fault report, bounded; called once by the device-lost monitor.
+    void QueryDeviceFault(Common::DeviceLost::FaultInfo& info) const;
 
     bool IsMaintenance5Supported() const {
         return maintenance_5;

@@ -400,8 +400,16 @@ void SetReplaySite(const char* file, u32 line) noexcept {
     replay_file.store(file, std::memory_order_relaxed);
 }
 
+const char* TimelineName(Timeline timeline) noexcept {
+    return TimelineName(u64(timeline));
+}
+
 void SetDeviceIdentity(const char* identity) noexcept {
     CopyBounded(device_identity, sizeof(device_identity), identity);
+}
+
+const char* DeviceIdentity() noexcept {
+    return device_identity;
 }
 
 void SetLayerSummary(const char* summary) noexcept {

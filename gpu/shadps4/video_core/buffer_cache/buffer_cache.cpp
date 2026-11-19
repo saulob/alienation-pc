@@ -15,6 +15,7 @@
 #include "aln_copy_pool.h"
 #include "aln_toggles.h"
 #include "common/alignment.h"
+#include "common/device_lost.h"
 #include "common/gpu_trace.h"
 #include "core/memory.h"
 #include "video_core/amdgpu/liverpool.h"
@@ -826,17 +827,21 @@ void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
     };
 
     info.AddWait(signal_sema, signal_tick);
-    auto submit_result = instance.GetGraphicsQueue().bindSparse(sparse_info);
-    Common::GpuTrace::Record(Common::GpuTrace::Event::SparseBind, signal_tick, buffer_binds.size(),
-                             u32(submit_result));
-    Common::GpuTrace::SetSubmittedTick(Common::GpuTrace::Timeline::SparseBind, signal_tick);
-    if (submit_result != vk::Result::eSuccess) {
-        Common::GpuTrace::VulkanFailure("sparse", s32(submit_result), signal_tick,
+    const s32 submit_result = Common::DeviceLost::CallWhileHealthy(
+        Common::DeviceLost::Global(), Common::DeviceLost::Operation::QueueBindSparse, "sparse",
+        signal_tick, Common::GpuTrace::Timeline::SparseBind, [&] {
+            const vk::Result result = instance.GetGraphicsQueue().bindSparse(sparse_info);
+            Common::GpuTrace::Record(Common::GpuTrace::Event::SparseBind, signal_tick,
+                                     buffer_binds.size(), u32(result));
+            Common::GpuTrace::SetSubmittedTick(Common::GpuTrace::Timeline::SparseBind, signal_tick);
+            return result;
+        });
+    if (submit_result != Common::DeviceLost::Success) {
+        Common::GpuTrace::VulkanFailure("sparse", submit_result, signal_tick,
                                         Common::GpuTrace::Timeline::SparseBind);
     }
-    ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
-    ASSERT_MSG(submit_result == vk::Result::eSuccess, "Sparse bind failed: {}",
-               vk::to_string(submit_result));
+    ASSERT_MSG(submit_result == Common::DeviceLost::Success, "Sparse bind failed: {}",
+               vk::to_string(vk::Result(submit_result)));
 
     pending_binds.clear();
 }

@@ -6,6 +6,7 @@
 #include <limits>
 #include <string>
 #include "common/assert.h"
+#include "common/device_lost.h"
 #include "common/gpu_trace.h"
 #include "common/logging/log.h"
 #include "core/emulator_settings.h"
@@ -23,9 +24,12 @@ namespace Vulkan {
 // submitting while the window changes size (F11, display mode, VSync).
 static void WaitDeviceIdle(const Instance& instance, const char* why) {
     std::scoped_lock lock{Scheduler::submit_mutex};
-    if (const auto result = instance.GetDevice().waitIdle(); result != vk::Result::eSuccess) {
+    const s32 result = Common::DeviceLost::CallWhileHealthy(
+        Common::DeviceLost::Global(), Common::DeviceLost::Operation::DeviceWaitIdle, "idle", 0,
+        Common::GpuTrace::Timeline::Present, [&] { return instance.GetDevice().waitIdle(); });
+    if (result != Common::DeviceLost::Success) {
         LOG_WARNING(Render_Vulkan, "Failed to wait for the device to become idle {}: {}", why,
-                    vk::to_string(result));
+                    vk::to_string(vk::Result(result)));
     }
 }
 
@@ -147,15 +151,18 @@ bool AcquireHandsOutImage(vk::Result result) {
 
 bool Swapchain::AcquireNextImage() {
     vk::Device device = instance.GetDevice();
-    vk::Result result =
-        device.acquireNextImageKHR(swapchain, std::numeric_limits<u64>::max(),
-                                   image_acquired[frame_index], VK_NULL_HANDLE, &image_index);
+    const s32 result = Common::DeviceLost::CallWhileHealthy(
+        Common::DeviceLost::Global(), Common::DeviceLost::Operation::AcquireNextImage, "acquire", 0,
+        Common::GpuTrace::Timeline::Present, [&] {
+            return device.acquireNextImageKHR(swapchain, std::numeric_limits<u64>::max(),
+                                              image_acquired[frame_index], VK_NULL_HANDLE,
+                                              &image_index);
+        });
 
     const AlnPresent::SwapResult kind = AlnPresent::ClassifyAcquire(int(result));
     if (kind == AlnPresent::SwapResult::Failure) {
-        Common::GpuTrace::VulkanFailure("acquire", s32(result), 0,
-                                        Common::GpuTrace::Timeline::Present);
-        ASSERT_MSG(false, "Swapchain image acquisition failed: {}", vk::to_string(result));
+        Common::GpuTrace::VulkanFailure("acquire", result, 0, Common::GpuTrace::Timeline::Present);
+        ASSERT_MSG(false, "Swapchain image acquisition failed: {}", vk::to_string(vk::Result(result)));
     }
     const AlnPresent::SwapStep step = health.Acquire(kind);
     LogKeptSuboptimal(kind, step);
@@ -171,12 +178,14 @@ bool Swapchain::Present() {
         .pImageIndices = &image_index,
     };
 
-    auto result = instance.GetPresentQueue().presentKHR(present_info);
+    const s32 result = Common::DeviceLost::CallWhileHealthy(
+        Common::DeviceLost::Global(), Common::DeviceLost::Operation::QueuePresent, "present", 0,
+        Common::GpuTrace::Timeline::Present,
+        [&] { return instance.GetPresentQueue().presentKHR(present_info); });
     const AlnPresent::SwapResult kind = AlnPresent::ClassifyPresent(int(result));
     if (kind == AlnPresent::SwapResult::Failure) {
-        Common::GpuTrace::VulkanFailure("present", s32(result), 0,
-                                        Common::GpuTrace::Timeline::Present);
-        ASSERT_MSG(false, "Swapchain presentation failed: {}", vk::to_string(result));
+        Common::GpuTrace::VulkanFailure("present", result, 0, Common::GpuTrace::Timeline::Present);
+        ASSERT_MSG(false, "Swapchain presentation failed: {}", vk::to_string(vk::Result(result)));
     }
     LogKeptSuboptimal(kind, health.Present(kind));
 

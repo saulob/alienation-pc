@@ -14,6 +14,7 @@
 
 #include "common/assert.h"
 #include "common/debug.h"
+#include "common/device_lost.h"
 #include "common/polyfill_thread.h"
 #include "common/thread.h"
 #include "core/debug_state.h"
@@ -119,7 +120,8 @@ void Liverpool::Process(std::stop_token stoken) {
     gpu_tid = gettid();
 #endif
 
-    while (!stoken.stop_requested()) {
+    const auto& device_lost = Common::DeviceLost::Global();
+    while (!Common::DeviceLost::ShouldStop(device_lost, stoken)) {
         {
             const auto idle_start = std::chrono::steady_clock::now();
             std::unique_lock lk{submit_mutex};
@@ -138,7 +140,7 @@ void Liverpool::Process(std::stop_token stoken) {
 
         curr_qid = -1;
 
-        while (num_submits || num_commands) {
+        while ((num_submits || num_commands) && !device_lost.IsLost()) {
             ProcessCommands();
 
             curr_qid = (curr_qid + 1) % num_mapped_queues;
@@ -167,6 +169,9 @@ void Liverpool::Process(std::stop_token stoken) {
             }
         }
 
+        if (device_lost.IsLost()) {
+            break;
+        }
         if (submit_done) {
             VideoCore::EndCapture();
             if (rasterizer) {

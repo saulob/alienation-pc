@@ -30,65 +30,35 @@ Semaphore::Semaphore(const Instance& instance_, Common::GpuTrace::Timeline timel
 
 Semaphore::~Semaphore() = default;
 
+void Semaphore::Fail(const char* site, s32 result, u64 tick) const {
+    Common::GpuTrace::VulkanFailure(site, result, tick, timeline);
+    UNREACHABLE_MSG("Timeline semaphore {} failed: {}", site, vk::to_string(vk::Result(result)));
+}
+
+vk::Result Semaphore::ReadCounter(u64& counter) const {
+    const auto [result, value] = instance.GetDevice().getSemaphoreCounterValue(*semaphore);
+    counter = value;
+    return result;
+}
+
 void Semaphore::Refresh() {
-    u64 this_tick{};
-    u64 counter{};
-    do {
-        this_tick = gpu_tick.load(std::memory_order_acquire);
-        auto [counter_result, cntr] = instance.GetDevice().getSemaphoreCounterValue(*semaphore);
-        if (counter_result != vk::Result::eSuccess) {
-            Common::GpuTrace::VulkanFailure("semread", s32(counter_result), this_tick, timeline);
-        }
-        ASSERT_MSG(counter_result == vk::Result::eSuccess,
-                   "Failed to get master semaphore value: {}", vk::to_string(counter_result));
-        counter = cntr;
-        if (counter < this_tick) {
-            return;
-        }
-        if (IsPayloadNeverSignalled(counter, CurrentTick())) {
-            Common::GpuTrace::VulkanFailure("semread", s32(vk::Result::eErrorDeviceLost), this_tick,
-                                            timeline);
-            UNREACHABLE_MSG("Timeline semaphore reads {}, past every submitted tick: device lost",
-                            counter);
-        }
-        Common::GpuTrace::SetCompletedTick(timeline, counter);
-    } while (!gpu_tick.compare_exchange_weak(this_tick, counter, std::memory_order_release,
-                                             std::memory_order_relaxed));
+    RefreshKnownTick(
+        ticks, Common::DeviceLost::Global(), timeline,
+        [this](u64& counter) { return ReadCounter(counter); },
+        [this](const char* site, s32 result, u64 tick) { Fail(site, result, tick); });
 }
 
 void Semaphore::Wait(u64 tick) {
-    // No need to wait if the GPU is ahead of the tick
-    if (IsFree(tick)) {
-        return;
-    }
-    // Update the GPU tick and try again
-    Refresh();
-    if (IsFree(tick)) {
-        return;
-    }
-
-    // If none of the above is hit, fallback to a regular wait
     const vk::SemaphoreWaitInfo wait_info = {
         .semaphoreCount = 1,
         .pSemaphores = &semaphore.get(),
         .pValues = &tick,
     };
-
-    Common::GpuTrace::Record(Common::GpuTrace::Event::BlockingWait, tick, gpu_tick.load(),
-                             u64(timeline));
-    for (;;) {
-        const vk::Result result = instance.GetDevice().waitSemaphores(&wait_info, WAIT_TIMEOUT);
-        if (result == vk::Result::eSuccess) {
-            break;
-        }
-        if (result == vk::Result::eTimeout) {
-            continue;
-        }
-        Common::GpuTrace::VulkanFailure("semwait", s32(result), tick, timeline);
-        ASSERT_MSG(result != vk::Result::eErrorDeviceLost, "Device lost while waiting for the GPU");
-        UNREACHABLE_MSG("Timeline semaphore wait failed: {}", vk::to_string(result));
-    }
-    Refresh();
+    WaitForTick(
+        ticks, Common::DeviceLost::Global(), timeline, tick,
+        [&] { return instance.GetDevice().waitSemaphores(&wait_info, WAIT_TIMEOUT); },
+        [this](u64& counter) { return ReadCounter(counter); },
+        [this](const char* site, s32 result, u64 failed_tick) { Fail(site, result, failed_tick); });
 }
 
 } // namespace Vulkan

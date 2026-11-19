@@ -331,7 +331,7 @@ static void write_dump(void) {
         write_text(&text);
         return;
     }
-    static char comment[900];
+    static char comment[2048];
     Text note;
     text_init(&note, comment, sizeof(comment));
     text_str(&note, "Alienation PC crash dump: ");
@@ -344,6 +344,10 @@ static void write_dump(void) {
     text_dec(&note, owner_thread);
     text_str(&note, ", log ");
     text_str(&note, runtime_log_session_path());
+    if (request_note) {
+        text_str(&note, "; ");
+        text_str(&note, request_note);
+    }
     MINIDUMP_USER_STREAM stream = {CommentStreamA, (ULONG)note.used + 1, comment};
     MINIDUMP_USER_STREAM_INFORMATION streams = {1, &stream};
     MINIDUMP_EXCEPTION_INFORMATION exception = {owner_thread, request, FALSE};
@@ -421,10 +425,10 @@ __attribute__((noreturn)) void aln_crash_guard_report(EXCEPTION_POINTERS *info, 
     }
     owner_thread = self;
     request = info;
+    request_note = note;
     runtime_log_mark_crash();
     if (code == CODE_STACK_OVERFLOW && watchdog) {
         /* Almost no stack is left: the crash thread writes everything. */
-        request_note = note;
         overflow = 1;
         SetEvent(begin_event);
         for (;;) Sleep(INFINITE);

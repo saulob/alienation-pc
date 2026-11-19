@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "common/debug.h"
+#include "common/device_lost.h"
 #include "common/elf_info.h"
 #include "common/gpu_trace.h"
 #include "common/io_file.h"
@@ -272,6 +273,19 @@ void Presenter::RecreateFrame(Frame* frame, u32 width, u32 height) {
     frame->is_hdr = swapchain.GetHDR();
 }
 
+void Presenter::WaitFrameFence(Frame* frame, const char* site) {
+    const vk::Device device = instance.GetDevice();
+    const s32 result = Common::DeviceLost::WaitWhileHealthy(
+        Common::DeviceLost::Global(), Common::DeviceLost::Operation::WaitForFences, site, 0,
+        Common::GpuTrace::Timeline::Present, [&] {
+            return device.waitForFences(frame->present_done, false, std::numeric_limits<u64>::max());
+        });
+    if (result != Common::DeviceLost::Success) {
+        Common::GpuTrace::VulkanFailure(site, result, 0, Common::GpuTrace::Timeline::Present);
+        UNREACHABLE_MSG("Frame fence wait failed ({}): {}", site, vk::to_string(vk::Result(result)));
+    }
+}
+
 Frame* Presenter::PrepareLastFrame() {
     // aln: the last frame is already back in the free queue. It is taken out while it is shown again, or the GPU
     // thread could draw into it or recreate it (a window size change) under the present thread. When the GPU
@@ -287,21 +301,7 @@ Frame* Presenter::PrepareLastFrame() {
         frame = last_submit_frame;
     }
 
-    while (true) {
-        vk::Result result = instance.GetDevice().waitForFences(frame->present_done, false,
-                                                               std::numeric_limits<u64>::max());
-        if (result == vk::Result::eSuccess) {
-            break;
-        }
-        if (result == vk::Result::eTimeout) {
-            continue;
-        }
-        Common::GpuTrace::VulkanFailure("frmfence", s32(result), 0,
-                                        Common::GpuTrace::Timeline::Present);
-        ASSERT_MSG(result != vk::Result::eErrorDeviceLost,
-                   "Device lost during waiting for a frame");
-        UNREACHABLE_MSG("Frame fence wait failed: {}", vk::to_string(result));
-    }
+    WaitFrameFence(frame, "frmfence");
 
     auto& scheduler = flip_scheduler;
     scheduler.EndRendering();
@@ -770,25 +770,8 @@ Frame* Presenter::GetRenderFrame() {
         free_queue.pop_front();
     }
 
-    const vk::Device device = instance.GetDevice();
-    vk::Result result{};
-
-    const auto wait = [&]() {
-        result = device.waitForFences(frame->present_done, false, std::numeric_limits<u64>::max());
-        return result;
-    };
-
     // Wait for the presentation to be finished so all frame resources are free
-    while (wait() != vk::Result::eSuccess) {
-        if (result == vk::Result::eTimeout) {
-            continue;
-        }
-        Common::GpuTrace::VulkanFailure("prsfence", s32(result), 0,
-                                        Common::GpuTrace::Timeline::Present);
-        ASSERT_MSG(result != vk::Result::eErrorDeviceLost,
-                   "Device lost during waiting for a frame");
-        UNREACHABLE_MSG("Present fence wait failed: {}", vk::to_string(result));
-    }
+    WaitFrameFence(frame, "prsfence");
 
     const u64 expected_size = expected_frame_size.load(std::memory_order_relaxed);
     const u32 expected_width = u32(expected_size), expected_height = u32(expected_size >> 32);

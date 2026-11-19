@@ -10,6 +10,7 @@
 
 static int failures;
 #define CHECK(condition) do { if (!(condition)) { printf("FAILED: %s (line %d)\n", #condition, __LINE__); ++failures; } } while (0)
+#define DEVICE_LOST_REASON "GPU device lost: first detected in vkWaitSemaphores (semwait), result -4, thread 4242 (aln:VkRecorder), draw tick 34967; device Test GPU; device fault: page fault, 1 addresses, first invalid read at 0x1000"
 
 static LONG CALLBACK production_vectored(EXCEPTION_POINTERS *info) { return aln_crash_guard_vectored(info); }
 
@@ -172,6 +173,7 @@ static int run_child(const char *mode, const char *directory) {
     if (!strcmp(mode, "stack")) return recurse(0);
     if (!strcmp(mode, "abort")) { abort(); }
     if (!strcmp(mode, "fatal_stop")) runtime_log_fatal("GPU library assertion failed", 23);
+    if (!strcmp(mode, "device_lost_stop")) runtime_log_fatal(DEVICE_LOST_REASON, 25);
     return 92;
 }
 
@@ -182,6 +184,7 @@ typedef struct {
     const char *const *expect;
     const char *const *reject;
     DWORD exception;
+    const char *comment;
 } Case;
 
 static char directory[MAX_PATH];
@@ -221,7 +224,8 @@ static int count_of(const char *text, const char *needle) {
 
 typedef BOOL(WINAPI *ReadStream)(PVOID, MINIDUMP_STREAM_TYPE, PMINIDUMP_DIRECTORY *, PVOID *, ULONG *);
 
-static void check_dump(const char *name, DWORD pid, DWORD exception_code, const char *log, const char *own_exe) {
+static void check_dump(const char *name, DWORD pid, DWORD exception_code, const char *log, const char *own_exe,
+                       const char *comment_text) {
     char path[MAX_PATH + 300];
     snprintf(path, sizeof(path), "%s\\%s", directory, name);
     HANDLE file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
@@ -248,6 +252,7 @@ static void check_dump(const char *name, DWORD pid, DWORD exception_code, const 
         CHECK(strstr(comment, expected) != NULL);
         CHECK(strstr(comment, own_exe) != NULL);
         CHECK(strstr(comment, "crash_guard_test") != NULL || strstr(comment, "alienation_001.log") != NULL);
+        if (comment_text) CHECK(strstr(comment, comment_text) != NULL);
     } else {
         CHECK(0);
     }
@@ -320,7 +325,7 @@ static void run_case(const char *self, const Case *test) {
         const char *base = strrchr(self, '\\');
         snprintf(own, sizeof(own), "%s", base ? base + 1 : self);
         const DWORD exception = test->exception ? test->exception : test->exit_code == 3 ? 0x40000015u : test->exit_code;
-        check_dump(dump_name, pid, exception, log, own);
+        check_dump(dump_name, pid, exception, log, own, test->comment);
     }
     if (failures != before) printf("---- %s log ----\n%s\n", test->mode, log);
     free(log);
@@ -375,26 +380,30 @@ int main(int argc, char **argv) {
     /* ALN-XXJJ7R: a STOP (GPU assertion, device lost) leaves the crash report and a minidump the launcher can attach. */
     static const char *const fatal_stop_text[] = {"CRASH: fatal stop (0xe0000023)", "[GPU library assertion failed]",
                                                   "minidump: crash_guard_test.dmp", "CRASH: the process ends with exit code 0x17", NULL};
+    /* A device loss ends through the same stop; its root cause is the report's reason and the minidump's comment. */
+    static const char *const device_lost_text[] = {"CRASH: fatal stop (0xe0000023)", "[" DEVICE_LOST_REASON "]",
+                                                   "minidump: crash_guard_test.dmp", "CRASH: the process ends with exit code 0x19", NULL};
     static const char *const unguarded_text[] = {"Runtime: GPU library assertion failed; the process ends with status 23", NULL};
 
     static const Case cases[] = {
-        {"read", 0xC0000005u, 1, read_text, NULL, 0},
-        {"write", 0xC0000005u, 1, write_text, NULL, 0},
-        {"worker", 0xC0000005u, 1, worker_text, NULL, 0},
-        {"foreign_read", 0xC0000005u, 1, foreign_text, no_unreachable, 0},
-        {"foreign_write", 0xC0000005u, 1, foreign_write_text, no_unreachable, 0},
-        {"recovered", 0, 0, recovered_text, NULL, 0},
-        {"unwind_less", 0xC0000005u, 1, unwind_text, NULL, 0},
-        {"unwind_less_write", 0xC0000005u, 1, unwind_write_text, NULL, 0},
-        {"guest_frame", 0xC0000005u, 1, guest_text, NULL, 0},
-        {"replaced", 0xC0000005u, 1, replaced_text, NULL, 0},
-        {"replaced_silently", 0xC0000005u, 1, silent_text, NULL, 0},
-        {"stack", 0xC00000FDu, 1, NULL, NULL, 0},
-        {"abort", 3, 1, NULL, NULL, 0},
-        {"detail_fault", 0xC0000005u, 1, second_text, NULL, 0},
-        {"production_name", 0xC0000005u, 1, production_text, NULL, 0},
-        {"fatal_stop", 23, 1, fatal_stop_text, NULL, ALN_CRASH_FATAL_STOP},
-        {"fatal_stop_unguarded", 23, 0, unguarded_text, NULL, 0},
+        {"read", 0xC0000005u, 1, read_text, NULL, 0, NULL},
+        {"write", 0xC0000005u, 1, write_text, NULL, 0, NULL},
+        {"worker", 0xC0000005u, 1, worker_text, NULL, 0, NULL},
+        {"foreign_read", 0xC0000005u, 1, foreign_text, no_unreachable, 0, NULL},
+        {"foreign_write", 0xC0000005u, 1, foreign_write_text, no_unreachable, 0, NULL},
+        {"recovered", 0, 0, recovered_text, NULL, 0, NULL},
+        {"unwind_less", 0xC0000005u, 1, unwind_text, NULL, 0, NULL},
+        {"unwind_less_write", 0xC0000005u, 1, unwind_write_text, NULL, 0, NULL},
+        {"guest_frame", 0xC0000005u, 1, guest_text, NULL, 0, NULL},
+        {"replaced", 0xC0000005u, 1, replaced_text, NULL, 0, NULL},
+        {"replaced_silently", 0xC0000005u, 1, silent_text, NULL, 0, NULL},
+        {"stack", 0xC00000FDu, 1, NULL, NULL, 0, NULL},
+        {"abort", 3, 1, NULL, NULL, 0, NULL},
+        {"detail_fault", 0xC0000005u, 1, second_text, NULL, 0, NULL},
+        {"production_name", 0xC0000005u, 1, production_text, NULL, 0, NULL},
+        {"fatal_stop", 23, 1, fatal_stop_text, NULL, ALN_CRASH_FATAL_STOP, "GPU library assertion failed"},
+        {"device_lost_stop", 25, 1, device_lost_text, NULL, ALN_CRASH_FATAL_STOP, DEVICE_LOST_REASON},
+        {"fatal_stop_unguarded", 23, 0, unguarded_text, NULL, 0, NULL},
     };
     for (size_t i = 0; i < sizeof(cases) / sizeof(*cases); ++i) run_case(argv[0], &cases[i]);
 
