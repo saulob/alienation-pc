@@ -194,6 +194,7 @@ private:
     IntervalList<Backing> resident_ranges;
 
     u32 arena_memory_type_index{};
+    std::vector<u32> backing_memory_types;
     u32 block_size{};
     u32 block_shift{};
     u32 blocks_per_arena_page{};

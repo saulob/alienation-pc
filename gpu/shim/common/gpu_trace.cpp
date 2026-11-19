@@ -251,6 +251,12 @@ void PrintEntry(u64 seq, Event event, u32 thread, const u64 (&a)[4]) noexcept {
                          (unsigned long long)seq, thread, tag, (unsigned long long)(a[0] >> 20));
             break;
         }
+        if (a[2] == u64(Fallback::SparseBackingInSystemMemory)) {
+            std::fprintf(stderr, "  #%llu tid %u buffer arena backing of %llu KiB in memory type %llu\n",
+                         (unsigned long long)seq, thread, (unsigned long long)(a[0] >> 10),
+                         (unsigned long long)a[1]);
+            break;
+        }
         std::fprintf(stderr, "  #%llu tid %u image %llux%llu allocated %s\n", (unsigned long long)seq,
                      thread, (unsigned long long)a[0], (unsigned long long)a[1],
                      a[2] == u64(Fallback::ImageOverBudget) ? "over the memory budget"

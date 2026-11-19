@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "video_core/buffer_cache/arena_map.h"
+#include "video_core/buffer_cache/backing_memory.h"
 #include "video_core/renderer_vulkan/vk_barrier_tracker.h"
 #include "video_core/renderer_vulkan/vk_semaphore.h"
 
@@ -241,6 +242,55 @@ void TestAliasingArenasShareBarrierTracking() {
     CHECK(plain.FindRange(BufferAccessRange(0x3333, false, 0, 0x120, 4), Access::Write));
 }
 
+// Issue #9 (6 GB NVIDIA laptop, Linux): the driver does not page device memory out, so a new
+// resident range failed with VK_ERROR_OUT_OF_DEVICE_MEMORY and ended the game. The arena now takes
+// another memory type it accepts before failing.
+vk::PhysicalDeviceMemoryProperties NvidiaLikeMemory() {
+    using Flag = vk::MemoryPropertyFlagBits;
+    vk::PhysicalDeviceMemoryProperties props{};
+    props.memoryTypeCount = 5;
+    props.memoryTypes[0] = vk::MemoryType{{}, 1};
+    props.memoryTypes[1] = vk::MemoryType{Flag::eDeviceLocal, 0};
+    props.memoryTypes[2] = vk::MemoryType{Flag::eHostVisible | Flag::eHostCoherent, 1};
+    props.memoryTypes[3] = vk::MemoryType{Flag::eHostVisible | Flag::eHostCoherent | Flag::eHostCached, 1};
+    props.memoryTypes[4] = vk::MemoryType{Flag::eDeviceLocal | Flag::eHostVisible | Flag::eHostCoherent, 0};
+    return props;
+}
+
+void TestBackingFallsBackWhenDeviceMemoryIsFull() {
+    using VideoCore::AllocateBacking;
+    using VideoCore::BackingMemoryTypes;
+    const auto props = NvidiaLikeMemory();
+    const std::vector<u32> types = BackingMemoryTypes(props, 0b10111, 1);
+    CHECK((types == std::vector<u32>{1, 4, 0, 2}));
+    CHECK((BackingMemoryTypes(props, 0b00010, 1) == std::vector<u32>{1}));
+
+    std::vector<u32> tried;
+    const auto device_full = [&](u32 type) {
+        tried.push_back(type);
+        return props.memoryTypes[type].propertyFlags & vk::MemoryPropertyFlagBits::eDeviceLocal
+                   ? vk::Result::eErrorOutOfDeviceMemory
+                   : vk::Result::eSuccess;
+    };
+    const auto fallback = AllocateBacking(types, device_full);
+    CHECK(fallback.result == vk::Result::eSuccess && fallback.type == 0 && fallback.attempts == 3);
+    CHECK((tried == std::vector<u32>{1, 4, 0}));
+
+    tried.clear();
+    const auto nothing_fits = AllocateBacking(types, [&](u32 type) {
+        tried.push_back(type);
+        return vk::Result::eErrorOutOfDeviceMemory;
+    });
+    CHECK(nothing_fits.result == vk::Result::eErrorOutOfDeviceMemory && nothing_fits.attempts == types.size());
+    CHECK(tried.size() == types.size());
+
+    const auto host_failure = AllocateBacking(types, [](u32) { return vk::Result::eErrorOutOfHostMemory; });
+    CHECK(host_failure.result == vk::Result::eErrorOutOfHostMemory && host_failure.attempts == 1);
+
+    const auto preferred = AllocateBacking(types, [](u32) { return vk::Result::eSuccess; });
+    CHECK(preferred.result == vk::Result::eSuccess && preferred.type == 1 && preferred.attempts == 1);
+}
+
 // The report's AMD driver read the draw timeline as UINT64_MAX after the reset.
 void TestPayloadPastSubmissionsIsDeviceLoss() {
     using Vulkan::IsPayloadNeverSignalled;
@@ -260,6 +310,7 @@ int main() {
     TestRandomBuffersStayBounded();
     TestAliasingArenasShareBarrierTracking();
     TestPayloadPastSubmissionsIsDeviceLoss();
+    TestBackingFallsBackWhenDeviceMemoryIsFull();
     std::printf("buffer arena tests: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

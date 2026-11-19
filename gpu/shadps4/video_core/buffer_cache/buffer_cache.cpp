@@ -16,6 +16,7 @@
 #include "common/gpu_trace.h"
 #include "core/memory.h"
 #include "video_core/amdgpu/liverpool.h"
+#include "video_core/buffer_cache/backing_memory.h"
 #include "video_core/buffer_cache/buffer.h"
 #include "video_core/buffer_cache/buffer_cache.h"
 #include "video_core/buffer_cache/memory_tracker.h"
@@ -96,6 +97,8 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
         FindMemoryType(instance.GetMemoryProperties(), vk::MemoryPropertyFlagBits::eDeviceLocal,
                        reqs.memoryTypeBits)
             .value();
+    backing_memory_types = BackingMemoryTypes(instance.GetMemoryProperties(), reqs.memoryTypeBits,
+                                              arena_memory_type_index);
 
     const u64 bda_pagetable_size =
         (blocks_per_arena_page * num_arena_pages) * sizeof(vk::DeviceAddress);
@@ -357,12 +360,25 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
     const vk::MemoryAllocateFlagsInfo alloc_flags = {
         .flags = vk::MemoryAllocateFlagBits::eDeviceAddress,
     };
-    const vk::MemoryAllocateInfo alloc_info = {
+    vk::MemoryAllocateInfo alloc_info = {
         .pNext = &alloc_flags,
         .allocationSize = resident_blocks << block_shift,
-        .memoryTypeIndex = arena_memory_type_index,
     };
-    const auto device_memory = Vulkan::Check(instance.GetDevice().allocateMemory(alloc_info));
+    vk::DeviceMemory device_memory{};
+    const BackingAllocation allocation = AllocateBacking(backing_memory_types, [&](u32 type) {
+        alloc_info.memoryTypeIndex = type;
+        const auto [result, memory] = instance.GetDevice().allocateMemory(alloc_info);
+        device_memory = memory;
+        return result;
+    });
+    Vulkan::Check(allocation.result);
+    if (allocation.type != arena_memory_type_index) {
+        Common::GpuTrace::Record(Common::GpuTrace::Event::AllocationFallback, alloc_info.allocationSize,
+                                 allocation.type,
+                                 u64(Common::GpuTrace::Fallback::SparseBackingInSystemMemory));
+        LOG_WARNING(Render_Vulkan, "Buffer arena backing of {} KiB placed in memory type {}: device memory is full",
+                    alloc_info.allocationSize >> 10, allocation.type);
+    }
 
     boost::container::small_vector<vk::BufferCopy, 8> copies;
     const auto staging =

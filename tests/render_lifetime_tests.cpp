@@ -186,6 +186,66 @@ void PressuredPassesReachPastPinnedPrefix() {
     CHECK(cache.Live(true) == 40 + ticks / 250);
 }
 
+// Issue #9 (RTX 3060 Laptop, 6 GB, 3360x1440): about 2 GiB of non-image driver usage keeps every pass
+// pressured from the start and the first mission's streaming pushes images past the critical mark
+// (3507 MiB of driver usage). Forty ultrawide render targets head the LRU list. The cache must keep the
+// images under what the 6 GB card's budget leaves (about 5 GiB in all), with critical passes evicting.
+void LowVramUltrawideStaysUnderTheDeviceBudget() {
+    constexpr u64 MiB = 1ull << 20;
+    constexpr u64 base = 2013 * MiB;
+    constexpr u64 device_budget = 5009 * MiB;
+    const GcLimits limits{.pressure = 0, .critical = 3507 * MiB - base};
+    constexpr u64 render_target = 3360ull * 1440 * 4;
+    constexpr u64 ticks = 6000;
+    ImageCache cache;
+    std::vector<u64> used_until;
+    std::mt19937_64 random{0x9};
+    const auto add = [&](u64 bytes, bool pinned, u64 tick, u64 use_for) {
+        cache.Add(bytes, pinned, tick);
+        used_until.push_back(tick + use_for);
+    };
+    for (int i = 0; i < 40; ++i) {
+        add(render_target, true, 0, 0);
+    }
+    for (int i = 0; i < 700; ++i) {
+        add(MiB + (random() % 3) * MiB, false, 1, 50 + random() % 400);
+    }
+    u64 peak = 0;
+    size_t critical_passes = 0, critical_evictions = 0, stalled_passes = 0;
+    for (u64 tick = 2; tick <= ticks; ++tick) {
+        add(2 * MiB + (random() % 2048) * 1024, false, tick, 30 + random() % 600);
+        if (tick % 400 == 0) {
+            add(render_target, true, tick, 0);
+        }
+        for (u32 id = 0; id < cache.images.size(); ++id) {
+            const StandInImage& image = cache.images[id];
+            if (image.alive && !image.pinned && used_until[id] >= tick && (random() & 7) == 0) {
+                cache.lru.Touch(image.lru_id, tick);
+            }
+        }
+        bool idle_evictable = false;
+        cache.lru.ForEachItemBelow(tick - GcMinimumAge(true, false), [&](u32 id) {
+            idle_evictable = !cache.images[id].pinned;
+            return idle_evictable;
+        });
+        const bool critical = cache.usage >= limits.critical;
+        const GcRun run = cache.Collect(tick, limits);
+        critical_passes += critical;
+        critical_evictions += critical ? run.evicted : 0;
+        stalled_passes += idle_evictable && run.evicted == 0;
+        peak = std::max(peak, cache.usage);
+    }
+    std::printf("  Issue #9: peak images %llu MiB (%llu MiB with the rest, budget %llu), %zu critical passes "
+                "evicting %zu, %zu stalled passes, %zu pinned\n",
+                (unsigned long long)(peak / MiB), (unsigned long long)((peak + base) / MiB),
+                (unsigned long long)(device_budget / MiB), critical_passes, critical_evictions, stalled_passes,
+                cache.Live(true));
+    CHECK(peak + base < device_budget);
+    CHECK(critical_passes > 0 && critical_evictions >= critical_passes);
+    CHECK(stalled_passes == 0);
+    CHECK(cache.Live(true) == 40 + ticks / 400);
+}
+
 void FreedEntriesStayFreed() {
     Lru lru;
     const size_t a = lru.Insert(1, 1);
@@ -383,6 +443,7 @@ int main() {
     CriticalPressureEvictsRecentImages();
     PinnedImagesDoNotStopEviction();
     PressuredPassesReachPastPinnedPrefix();
+    LowVramUltrawideStaysUnderTheDeviceBudget();
     FreedEntriesStayFreed();
     ScanStopsWhenAsked();
     ConcurrentTouchAndFreeKeepTheListWhole();

@@ -29,7 +29,12 @@ enum class PipelineKind : u64 { Graphics = 1, Compute = 2 };
 enum class Timeline : u32 { Draw, Present, Flip, SparseBind, Count };
 
 // AllocationFallback third argument.
-enum class Fallback : u64 { ImageOverBudget = 1, ImageInSystemMemory = 2, BufferOverBudget = 3 };
+enum class Fallback : u64 {
+    ImageOverBudget = 1,
+    ImageInSystemMemory = 2,
+    BufferOverBudget = 3,
+    SparseBackingInSystemMemory = 4,
+};
 
 void Record(Event event, u64 a = 0, u64 b = 0, u64 c = 0, u64 d = 0) noexcept;
 
