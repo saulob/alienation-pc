@@ -48,6 +48,7 @@ Release notes, including known issues: [docs/releases](docs/releases).
 ## Graphics and display
 
 - **Windowed** and **Borderless Fullscreen**, switched with **F11** while playing
+- **Window size** is the requested Windowed size, and every standard size stays selectable. If it does not fit the selected monitor the game opens a smaller window that does, and the saved choice is not changed
 - **Monitor selection** and **graphics card selection** (any Vulkan graphics card the renderer can use)
 - **VSync** on or off
 - **Render resolution**: 480p, 720p, Native 1080p, 1440p, 1800p and 4K, the game's internal render resolution rather than window scaling

@@ -62,7 +62,6 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title, GraphicsApi api
     int window_height = settings.requested_height > 0 ? settings.requested_height.load() : height_;
     int window_x = SDL_WINDOWPOS_CENTERED, window_y = SDL_WINDOWPOS_CENTERED;
     if (display) {
-        aln::FitToDisplay(window_width, window_height, *display);
         window_x = window_y = SDL_WINDOWPOS_CENTERED_DISPLAY(display->id);
     }
     SDL_PropertiesID props = SDL_CreateProperties();
@@ -124,13 +123,19 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title, GraphicsApi api
     if (display) {
         // Hidden until the real title bar and frame are known, so the decorated window is fitted and centred once.
         aln::WindowBorders borders;
-        SDL_GetWindowBordersSize(window, &borders.top, &borders.left, &borders.bottom, &borders.right);
+        if (!SDL_GetWindowBordersSize(window, &borders.top, &borders.left, &borders.bottom, &borders.right)) {
+            borders = aln::EstimatedBorders(display->scale);
+        }
+        const int requested_width = window_width, requested_height = window_height;
         const aln::WindowFit fit = aln::FitWindowToArea(window_width, window_height, borders, display->usable.x,
                                                         display->usable.y, display->usable.w, display->usable.h);
         window_width = fit.width;
         window_height = fit.height;
         SDL_SetWindowSize(window, fit.width, fit.height);
         SDL_SetWindowPosition(window, fit.x, fit.y);
+        std::printf("Window fit: bounds %dx%d, usable %dx%d, scale %.2f, borders %d+%d, requested %dx%d, fitted %dx%d\n",
+                    display->bounds.w, display->bounds.h, display->usable.w, display->usable.h, display->scale,
+                    borders.top, borders.bottom, requested_width, requested_height, fit.width, fit.height);
     }
     ApplyDisplayMode(AlnSettings::Get().display_mode);
     SDL_ShowWindow(window);
