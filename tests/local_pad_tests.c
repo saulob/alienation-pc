@@ -340,7 +340,310 @@ static int logged_in(void) {
     return n;
 }
 
-int main(void) {
+/* Gamepad mapping file and unmapped joysticks. runtime_pad.c reads the file once per process, so each scenario runs in a
+ * fresh child process of this executable. The unmapped joysticks are SDL virtual joysticks of an unknown type: SDL
+ * lists them but offers none as a gamepad until a mapping for their GUID exists. */
+static Virtual attach_unmapped(int n) {
+    SDL_VirtualJoystickDesc desc;
+    SDL_INIT_INTERFACE(&desc);
+    desc.type=SDL_JOYSTICK_TYPE_UNKNOWN;
+    desc.naxes=6;
+    desc.nbuttons=15;
+    desc.vendor_id=0x1234;
+    desc.product_id=(Uint16)(0x5000+n);
+    char name[32];
+    snprintf(name,sizeof(name),"Unmapped pad %d",n);
+    desc.name=name;
+    Virtual v={SDL_AttachVirtualJoystick(&desc),NULL};
+    CHECK(v.id!=0);
+    v.joystick=SDL_OpenJoystick(v.id);
+    CHECK(v.joystick!=NULL);
+    return v;
+}
+
+static void guid_text(SDL_JoystickID id, char guid[33]) { SDL_GUIDToString(SDL_GetJoystickGUIDForID(id),guid,33); }
+
+static void db_line(char *out, size_t size, SDL_JoystickID id, const char *name) {
+    char guid[33];
+    guid_text(id,guid);
+    snprintf(out,size,"%s,%s,a:b0,b:b1,x:b2,y:b3,leftshoulder:b4,rightshoulder:b5,back:b6,start:b7,leftx:a0,lefty:a1,rightx:a2,righty:a3,platform:%s,\n",
+             guid,name,SDL_GetPlatform());
+}
+
+static void write_text(const char *path, const char *text) {
+    FILE *f=fopen(path,"wb");
+    CHECK(f!=NULL);
+    if (!f) return;
+    fputs(text,f);
+    fclose(f);
+}
+
+static void scenario_start(const char *dir) {
+    static const char *const backends[]={"SDL_JOYSTICK_HIDAPI","SDL_JOYSTICK_RAWINPUT","SDL_JOYSTICK_DIRECTINPUT",
+                                         "SDL_XINPUT_ENABLED","SDL_JOYSTICK_WGI","SDL_JOYSTICK_GAMEINPUT","SDL_JOYSTICK_MFI",
+                                         "SDL_JOYSTICK_LINUX_CLASSIC","SDL_JOYSTICK_LINUX_DEADZONES"};
+    for (size_t i=0;i<sizeof(backends)/sizeof(*backends);++i) SDL_SetHint(backends[i],"0");
+    SDL_SetHint("SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS","1");
+    char settings[600];
+    snprintf(settings,sizeof(settings),"%s/alienation.ini",dir);
+    runtime_pad_set_settings(settings);
+    runtime_pad_set_diag_sink(diag_sink);
+}
+
+static void scenario_init_sdl(void) {
+    if (!SDL_InitSubSystem(SDL_INIT_GAMEPAD)) { printf("scenario: SDL gamepad subsystem unavailable (%s)\n",SDL_GetError()); exit(1); }
+}
+
+#define UNMAPPED_LINE "joystick without a gamepad mapping"
+
+static int unmapped_lines_for(const char *name) {
+    int n=0;
+    for (int i=0;i<diag_count;++i) n+=strstr(diag_lines[i],UNMAPPED_LINE) && strstr(diag_lines[i],name);
+    return n;
+}
+
+static void scan_for(int ms, int32_t handle) {
+    for (int waited=0;waited<ms;waited+=100) { SDL_Delay(100); buttons(handle,NULL); }
+}
+
+/* No file, an unreadable one or one without mappings: startup goes on, the joysticks get reported, a normal pad works. */
+static int scenario_unmapped(const char *name, const char *dir) {
+    scenario_start(dir);
+    char path[600];
+    snprintf(path,sizeof(path),"%s/gamecontrollerdb.txt",dir);
+    if (!strcmp(name,"invalid-dir")) CHECK(SDL_CreateDirectory(path));
+    if (!strcmp(name,"invalid-text")) write_text(path,"this is not a mapping\n0,1,2\n\n# nothing\n");
+    scenario_init_sdl();
+    CHECK(((Init)pad("scePadInit"))()==0);
+    const int32_t p1=((Open)pad("scePadOpen"))(1,0,0,NULL);
+    CHECK(p1==1);
+
+    Virtual mapped=attach(1);
+    Virtual u1=attach_unmapped(1);
+    scan_for(700,p1);
+    CHECK(SDL_IsGamepad(mapped.id) && !SDL_IsGamepad(u1.id));
+    CHECK(diag_lines_with("player 1 connected","name=Virtual pad 1")==1);
+    CHECK(unmapped_lines_for("Virtual pad")==0);
+
+    /* The file: absent is silent; a directory or text that holds no mapping is one concise line, never a failure. */
+    const int load_lines=diag_lines_with("","gamepad mappings");
+    if (!strcmp(name,"missing")) CHECK(load_lines==0);
+    else CHECK(load_lines==1 && (diag_lines_with("","gamepad mappings not read from") + diag_lines_with("","0 gamepad mappings read from"))==1);
+    if (load_lines) CHECK(diag_lines_with("",path)==1);
+
+    /* One line for the joystick, however many scans; name, GUID and VID:PID, and nothing private. */
+    char guid[33];
+    guid_text(u1.id,guid);
+    CHECK(unmapped_lines_for("Unmapped pad 1")==1 && diag_lines_with("",UNMAPPED_LINE)==1);
+    CHECK(diag_lines_with("Unmapped pad 1 (guid ",guid)==1 && diag_lines_with("(guid ","1234:5001)")==1);
+    CHECK(strlen(guid)==32 && strspn(guid,"0123456789abcdef")==32);
+    SDL_GUID parsed=SDL_StringToGUID(guid);
+    char again[33];
+    SDL_GUIDToString(parsed,again,sizeof(again));
+    CHECK(!strcmp(guid,again));
+    for (int i=0;i<diag_count;++i) {
+        if (!strstr(diag_lines[i],UNMAPPED_LINE)) continue;
+        CHECK(!SDL_strcasestr(diag_lines[i],"serial") && !SDL_strcasestr(diag_lines[i],"path") && !strstr(diag_lines[i],"\\\\?\\") &&
+              !strstr(diag_lines[i],"/dev/"));
+    }
+    scan_for(800,p1);
+    CHECK(diag_lines_with("",UNMAPPED_LINE)==1);
+
+    /* A second joystick gets its own line; the first one is not repeated. */
+    Virtual u2=attach_unmapped(2);
+    scan_for(700,p1);
+    CHECK(unmapped_lines_for("Unmapped pad 2")==1 && unmapped_lines_for("Unmapped pad 1")==1 && diag_lines_with("",UNMAPPED_LINE)==2);
+
+    /* Disconnected and connected again: SDL gives it a new identity, so it is reported again. */
+    SDL_CloseJoystick(u1.joystick);
+    CHECK(SDL_DetachVirtualJoystick(u1.id));
+    scan_for(400,p1);
+    CHECK(diag_lines_with("",UNMAPPED_LINE)==2);
+    u1=attach_unmapped(1);
+    scan_for(700,p1);
+    CHECK(unmapped_lines_for("Unmapped pad 1")==2 && diag_lines_with("",UNMAPPED_LINE)==3);
+
+    /* Many connect and disconnect cycles: one line each, and the pad keeps working. */
+    const int before=diag_lines_with("",UNMAPPED_LINE);
+    for (int cycle=0;cycle<12;++cycle) {
+        Virtual v=attach_unmapped(10+cycle%3);
+        scan_for(300,p1);
+        SDL_CloseJoystick(v.joystick);
+        CHECK(SDL_DetachVirtualJoystick(v.id));
+        scan_for(300,p1);
+    }
+    CHECK(diag_lines_with("",UNMAPPED_LINE)-before==12);
+    press(mapped,SDL_GAMEPAD_BUTTON_SOUTH,true);
+    CHECK(buttons(p1,NULL)&BTN_CROSS);
+    press(mapped,SDL_GAMEPAD_BUTTON_SOUTH,false);
+    CHECK(!(buttons(p1,NULL)&BTN_CROSS));
+    CHECK(runtime_pad_slot_human(0) && !runtime_pad_slot_human(1));
+    CHECK(diag_lines_with("","player 2 connected")==0);
+    SDL_CloseJoystick(mapped.joystick); SDL_CloseJoystick(u1.joystick); SDL_CloseJoystick(u2.joystick);
+    return 0;
+}
+
+/* The player's file turns unmapped joysticks into gamepads before the first enumeration, in every slot. */
+static int scenario_valid(const char *dir) {
+    scenario_start(dir);
+    scenario_init_sdl();
+    Virtual u[4];
+    for (int n=0;n<4;++n) u[n]=attach_unmapped(n+1);
+    Virtual extra=attach_unmapped(5);
+    SDL_Delay(300);
+    SDL_UpdateJoysticks();
+    for (int n=0;n<4;++n) CHECK(!SDL_IsGamepad(u[n].id));
+    CHECK(!SDL_IsGamepad(extra.id));
+
+    char text[4096]="# the player's own mappings\n\nnot a mapping line\n0300000000000000000000000000dead,Another platform,a:b0,platform:NotThisPlatform,\n";
+    for (int n=0;n<4;++n) {
+        char name[32], line[512];
+        snprintf(name,sizeof(name),"Mapped %d",n+1);
+        db_line(line,sizeof(line),u[n].id,name);
+        strncat(text,line,sizeof(text)-strlen(text)-1);
+    }
+    char path[600];
+    snprintf(path,sizeof(path),"%s/gamecontrollerdb.txt",dir);
+    write_text(path,text);
+
+    /* The first read starts the runtime's SDL setup: the file is read there, before it looks for gamepads. */
+    CHECK(((Init)pad("scePadInit"))()==0);
+    const int32_t p1=((Open)pad("scePadOpen"))(1,0,0,NULL);
+    CHECK(p1==1);
+    buttons(p1,NULL);
+    for (int n=0;n<4;++n) CHECK(SDL_IsGamepad(u[n].id));
+    CHECK(!SDL_IsGamepad(extra.id));
+    CHECK(diag_lines_with("","gamepad mappings")==1 && diag_lines_with("","4 gamepad mappings read from")==1 && diag_lines_with("",path)==1);
+    CHECK(diag_lines_with("",UNMAPPED_LINE)==1 && unmapped_lines_for("Unmapped pad 5")==1);
+
+    /* Every slot takes one, lowest free first, in the order SDL lists them: no special case for player 1. */
+    int32_t handles[4]={p1,0,0,0};
+    int32_t users[8];
+    for (int n=0;n<4;++n) {
+        char who[40];
+        snprintf(who,sizeof(who),"player %d connected",n+1);
+        char mapped_name[32];
+        snprintf(mapped_name,sizeof(mapped_name),"name=Mapped %d",n+1);
+        CHECK(diag_lines_with(who,mapped_name)==1);
+    }
+    CHECK(logins(users,8)==4 && users[0]==1 && users[1]==2 && users[2]==3 && users[3]==4 && logged_in()==4);
+    for (int n=1;n<4;++n) { handles[n]=((Open)pad("scePadOpen"))(n+1,0,0,NULL); CHECK(handles[n]==n+1); }
+    for (int n=0;n<4;++n) {
+        press(u[n],0,true);
+        for (int m=0;m<4;++m) CHECK(((buttons(handles[m],NULL)&BTN_CROSS)!=0)==(m==n));
+        press(u[n],0,false);
+    }
+    CHECK(runtime_pad_slot_human(1) && runtime_pad_slot_human(2) && runtime_pad_slot_human(3));
+
+    /* A joystick the file does not cover is still reported, once, and takes no slot. */
+    scan_for(800,p1);
+    CHECK(unmapped_lines_for("Unmapped pad 5")==1 && diag_lines_with("",UNMAPPED_LINE)==1);
+    CHECK(diag_lines_with("","gamepad mappings")==1);
+    CHECK(diag_lines_with("","player 5")==0);
+
+    /* A pad that goes away frees its slot for the next one, as before. */
+    SDL_CloseJoystick(u[1].joystick);
+    CHECK(SDL_DetachVirtualJoystick(u[1].id));
+    SDL_UpdateJoysticks();
+    uint8_t connected=1;
+    buttons(handles[1],&connected);
+    CHECK(connected==0 && !runtime_pad_slot_human(1));
+    for (int n=0;n<4;++n) if (n!=1) SDL_CloseJoystick(u[n].joystick);
+    SDL_CloseJoystick(extra.joystick);
+    return 0;
+}
+
+/* SDL_GAMECONTROLLERCONFIG, read by SDL at init, is not overwritten by the file for the same GUID. */
+static int scenario_env(const char *dir) {
+    scenario_start(dir);
+    SDL_InitSubSystem(SDL_INIT_JOYSTICK);
+    Virtual first=attach_unmapped(1), second=attach_unmapped(2);
+    char env[600], guid1[33], guid2[33];
+    guid_text(first.id,guid1);
+    guid_text(second.id,guid2);
+    SDL_CloseJoystick(first.joystick); SDL_CloseJoystick(second.joystick);
+    SDL_DetachVirtualJoystick(first.id); SDL_DetachVirtualJoystick(second.id);
+    SDL_QuitSubSystem(SDL_INIT_JOYSTICK);
+    snprintf(env,sizeof(env),"%s,FROM ENV,a:b0,b:b1,leftx:a0,lefty:a1,platform:%s,",guid1,SDL_GetPlatform());
+    CHECK(SDL_setenv_unsafe("SDL_GAMECONTROLLERCONFIG",env,1)==0);
+    scenario_init_sdl();
+
+    Virtual u1=attach_unmapped(1), u2=attach_unmapped(2);
+    SDL_Delay(300);
+    SDL_UpdateJoysticks();
+    CHECK(SDL_IsGamepad(u1.id) && !SDL_IsGamepad(u2.id));
+    char text[1200], line[512], path[600];
+    db_line(line,sizeof(line),u1.id,"FROM FILE");
+    snprintf(text,sizeof(text),"%s",line);
+    db_line(line,sizeof(line),u2.id,"FILE ONLY");
+    strncat(text,line,sizeof(text)-strlen(text)-1);
+    snprintf(path,sizeof(path),"%s/gamecontrollerdb.txt",dir);
+    write_text(path,text);
+
+    CHECK(((Init)pad("scePadInit"))()==0);
+    const int32_t p1=((Open)pad("scePadOpen"))(1,0,0,NULL);
+    buttons(p1,NULL);
+    char *first_mapping=SDL_GetGamepadMappingForID(u1.id);
+    CHECK(first_mapping && strstr(first_mapping,"FROM ENV") && !strstr(first_mapping,"FROM FILE"));
+    SDL_free(first_mapping);
+    CHECK(SDL_IsGamepad(u2.id));
+    char *second_mapping=SDL_GetGamepadMappingForID(u2.id);
+    CHECK(second_mapping && strstr(second_mapping,"FILE ONLY"));
+    SDL_free(second_mapping);
+    CHECK(diag_lines_with("","1 gamepad mappings read from")==1 && diag_lines_with("",UNMAPPED_LINE)==0);
+    CHECK(diag_lines_with("player 1 connected","name=FROM ENV")==1);
+    SDL_Delay(300);
+    buttons(p1,NULL);
+    CHECK(diag_lines_with("player 2 connected","name=FILE ONLY")==1);
+    SDL_CloseJoystick(u1.joystick); SDL_CloseJoystick(u2.joystick);
+    return 0;
+}
+
+static int run_scenario(const char *name, const char *dir) {
+    int result=0;
+    if (!strcmp(name,"valid")) result=scenario_valid(dir);
+    else if (!strcmp(name,"env")) result=scenario_env(dir);
+    else result=scenario_unmapped(name,dir);
+    printf("scenario %s: %s (%d checks, %d failures)\n",name,failures ? "FAILED" : "ok",checks,failures);
+    SDL_Quit();
+    return result || failures ? 1 : 0;
+}
+
+static void remove_scenario_files(const char *dir) {
+    char path[600];
+    snprintf(path,sizeof(path),"%s/gamecontrollerdb.txt",dir);
+    SDL_RemovePath(path);
+    snprintf(path,sizeof(path),"%s/alienation.ini",dir);
+    SDL_RemovePath(path);
+    SDL_RemovePath(dir);
+}
+
+static void run_scenarios(const char *self) {
+    static const char *const names[]={"missing","invalid-dir","invalid-text","valid","env"};
+    const char *temp=getenv("TEMP");
+    if (!temp || !*temp) temp=getenv("TMPDIR");
+    if (!temp || !*temp) temp="/tmp";
+    for (size_t i=0;i<sizeof(names)/sizeof(*names);++i) {
+        char dir[600];
+        snprintf(dir,sizeof(dir),"%s/aln-pad-mapping-%llu-%s",temp,(unsigned long long)SDL_GetPerformanceCounter(),names[i]);
+        remove_scenario_files(dir);
+        CHECK(SDL_CreateDirectory(dir));
+        const char *args[]={self,"scenario",names[i],dir,NULL};
+        SDL_Process *child=SDL_CreateProcess(args,false);
+        CHECK(child!=NULL);
+        int code=-1;
+        if (child) {
+            CHECK(SDL_WaitProcess(child,true,&code));
+            SDL_DestroyProcess(child);
+        }
+        if (code!=0) printf("scenario %s exited with %d\n",names[i],code);
+        CHECK(code==0);
+        remove_scenario_files(dir);
+    }
+}
+
+int main(int argc, char **argv) {
+    if (argc>=4 && !strcmp(argv[1],"scenario")) return run_scenario(argv[2],argv[3]);
     static const char *const backends[]={"SDL_JOYSTICK_HIDAPI","SDL_JOYSTICK_RAWINPUT","SDL_JOYSTICK_DIRECTINPUT",
                                          "SDL_XINPUT_ENABLED","SDL_JOYSTICK_WGI","SDL_JOYSTICK_GAMEINPUT","SDL_JOYSTICK_MFI",
                                          "SDL_JOYSTICK_LINUX_CLASSIC","SDL_JOYSTICK_LINUX_DEADZONES"};
@@ -485,9 +788,13 @@ int main(void) {
     CHECK(((Handle)pad("scePadClose"))(p4)==0);
     CHECK(((Open)pad("scePadOpen"))(4,0,0,NULL)==4);
 
+    /* Mapped pads never show up as unmapped joysticks, and without a user file nothing about mappings is logged. */
+    CHECK(diag_lines_with("",UNMAPPED_LINE)==0 && diag_lines_with("","gamepad mappings")==0);
+
     SDL_CloseJoystick(a.joystick); SDL_CloseJoystick(b.joystick); SDL_CloseJoystick(d.joystick);
     SDL_CloseJoystick(e.joystick); SDL_CloseJoystick(c2.joystick); SDL_CloseJoystick(c.joystick);
     SDL_QuitSubSystem(SDL_INIT_GAMEPAD);
+    run_scenarios(argv[0]);
     printf("%s (%d checks, %d failures)\n",failures ? "local pad tests FAILED" : "local pad tests OK",checks,failures);
     return failures ? 1 : 0;
 }

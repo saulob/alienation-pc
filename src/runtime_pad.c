@@ -9,6 +9,7 @@
 #include "aln_keys.h"
 #include "aln_pad_axes.h"
 #include "aln_pad_diag.h"
+#include "aln_pad_mapping.h"
 #include "aln_sdl_compat.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -61,6 +62,7 @@ _Static_assert(sizeof(ControllerInfo)==28,"OrbisPadControllerInformation layout"
 
 static pthread_mutex_t lock=PTHREAD_MUTEX_INITIALIZER;
 static int initialized, sdl_ready;
+static char keys_file[4200];
 static size_t reads;
 typedef struct {
     bool opened;
@@ -127,12 +129,37 @@ static int free_slot(void) {
     for (int i=0;i<MAX_PADS;++i) if (!slots[i].gamepad) return i;
     return -1;
 }
+/* The player's own mappings; SDL_GAMECONTROLLERCONFIG, which SDL reads at init, keeps priority over them. */
+static void load_user_gamepad_mappings(void) {
+    char path[4300], line[4500];
+    if (!aln_gamepad_db_path(keys_file,path,sizeof(path)) || !SDL_GetPathInfo(path,NULL)) return;
+    const int added=SDL_AddGamepadMappingsFromFile(path);
+    if (added<0) snprintf(line,sizeof(line),"Runtime: gamepad mappings not read from %s: %s",path,SDL_GetError());
+    else snprintf(line,sizeof(line),"Runtime: %d gamepad mappings read from %s",added,path);
+    diag_log(line);
+}
+/* Says once per connection which joysticks SDL lists but cannot offer as gamepads. */
+static void log_unmapped_joysticks(void) {
+    static AlnUnmappedSeen seen;
+    int count=0;
+    SDL_JoystickID *ids=SDL_GetJoysticks(&count);
+    aln_unmapped_forget_absent(&seen,ids,ids ? (size_t)count : 0);
+    for (int j=0;ids && j<count;++j) {
+        if (SDL_IsGamepad(ids[j]) || !aln_unmapped_first_sight(&seen,ids[j])) continue;
+        char guid[33], line[384];
+        SDL_GUIDToString(SDL_GetJoystickGUIDForID(ids[j]),guid,sizeof(guid));
+        aln_unmapped_line(SDL_GetJoystickNameForID(ids[j]),guid,SDL_GetJoystickVendorForID(ids[j]),SDL_GetJoystickProductForID(ids[j]),line,sizeof(line));
+        diag_log(line);
+    }
+    SDL_free(ids);
+}
 /* Gives new gamepads, in SDL's order, the lowest slots without one; called under lock. A disconnected
  * gamepad frees its slot, but the player stays logged in, as on the PS4. */
 static void refresh_gamepads(void) {
     if (!sdl_ready) {
         if (!SDL_WasInit(SDL_INIT_GAMEPAD)) aln_prepare_sdl_gamepad();
         sdl_ready = SDL_WasInit(SDL_INIT_GAMEPAD) ? 1 : SDL_InitSubSystem(SDL_INIT_GAMEPAD) ? 1 : -1;
+        if (sdl_ready>0) load_user_gamepad_mappings();
     }
     if (sdl_ready<0) return;
     for (int i=0;i<MAX_PADS;++i) {
@@ -142,8 +169,12 @@ static void refresh_gamepads(void) {
         slots[i].gamepad=NULL;
         aln_pad_diag_reset(&slots[i].stick_diag);
     }
-    static uint64_t last_scan;
+    static uint64_t last_scan, last_unmapped_scan;
     const uint64_t now=now_us();
+    if (!last_unmapped_scan || now-last_unmapped_scan>=250000) {
+        last_unmapped_scan=now;
+        log_unmapped_joysticks();
+    }
     if (free_slot()<0 || (last_scan && now-last_scan<250000)) return;
     last_scan=now;
     int count=0;
@@ -188,7 +219,6 @@ static ButtonMap pad_map={{
 },15};
 static ButtonMap key_map;
 static AlnKeyMap keys;
-static char keys_file[4200];
 void runtime_pad_set_settings(const char *settings_file) { snprintf(keys_file,sizeof(keys_file),"%s",settings_file ? settings_file : ""); }
 
 static const struct { AlnKeyAction action; uint32_t ps; } key_buttons[]={

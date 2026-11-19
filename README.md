@@ -135,6 +135,10 @@ In game, the squad menus offer Create Squad, Join Squad, Friends only, Invite on
 
 <img width="1344" height="795" alt="2026-11-13_18-06" src="https://github.com/user-attachments/assets/d945d243-91bb-44ab-b114-f2f52b2ac0e3" />
 
+## Controllers
+
+Xbox, PlayStation and other controllers that SDL3 knows work without setup, and so does the keyboard. If a controller does nothing, look in the log for `joystick without a gamepad mapping`: SDL sees the device but has no mapping for it, and the line gives its name, GUID and VID:PID. Add a standard [SDL GameControllerDB](https://github.com/mdqinc/SDL_GameControllerDB) line for that GUID, ending in `platform:Windows,` or `platform:Linux,`, to `user/gamecontrollerdb.txt` (beside `alienation.ini`) and restart the game. The file is optional, and a mapping set in `SDL_GAMECONTROLLERCONFIG` takes priority over it. The game never guesses a mapping.
+
 ## Local Co-op
 
 **CUSA00062 1.06**, installed from the official base + update or from a verified complete 1.06 package, has local co-op for **up to four players**: connect up to four controllers and press **OPTIONS** on another controller to join ("Join Local Co-op"). Each player gets their own class, gear and save. The first gamepad (or the keyboard) is player 1; further gamepads become players 2 to 4 in the order they connect.

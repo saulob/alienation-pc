@@ -108,7 +108,7 @@ Add-Exes $s @(
     , @('aln-avplayer-thread-tests', 'AvPlayer thread join')
     , @('aln-video-frame-tests', 'ALN-VUK9PE: decoded video frames land at the 64-byte pitch whatever the decoder''s row size, and the rows below the picture repeat its last row (shadPS4 #4525 green video)')
     , @('aln-runtime-overlay-tests', 'guest file overlay')
-    , @('aln-sdl-compat-tests', 'SDL compatibility')
+    , @('aln-sdl-compat-tests', 'SDL compatibility: Proton/Wine HIDAPI default and its place before SDL gamepad init; user gamecontrollerdb.txt path beside the settings file (Windows and Linux separators, no directory, null, empty, small buffers); unmapped joystick log line (name, GUID, VID:PID, no serial or path) and its bounded once-per-connection set; the runtime never guesses or overwrites a mapping and loads the file once before the first gamepad enumeration')
     , @('aln-trophy-tests', 'trophies; ALN-VUK9PE: contexts create, register and unlock without trophy data or a trophy key (the upstream #4498 regression that lost XP and gear)')
     , @('aln-incident-tests', 'bug reports and incident report; ALN-U3T5UQ: the report names the build the selected log''s session ran; ALN-YB9NZA: crash detection by exact dump, Attach crash report, name, path and size checks')
     , @('aln-paths-tests', 'data folder beside the program (Linux: beside the AppImage, XDG fallback)')
@@ -162,7 +162,7 @@ $s = 'Save data'
 Add-Exes $s @(, @('aln-savedata-tests', 'save create, overwrite, recovery, profile isolation, four local users mounted at once', 100))
 
 $s = 'Local multiplayer'
-Add-Exes $s @(, @('aln-local-pad-tests', 'one to four virtual gamepads: user and pad mapping, join order, disconnect, reconnect, slot reuse, fifth refused; Issue #2: left stick diagonals keep both axes (every direction, half and asymmetric deflection, dead zone edge, 10,000 held samples, X/Y event order, 45 degree circle, players 1 and 2) and keyboard stick keys; PadDiag log lines: controller metadata, bounded left-stick capture classifying stable, source-side and guest-side alternation, no log spam over 10,000 reads, per-pad isolation and reset', 80000))
+Add-Exes $s @(, @('aln-local-pad-tests', 'one to four virtual gamepads: user and pad mapping, join order, disconnect, reconnect, slot reuse, fifth refused; Issue #2: left stick diagonals keep both axes (every direction, half and asymmetric deflection, dead zone edge, 10,000 held samples, X/Y event order, 45 degree circle, players 1 and 2) and keyboard stick keys; PadDiag log lines: controller metadata, bounded left-stick capture classifying stable, source-side and guest-side alternation, no log spam over 10,000 reads, per-pad isolation and reset; user gamecontrollerdb.txt in fresh processes on real SDL virtual joysticks: a missing file is silent, an unreadable or mapping-less file is one concise line and startup goes on, a valid file turns unmapped joysticks into gamepads before the first enumeration and loads once, players 1 to 4 take them in slot order, SDL_GAMECONTROLLERCONFIG keeps priority for its GUID; joysticks without a mapping are logged once per connection (second joystick, reconnect, connect cycles) and never for mapped pads', 80000))
 
 $s = 'Online multiplayer'
 Add-Exes $s @(

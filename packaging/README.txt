@@ -54,7 +54,9 @@ PLAYING
 - F2 shows the frame counter. F11 switches between Windowed and Borderless
   Fullscreen.
 - Xbox and PlayStation controllers and the keyboard are supported; the
-  launcher's Controls page lists the keys.
+  launcher's Controls page lists the keys. For a controller the log reports as
+  "joystick without a gamepad mapping", add an SDL GameControllerDB line for
+  its GUID to user/gamecontrollerdb.txt.
 - Online co-op (2 to 4 players): turn Online play On in the launcher's Online
   page, run the Connection test once, add friends with their Friend Code, then
   use the game's own squad menus (Create Squad, Join Squad, Invite friends).
