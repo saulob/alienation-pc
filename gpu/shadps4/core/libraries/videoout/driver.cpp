@@ -710,7 +710,8 @@ unsigned RepeatCadence(int frame_rate, bool vsync, double display_hz) {
     if (!presenter->CanRepeatFrames()) {
         return 0u;
     }
-    return AlnFramePacing::RepeatCadenceHz(frame_rate, vsync, display_hz);
+    const bool display_paced = AlnFramePacing::DisplayPacesPresents(vsync, AlnPresent::GamescopeSession());
+    return AlnFramePacing::RepeatCadenceHz(frame_rate, display_paced, display_hz);
 }
 } // namespace
 
@@ -782,10 +783,10 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
         const unsigned cadence = RepeatCadence(frame_rate, vsync, display_hz);
         limiter = AlnFramePacing::FrameLimiter{cadence, now};
         settings.repeat_cadence_hz = cadence;
-        std::printf("VideoOut: vblank %u Hz, frame rate %s, repeat cadence %s, VSync %s, display %.2f Hz\n",
+        std::printf("VideoOut: vblank %u Hz, frame rate %s, repeat cadence %s, VSync %s%s, display %.2f Hz\n",
                     EmulatorSettings.GetVblankFrequency(), AlnFramePacing::ModeName(frame_rate).c_str(),
                     cadence ? (std::to_string(cadence) + " FPS").c_str() : "none", vsync ? "on" : "off",
-                    display_hz);
+                    AlnPresent::GamescopeSession() ? " (Gamescope paces presents)" : "", display_hz);
     };
     start_pacing(std::chrono::steady_clock::now());
     if (AlnLatencyTrace::enabled) {

@@ -1304,9 +1304,45 @@ void TestProductionLobbyOnly() {
     CHECK(Has(settings, "std::string lobby = kDefaultLobbyUrl;"));
 }
 
+// ALN-U3T5UQ: the launcher had 1.06 active, the player removed the update and the session ran 1.00. The report
+// describes the selected log's session, not whatever build the launcher has active when it is sent.
+void TestReportNamesTheSessionBuild() {
+    const std::string session =
+        "[run] 2026-11-19T10:00:00\n"
+        "Launcher: build CUSA00062 1.06 (EP9000-CUSA00062_00-ALIENATIONGAMEEU)\r\n"
+        "Launcher: build CUSA00062 1.00 (EP9000-CUSA00062_00-ALIENATIONGAMEEU)\n"
+        "Launcher: closed, starting the game\n"
+        "Game: build CUSA00062 1.00, eboot sha256 f5f41f87\n"
+        "ALN: game build CUSA00062 1.00\n"
+        "Runtime: guest thread 'guest' created (stack=1048576, prio=700)\n";
+    const GameBuild* build = SessionBuild(session);
+    CHECK(build && std::string_view(build->title_id) == "CUSA00062" && std::string_view(build->version) == "1.00");
+    const GameBuild* launcher_only = SessionBuild("Launcher: build CUSA00062 1.06 (EP9000-CUSA00062_00-X)\n");
+    CHECK(launcher_only && std::string_view(launcher_only->version) == "1.06");
+    CHECK(!SessionBuild("ALN: game build CUSA99999 9.99\n") && !SessionBuild(""));
+
+    TempFolder temp;
+    WriteLog(temp.path, LogName(1), session, 1);
+    const auto logs = FindGameLogs(temp.path, {});
+    CHECK(logs.size() == 1);
+    if (logs.empty()) return;
+    const ReportFacts active{"0.1.0", "CUSA00062 1.06 \xC2\xB7 EUR", "1.06", "CUSA00062", "SteamOS 3.7"};
+    const auto package = BuildIncidentPackage("Very slow on the Deck", logs[0], active, {});
+    CHECK(package.has_value());
+    if (!package) return;
+    CHECK(package->Value("game_build") == "CUSA00062 1.00 \xC2\xB7 EUR");
+    CHECK(package->Value("game_version") == "1.00");
+    CHECK(package->Value("cusa") == "CUSA00062");
+    CHECK(package->Value("launcher_version") == "0.1.0");
+
+    const ReportFacts same{"0.1.0", "CUSA00062 1.00 \xC2\xB7 EUR (complete package)", "1.00", "CUSA00062", "SteamOS 3.7"};
+    CHECK(SessionReportFacts(same, logs[0]).game_build == same.game_build);
+}
+
 } // namespace
 
 int main() {
+    TestReportNamesTheSessionBuild();
     TestNewestFiveFirst();
     TestBuildSectionBeforeTheSession();
     TestFewerThanFive();

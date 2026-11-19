@@ -19,6 +19,8 @@
 
 namespace aln {
 
+struct GameBuild;
+
 inline constexpr size_t kMostGameLogs = 5;
 inline constexpr size_t kFewestDescriptionCharacters = 10;
 inline constexpr size_t kMostDescriptionCharacters = 500;
@@ -108,6 +110,12 @@ struct ReportFacts {
     std::string cusa;
     std::string operating_system;
 };
+
+// The supported build the session in `log_head` ran: the game process's own line, else the launcher's last one.
+const GameBuild* SessionBuild(std::string_view log_head);
+
+// `facts` with the game build of the log's own session when it names another supported build than the launcher's.
+ReportFacts SessionReportFacts(const ReportFacts& facts, const GameLog& log);
 
 // "Windows 11 (build 26200)", "Steam Deck: SteamOS 3.6".
 std::string OperatingSystemText();

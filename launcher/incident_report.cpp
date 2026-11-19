@@ -9,6 +9,7 @@
 #include <system_error>
 #include <thread>
 
+#include "game_profile.h"
 #include "localization/ui_text.h"
 #include "net/identity.h"
 #include "net/lobby_link.h"
@@ -134,6 +135,13 @@ Session ReadSession(const fs::path& file) {
     if (holds(kGuestCodeMark)) return {LogActivity::kGameplay, false};
     if (std::any_of(std::begin(kGameStartMarks), std::end(kGameStartMarks), holds)) return {LogActivity::kGameStarted, false};
     return {LogActivity::kLauncher, holds(kLauncherClosedMark)};
+}
+
+std::string SessionHead(const fs::path& file) {
+    std::string head = ReadPart(file, 0, kSessionHeadBytes);
+    const uintmax_t start = SessionStart(file, head);
+    if (start == uintmax_t(-1)) return {};
+    return start ? ReadPart(file, start, kSessionHeadBytes) : head;
 }
 
 std::time_t SystemTimeOf(fs::file_time_type written) {
@@ -372,6 +380,42 @@ std::string LastBytes(std::string_view text, size_t most) {
     return std::string(tail);
 }
 
+const GameBuild* SessionBuild(std::string_view log_head) {
+    std::string_view game_label, launcher_label;
+    const auto label_after = [](std::string_view line, std::string_view prefix, std::string_view end) {
+        line.remove_prefix(prefix.size());
+        return line.substr(0, line.find(end));
+    };
+    for (size_t at = 0; at < log_head.size();) {
+        const size_t end = std::min(log_head.find('\n', at), log_head.size());
+        std::string_view line = log_head.substr(at, end - at);
+        if (line.ends_with('\r')) line.remove_suffix(1);
+        if (line.starts_with("ALN: game build ")) {
+            game_label = label_after(line, "ALN: game build ", "\n");
+        } else if (line.starts_with("Game: build ")) {
+            game_label = label_after(line, "Game: build ", ",");
+        } else if (line.starts_with("Launcher: build ")) {
+            launcher_label = label_after(line, "Launcher: build ", " (");
+        }
+        at = end + 1;
+    }
+    const std::string_view label = game_label.empty() ? launcher_label : game_label;
+    for (const GameBuild& build : SupportedBuilds()) {
+        if (label == build.label) return &build;
+    }
+    return nullptr;
+}
+
+ReportFacts SessionReportFacts(const ReportFacts& facts, const GameLog& log) {
+    const GameBuild* build = SessionBuild(SessionHead(log.path));
+    if (!build || (facts.cusa == build->title_id && facts.game_version == build->version)) return facts;
+    ReportFacts session = facts;
+    session.game_build = BuildDisplayName(*build);
+    session.game_version = build->version;
+    session.cusa = build->title_id;
+    return session;
+}
+
 std::optional<IncidentPackage> BuildIncidentPackage(std::string_view description, const GameLog& log, const ReportFacts& facts,
                                                     const PrivateFacts& private_facts, bool attach_crash_dump) {
     std::error_code ec;
@@ -393,8 +437,9 @@ std::optional<IncidentPackage> BuildIncidentPackage(std::string_view description
     summary.resize(BytesOfCharacters(summary, kMostDescriptionCharacters));
     if (summary.empty()) return std::nullopt;
 
-    std::string values[] = {std::move(summary), facts.launcher_version, facts.game_build, facts.game_version, facts.cusa,
-                            facts.operating_system, log.name, clipped ? "yes" : "no", std::move(text)};
+    const ReportFacts session = SessionReportFacts(facts, log);
+    std::string values[] = {std::move(summary), session.launcher_version, session.game_build, session.game_version,
+                            session.cusa, session.operating_system, log.name, clipped ? "yes" : "no", std::move(text)};
     IncidentPackage package;
     for (size_t i = 0; i < std::size(kFieldNames); ++i) package.fields.push_back({kFieldNames[i].key, kFieldNames[i].label, std::move(values[i])});
     package.crash_dump_requested = attach_crash_dump;

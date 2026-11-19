@@ -376,6 +376,8 @@ void TestWiring() {
     CHECK(InOrder(driver, "limiter.SlotBefore(tick_deadline)", "RepeatLastFrame();"));
     CHECK(Contains(driver, "RepeatLastFrame();\n        }\n\n        timer.End();"));
     CHECK(InOrder(driver, "if (!presenter->CanRepeatFrames()) {", "return 0u;"));
+    CHECK(InOrder(driver, "DisplayPacesPresents(vsync, AlnPresent::GamescopeSession());",
+                  "AlnFramePacing::RepeatCadenceHz(frame_rate, display_paced, display_hz);"));
     CHECK(Contains(ReadSource("gpu/shadps4/video_core/renderer_vulkan/vk_presenter.h"),
                    "bool CanRepeatFrames() const override { return true; }"));
     CHECK(Contains(ReadSource("gpu/shadps4/video_core/renderer_opengl/gl_presenter.h"),
@@ -405,6 +407,108 @@ void TestWiring() {
     CHECK(Contains(launcher, "ui.Combo(\"Frame rate\", kFrameRateHelp, kFrameRateKey, \"60\", frame_rates);"));
 }
 
+// The Steam Deck under Gamescope: VSync off in the settings, but the compositor shows one image per refresh.
+struct GamescopeRun {
+    long long vblanks = 0, flips = 0, delayed_flips = 0, presents = 0, repeats = 0, dropped_repeats = 0;
+    long long max_pending = 0;
+};
+
+// The present thread (driver.cpp SwapThread) on Gamescope's Mailbox swapchain, where a present returns at once: new
+// frames queue, a repeat only starts on an idle presenter (RunPresenter if_idle), and a due flip waits while a new
+// frame is still queued (FlipWaitsForPresenter).
+GamescopeRun SimulateGamescope(unsigned cadence, double seconds) {
+    GamescopeRun run;
+    const double vblank = 1.0 / Pacing::kGameHz;
+    const double present_time = 0.001;
+    const double dt = 1e-5;
+    Pacing::FrameLimiter limiter{cadence, At(0.0)};
+    double busy_until = 0.0;
+    double frame_ready = 0.008;
+    long long pending = 0;
+    long long next_vblank = 1;
+    for (double t = 0.0; t < seconds; t += dt) {
+        if (t >= busy_until && pending > 0) {
+            --pending;
+            busy_until = t + present_time;
+            ++run.presents;
+        }
+        if (t >= next_vblank * vblank) {
+            ++run.vblanks;
+            if (t >= frame_ready) {
+                if (pending > 0) {
+                    ++run.delayed_flips;
+                } else {
+                    limiter.Release(At(t));
+                    ++run.flips;
+                    ++pending;
+                    frame_ready = t + 0.008;
+                }
+            }
+            ++next_vblank;
+        }
+        if (const auto slot = limiter.SlotBefore(At(next_vblank * vblank)); slot && At(t) >= *slot) {
+            limiter.Release(At(t));
+            if (t >= busy_until && pending == 0) {
+                busy_until = t + present_time;
+                ++run.presents;
+                ++run.repeats;
+            } else {
+                ++run.dropped_repeats;
+            }
+        }
+        run.max_pending = std::max(run.max_pending, pending);
+    }
+    return run;
+}
+
+// ALN-U3T5UQ: Steam Deck, Gamescope, 59.81 Hz, Frame rate 120, VSync off, Mailbox. Gamescope paces presents like VSync,
+// so the repeat cadence is bounded by the display: no repeats on a 60 Hz panel, the difference on 90 and 120 Hz ones.
+void TestGamescopePresentsFollowTheDisplay() {
+    constexpr bool vsync_off = false;
+    const auto cadence = [](int setting, bool gamescope, double display) {
+        return Pacing::RepeatCadenceHz(setting, Pacing::DisplayPacesPresents(vsync_off, gamescope), display);
+    };
+    CHECK(cadence(120, true, 59.81) == 0);
+    CHECK(cadence(120, false, 59.81) == 120);
+    CHECK(cadence(120, true, 90.0) == 90 && cadence(120, true, 120.0) == 120);
+    CHECK(Pacing::DisplayPacesPresents(true, false) && !Pacing::DisplayPacesPresents(false, false));
+    CHECK(Pacing::RepeatCadenceHz(60, true, 59.81) == 0);
+    CHECK(Pacing::RepeatCadenceHz(120, true, 59.81) == 0);
+    CHECK(Pacing::RepeatCadenceHz(120, true, 90.0) == 90);
+    CHECK(Pacing::RepeatCadenceHz(120, true, 120.0) == 120);
+    CHECK(Pacing::RepeatCadenceHz(0, true, 59.81) == 0);
+    // A desktop compositor without display pacing keeps the requested rate with VSync off.
+    CHECK(Pacing::RepeatCadenceHz(120, false, 59.81) == 120);
+
+    struct Case {
+        int setting;
+        double display;
+        long long presents_per_second;
+    };
+    for (const Case c : {Case{60, 59.81, 60}, Case{120, 59.81, 60}, Case{120, 90.0, 90}, Case{120, 120.0, 120}}) {
+        const Outcome run = Simulate({.setting = c.setting, .vsync = true, .display_hz = c.display});
+        const long long presents = run.shown + run.repeats;
+        CHECK(std::abs(presents - c.presents_per_second * 10) <= 61);
+        CHECK(run.shown == run.flips);
+    }
+
+    const GamescopeRun before = SimulateGamescope(cadence(120, false, 59.81), 60.0);
+    const GamescopeRun after = SimulateGamescope(cadence(120, true, 59.81), 60.0);
+    std::printf("  Gamescope 59.81 Hz, 60 s: cadence 120: %lld presents (%lld repeats, %lld dropped), %lld flips of "
+                "%lld vblanks, %lld delayed; display cadence: %lld presents, %lld flips, %lld delayed\n",
+                before.presents, before.repeats, before.dropped_repeats, before.flips, before.vblanks,
+                before.delayed_flips, after.presents, after.flips, after.delayed_flips);
+    CHECK(before.presents > 59.81 * 60.0 * 1.9);
+    CHECK(after.repeats == 0 && after.dropped_repeats == 0);
+    CHECK(after.presents == after.flips && after.presents <= 59.81 * 60.0 + 61);
+    CHECK(after.flips == before.flips && after.delayed_flips == 0 && after.max_pending <= 1);
+    for (const double display : {90.0, 120.0}) {
+        const GamescopeRun run = SimulateGamescope(cadence(120, true, display), 60.0);
+        CHECK(std::abs(run.presents - static_cast<long long>(display * 60.0)) <= 61);
+        CHECK(run.delayed_flips == 0 && run.max_pending <= 1);
+    }
+}
+
 } // namespace
 
 int main() {
@@ -426,6 +530,7 @@ int main() {
     TestFasterGuestFlipsWouldSpeedUpTheGame();
     TestVblankLeadIsTheSameAtEveryRate();
     TestWiring();
+    TestGamescopePresentsFollowTheDisplay();
     if (g_failures) {
         std::printf("%d check(s) failed\n", g_failures);
         return 1;

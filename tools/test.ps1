@@ -109,7 +109,7 @@ Add-Exes $s @(
     , @('aln-runtime-overlay-tests', 'guest file overlay')
     , @('aln-sdl-compat-tests', 'SDL compatibility')
     , @('aln-trophy-tests', 'trophies')
-    , @('aln-incident-tests', 'bug reports and incident report; ALN-YB9NZA: crash detection by exact dump, Attach crash report, name, path and size checks')
+    , @('aln-incident-tests', 'bug reports and incident report; ALN-U3T5UQ: the report names the build the selected log''s session ran; ALN-YB9NZA: crash detection by exact dump, Attach crash report, name, path and size checks')
     , @('aln-paths-tests', 'data folder beside the program (Linux: beside the AppImage, XDG fallback)')
 )
 
@@ -131,7 +131,7 @@ Add-Exes $s @(
     , @('aln-cursor-tests', 'cursor visibility')
     , @('aln-window-tests', 'window fit')
     , @('aln-present-tests', 'presentation')
-    , @('aln-frame-pacing-tests', 'Frame rate: presentation pacing, game speed and network work equal at every rate')
+    , @('aln-frame-pacing-tests', 'Frame rate: presentation pacing, game speed and network work equal at every rate; ALN-U3T5UQ: under Gamescope presents never outpace the display (60, 90, 120 Hz), no repeat backlog')
 )
 Add-Suite $s 'python' 'tests\display_aspect_tests.py' 'display size, aspect and ultrawide sites against the real executables'
 
