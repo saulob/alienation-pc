@@ -7,6 +7,8 @@
 #include "runtime.h"
 #include "alngpu.h"
 #include "aln_keys.h"
+#include "aln_pad_axes.h"
+#include "aln_pad_diag.h"
 #include "aln_sdl_compat.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -66,19 +68,47 @@ typedef struct {
     SDL_Gamepad *gamepad;
     uint8_t connected_count;
     int hold_after_capture;
+    AlnPadDiag stick_diag;
 } PadSlot;
 static PadSlot slots[MAX_PADS]; /* slots[N-1]: player N, pad handle N */
 
-static uint64_t now_us(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); return (uint64_t)t.tv_sec*1000000u+(uint64_t)t.tv_nsec/1000u; }
-#define STICK_DEADZONE 0.10f
-static uint8_t axis(int16_t v) {
-    float f=(float)v/32767.f;
-    if (f>1) f=1;
-    if (f<-1) f=-1;
-    f=fabsf(f)<=STICK_DEADZONE ? 0.f : (f>0 ? f-STICK_DEADZONE : f+STICK_DEADZONE)/(1.f-STICK_DEADZONE);
-    int x=(int)lroundf(f*127.5f+127.5f);
-    return (uint8_t)(x<0 ? 0 : x>255 ? 255 : x);
+static void (*diag_sink)(const char *line);
+void runtime_pad_set_diag_sink(void (*sink)(const char *line)) { diag_sink=sink; }
+static void diag_log(const char *line) {
+    if (diag_sink) diag_sink(line);
+    puts(line);
 }
+static const char *connection_name(SDL_JoystickConnectionState state) {
+    return state==SDL_JOYSTICK_CONNECTION_WIRED ? "wired" : state==SDL_JOYSTICK_CONNECTION_WIRELESS ? "wireless" : NULL;
+}
+static void log_gamepad_connected(int slot, SDL_Gamepad *g, SDL_JoystickID id) {
+    static bool context_logged;
+    char line[320];
+    if (!context_logged) {
+        context_logged=true;
+        const int version=SDL_GetVersion();
+        snprintf(line,sizeof(line),"PadDiag: platform=%s, wine=%s, sdl=%d.%d.%d",SDL_GetPlatform(),
+                 aln_running_under_wine() ? "yes" : "no",SDL_VERSIONNUM_MAJOR(version),SDL_VERSIONNUM_MINOR(version),SDL_VERSIONNUM_MICRO(version));
+        diag_log(line);
+    }
+    const unsigned vendor=SDL_GetGamepadVendor(g), product=SDL_GetGamepadProduct(g);
+    const SDL_GamepadType type=SDL_GetGamepadType(g);
+    const AlnPadDiagInfo info={.player=slot+1,.name=SDL_GetGamepadName(g),
+        .type=type==SDL_GAMEPAD_TYPE_UNKNOWN ? NULL : SDL_GetGamepadStringForType(type),
+        .connection=connection_name(SDL_GetGamepadConnectionState(g)),
+        .vendor=vendor,.product=product,.version=SDL_GetGamepadProductVersion(g),
+        .virtual_device=SDL_IsJoystickVirtual(id),.steam_input=vendor==0x28de && product==0x11ff ? "yes" : NULL};
+    aln_pad_diag_connect_line(&info,line,sizeof(line));
+    diag_log(line);
+}
+static void log_stick_diag(int slot, AlnPadDiag *diag, AlnPadDiagVerdict verdict) {
+    char line[384];
+    aln_pad_diag_summary(diag,slot+1,line,sizeof(line));
+    diag_log(line);
+    aln_pad_diag_verdict_line(verdict,slot+1,diag->samples,line,sizeof(line));
+    diag_log(line);
+}
+static uint64_t now_us(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); return (uint64_t)t.tv_sec*1000000u+(uint64_t)t.tv_nsec/1000u; }
 static uint8_t trigger(int16_t v) { int x=v>>7; return (uint8_t)(x<0 ? 0 : x>255 ? 255 : x); }
 static uint16_t touch_axis(float v, int max) {
     return (uint16_t)(v<=0.0f ? 0 : v>=1.0f ? max : (int)(v*max+0.5f));
@@ -110,6 +140,7 @@ static void refresh_gamepads(void) {
         printf("Runtime: gamepad %d disconnected\n",i+1);
         SDL_CloseGamepad(slots[i].gamepad);
         slots[i].gamepad=NULL;
+        aln_pad_diag_reset(&slots[i].stick_diag);
     }
     static uint64_t last_scan;
     const uint64_t now=now_us();
@@ -127,6 +158,7 @@ static void refresh_gamepads(void) {
         const unsigned vendor=SDL_GetGamepadVendor(g), product=SDL_GetGamepadProduct(g);
         printf("Runtime: gamepad %d connected: %s (%04x:%04x%s)\n",slot+1,SDL_GetGamepadName(g),vendor,product,
                vendor==0x28de && product==0x11ff ? ", Steam Input virtual gamepad" : "");
+        log_gamepad_connected(slot,g,ids[j]);
         runtime_user_login(slot+1);
     }
     SDL_free(ids);
@@ -225,9 +257,6 @@ static void load_button_maps(void) {
     if (pad || keys) printf("Runtime: pad map: %d gamepad and %d keyboard buttons remapped\n",pad,keys);
 }
 
-static void key_axis(uint8_t *axis, bool negative, bool positive) {
-    if (negative || positive) *axis=(uint8_t)(128-(negative ? 128 : 0)+(positive ? 127 : 0));
-}
 /* Player 1 is always connected: the keyboard stands in for a missing gamepad. */
 static bool slot_connected(int slot) { return slot==0 || slots[slot].gamepad; }
 
@@ -256,8 +285,11 @@ static void sample_host(int slot, PadData *d) {
             if (SDL_GetGamepadButton(g,(SDL_GamepadButton)source)) d->buttons|=pad_map.entries[i].ps;
         }
         const uint32_t mapped=d->buttons;
-        d->left_x=axis(SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_LEFTX)); d->left_y=axis(SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_LEFTY));
-        d->right_x=axis(SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_RIGHTX)); d->right_y=axis(SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_RIGHTY));
+        const int16_t host_x=SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_LEFTX), host_y=SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_LEFTY);
+        d->left_x=aln_stick_axis(host_x); d->left_y=aln_stick_axis(host_y);
+        const AlnPadDiagVerdict verdict=aln_pad_diag_sample(&slots[slot].stick_diag,host_x,host_y,d->left_x,d->left_y);
+        if (verdict!=ALN_PAD_DIAG_NONE) log_stick_diag(slot,&slots[slot].stick_diag,verdict);
+        d->right_x=aln_stick_axis(SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_RIGHTX)); d->right_y=aln_stick_axis(SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_RIGHTY));
         d->l2=trigger(SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_LEFT_TRIGGER)); d->r2=trigger(SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_RIGHT_TRIGGER));
         if (d->l2>30) d->buttons|=BTN_L2;
         if (d->r2>30) d->buttons|=BTN_R2;
@@ -286,10 +318,10 @@ static void sample_host(int slot, PadData *d) {
     if (k[keys.scancode[ALN_KEY_TOUCHPAD_RIGHT]]) touch_click(d,1);
     if (d->buttons & BTN_L2) d->l2=255;
     if (d->buttons & BTN_R2) d->r2=255;
-    key_axis(&d->left_x,k[keys.scancode[ALN_KEY_LEFT_STICK_LEFT]],k[keys.scancode[ALN_KEY_LEFT_STICK_RIGHT]]);
-    key_axis(&d->left_y,k[keys.scancode[ALN_KEY_LEFT_STICK_UP]],k[keys.scancode[ALN_KEY_LEFT_STICK_DOWN]]);
-    key_axis(&d->right_x,k[keys.scancode[ALN_KEY_RIGHT_STICK_LEFT]],k[keys.scancode[ALN_KEY_RIGHT_STICK_RIGHT]]);
-    key_axis(&d->right_y,k[keys.scancode[ALN_KEY_RIGHT_STICK_UP]],k[keys.scancode[ALN_KEY_RIGHT_STICK_DOWN]]);
+    aln_key_axis(&d->left_x,k[keys.scancode[ALN_KEY_LEFT_STICK_LEFT]],k[keys.scancode[ALN_KEY_LEFT_STICK_RIGHT]]);
+    aln_key_axis(&d->left_y,k[keys.scancode[ALN_KEY_LEFT_STICK_UP]],k[keys.scancode[ALN_KEY_LEFT_STICK_DOWN]]);
+    aln_key_axis(&d->right_x,k[keys.scancode[ALN_KEY_RIGHT_STICK_LEFT]],k[keys.scancode[ALN_KEY_RIGHT_STICK_RIGHT]]);
+    aln_key_axis(&d->right_y,k[keys.scancode[ALN_KEY_RIGHT_STICK_UP]],k[keys.scancode[ALN_KEY_RIGHT_STICK_DOWN]]);
 }
 
 /* ALN_PAD_FILE=<file>: scripted input for automated runs. The file holds whitespace-separated

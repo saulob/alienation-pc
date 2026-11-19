@@ -160,7 +160,7 @@ $s = 'Save data'
 Add-Exes $s @(, @('aln-savedata-tests', 'save create, overwrite, recovery, profile isolation, four local users mounted at once', 100))
 
 $s = 'Local multiplayer'
-Add-Exes $s @(, @('aln-local-pad-tests', 'one to four virtual gamepads: user and pad mapping, join order, disconnect, reconnect, slot reuse, fifth refused', 200))
+Add-Exes $s @(, @('aln-local-pad-tests', 'one to four virtual gamepads: user and pad mapping, join order, disconnect, reconnect, slot reuse, fifth refused; Issue #2: left stick diagonals keep both axes (every direction, half and asymmetric deflection, dead zone edge, 10,000 held samples, X/Y event order, 45 degree circle, players 1 and 2) and keyboard stick keys; PadDiag log lines: controller metadata, bounded left-stick capture classifying stable, source-side and guest-side alternation, no log spam over 10,000 reads, per-pad isolation and reset', 80000))
 
 $s = 'Online multiplayer'
 Add-Exes $s @(

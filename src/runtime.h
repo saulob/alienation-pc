@@ -103,6 +103,7 @@ void runtime_pad_set_settings(const char *settings_file);
 int runtime_pad_slot_human(int slot);
 uintptr_t runtime_pad_resolve(const char *name);
 void runtime_pad_report(void);
+void runtime_pad_set_diag_sink(void (*sink)(const char *line));
 void runtime_sema_report(void);
 unsigned runtime_sema_waiters(uint32_t id);
 uintptr_t runtime_time_resolve(const char *name);
