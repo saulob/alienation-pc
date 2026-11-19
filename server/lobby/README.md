@@ -42,7 +42,8 @@ No dependencies are installed for either the tests or the local server.
 
 Players, the launcher and the admin use the deployed Worker, whose address is `aln::net::kDefaultLobbyUrl`
 (`src/net/online_config.h`): `wss://alienation-lobby.saulobenigno.workers.dev`. The launcher's Bug Report page files
-reports on the same service (`incident.file`); `/admin` shows them in the Bugs tab.
+reports on the same service (`incident.file`, and for a crashed session its dump through `incident.dump`); `/admin` shows
+them in the Bugs tab, with the log and the minidump downloaded separately.
 
 ## Developer and testing only
 

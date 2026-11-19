@@ -580,7 +580,7 @@ void TestLimitsKeepTheDraft() {
 
 void TestResultComesIntoView() {
     const std::string page = ReadAll(kSource / "launcher" / "incident_page.cpp");
-    CHECK(CountOf(page, "bring_result_into_view_ = true;") == 2);
+    CHECK(CountOf(page, "bring_result_into_view_ = true;") == 4);
     const size_t collect = page.find("void IncidentPage::CollectDelivery()");
     const size_t send = page.find("void IncidentPage::Send(");
     const size_t draw = page.find("void IncidentPage::DrawSend(");
@@ -1027,6 +1027,255 @@ void TestSelectedLogButtonSitsInItsFacts() {
     }
 }
 
+// ---- ALN-YB9NZA: the crash dump of a gameplay session travels with its report ----
+
+fs::path WriteDump(const fs::path& folder, const std::string& name, size_t size, int minutes_ago, bool signature = true) {
+    const fs::path file = folder / name;
+    std::string bytes(size, 'x');
+    if (signature && size >= 4) bytes.replace(0, 4, "MDMP");
+    std::ofstream(file, std::ios::binary) << bytes;
+    fs::last_write_time(file, fs::file_time_type::clock::now() - std::chrono::minutes(minutes_ago));
+    return file;
+}
+
+const GameLog* LogNamed(const std::vector<GameLog>& logs, const std::string& name) {
+    for (const GameLog& log : logs) {
+        if (log.name == name) return &log;
+    }
+    return nullptr;
+}
+
+void TestCrashNeedsItsOwnDump() {
+    TempFolder temp;
+    WriteLog(temp.path, LogName(1), kGameplaySession, 30);
+    WriteLog(temp.path, LogName(2), kGameplaySession, 20);
+    WriteLog(temp.path, LogName(3), kGameplaySession, 10);
+    WriteDump(temp.path, "alienation_002.dmp", 5000, 20);
+    const std::vector<GameLog> logs = FindGameLogs(temp.path, {});
+    CHECK(logs.size() == 3);
+    const GameLog* first = LogNamed(logs, LogName(1));
+    const GameLog* second = LogNamed(logs, LogName(2));
+    const GameLog* third = LogNamed(logs, LogName(3));
+    CHECK(first && second && third);
+    if (!first || !second || !third) return;
+    // A log without a dump is not a crash, however its text reads.
+    CHECK(!first->Crashed() && !first->CanAttachCrash());
+    CHECK(second->Crashed() && second->CanAttachCrash() && second->crash->name == "alienation_002.dmp");
+    CHECK(second->crash->path == temp.path / "alienation_002.dmp" && second->crash->bytes == 5000);
+    // alienation_003.log is not helped by alienation_002.dmp.
+    CHECK(!third->Crashed() && !third->CanAttachCrash() && !third->crash.has_value());
+    CHECK(CheckCrashDump(*third, temp.path / "alienation_002.dmp") == DumpProblem::kNotThisLog);
+    CHECK(DumpNameOf(LogName(3)) == "alienation_003.dmp" && DumpNameOf("alienation_003.dmp").empty() && DumpNameOf("notes.log").empty());
+
+    WriteDump(temp.path, "alienation_003.dmp", 5000, 10);
+    const std::vector<GameLog> again = FindGameLogs(temp.path, {});
+    CHECK(LogNamed(again, LogName(3)) && LogNamed(again, LogName(3))->Crashed());
+    CHECK(LogNamed(again, LogName(1)) && !LogNamed(again, LogName(1))->Crashed());
+}
+
+void TestLogWordsDoNotMakeACrash() {
+    TempFolder temp;
+    WriteLog(temp.path, LogName(1), kGameplaySession + "CRASH: access violation (0xc0000005)\n  minidump: alienation_001.dmp (next to this log)\n", 5);
+    const std::vector<GameLog> logs = FindGameLogs(temp.path, {});
+    CHECK(logs.size() == 1 && !logs[0].Crashed() && !DefaultAttachCrashReport(logs[0]));
+}
+
+void TestDumpOfAnotherRunIsNotPaired() {
+    TempFolder temp;
+    WriteLog(temp.path, LogName(3), kGameplaySession, 5);
+    // Left behind by an earlier session that had this number.
+    WriteDump(temp.path, "alienation_003.dmp", 5000, 90);
+    CHECK(!FindGameLogs(temp.path, {})[0].Crashed());
+    // Written at the end of the log's own session, seconds from its last line, it is paired.
+    const fs::path dump = WriteDump(temp.path, "alienation_003.dmp", 5000, 5);
+    fs::last_write_time(dump, fs::last_write_time(temp.path / LogName(3)) - std::chrono::seconds(kDumpPairingSeconds - 20));
+    CHECK(FindGameLogs(temp.path, {})[0].Crashed());
+    fs::last_write_time(dump, fs::last_write_time(temp.path / LogName(3)) - std::chrono::seconds(kDumpPairingSeconds + 30));
+    CHECK(!FindGameLogs(temp.path, {})[0].Crashed());
+    fs::last_write_time(dump, fs::last_write_time(temp.path / LogName(3)) + std::chrono::seconds(kDumpPairingSeconds + 30));
+    CHECK(!FindGameLogs(temp.path, {})[0].Crashed());
+}
+
+void TestSelectedCrashLogAttachesByDefault() {
+    TempFolder temp;
+    WriteLog(temp.path, LogName(1), kGameplaySession, 20);
+    WriteLog(temp.path, LogName(2), kGameplaySession, 10);
+    WriteDump(temp.path, "alienation_002.dmp", 5000, 10);
+    const std::vector<GameLog> logs = FindGameLogs(temp.path, {});
+    CHECK(logs.size() == 2);
+    CHECK(DefaultAttachCrashReport(*LogNamed(logs, LogName(2))));
+    CHECK(!DefaultAttachCrashReport(*LogNamed(logs, LogName(1))));
+    const std::string page = ReadAll(kSource / "launcher" / "incident_page.cpp");
+    // Choosing a log, and finding the logs again, sets the box from the log; the page keeps no other default.
+    CHECK(Has(page, "attach_crash_report_ = !logs_.empty() && DefaultAttachCrashReport(logs_[selected_]);"));
+    CHECK(Has(page, "SelectLog(DefaultGameLog(logs_));") && Has(page, "SelectLog(i);"));
+    CHECK(CountOf(page, "attach_crash_report_ =") == 1);
+}
+
+void TestUncheckedSendsOnlyTheLog() {
+    TempFolder temp;
+    WriteLog(temp.path, LogName(3), kGameplaySession, 10);
+    WriteDump(temp.path, "alienation_003.dmp", 5000, 10);
+    const std::vector<GameLog> logs = FindGameLogs(temp.path, {});
+    CHECK(logs.size() == 1 && logs[0].CanAttachCrash());
+    const auto package = BuildIncidentPackage("It crashed after joining", logs[0], SampleFacts(), {}, false);
+    CHECK(package.has_value());
+    if (!package) return;
+    CHECK(!package->crash_dump.has_value() && !package->crash_dump_requested);
+    const net::Json body = IncidentRequestBody(*package);
+    CHECK(!body.has("dump_file") && !body.has("dump_bytes") && body.members().size() == 9);
+    CHECK(!Has(IncidentPreviewText(*package), ".dmp"));
+    // The default, without the argument, is the log alone: nothing is attached by accident.
+    const auto plain = BuildIncidentPackage("It crashed after joining", logs[0], SampleFacts(), {});
+    CHECK(plain && !plain->crash_dump.has_value() && IncidentRequestBody(*plain).dump() == body.dump());
+}
+
+void TestCheckedSendsTheLogAndItsDump() {
+    TempFolder temp;
+    WriteLog(temp.path, LogName(2), kGameplaySession, 20);
+    WriteLog(temp.path, LogName(3), kGameplaySession + "Runtime: third\n", 10);
+    WriteDump(temp.path, "alienation_002.dmp", 7000, 20);
+    WriteDump(temp.path, "alienation_003.dmp", 5000, 10);
+    const std::vector<GameLog> logs = FindGameLogs(temp.path, {});
+    const GameLog& third = *LogNamed(logs, LogName(3));
+    const auto package = BuildIncidentPackage("It crashed after joining", third, SampleFacts(), {}, true);
+    CHECK(package.has_value());
+    if (!package) return;
+    CHECK(Has(package->Value("log_text"), "Runtime: third") && package->Value("log_file") == LogName(3));
+    CHECK(package->crash_dump_requested && package->crash_dump.has_value());
+    if (!package->crash_dump) return;
+    CHECK(package->crash_dump->name == "alienation_003.dmp" && package->crash_dump->bytes == 5000);
+    CHECK(package->crash_dump->path == temp.path / "alienation_003.dmp");
+    const net::Json body = IncidentRequestBody(*package);
+    CHECK(body["dump_file"].as_string() == "alienation_003.dmp" && body["dump_bytes"].as_int() == 5000 && body.members().size() == 11);
+    CHECK(body["log_file"].as_string() == LogName(3));
+    // The dump's bytes are never part of the request or the preview; only its name and size.
+    CHECK(Has(IncidentPreviewText(*package), "alienation_003.dmp") && !Has(body.dump(), "MDMP") && !Has(IncidentPreviewText(*package), "MDMP"));
+    // A box checked on a log that has no dump attaches nothing.
+    const auto without = BuildIncidentPackage("It crashed after joining", *LogNamed(logs, LogName(2)), SampleFacts(), {}, true);
+    CHECK(without && without->crash_dump && without->crash_dump->name == "alienation_002.dmp");
+    TempFolder bare;
+    WriteLog(bare.path, LogName(4), kGameplaySession, 10);
+    const auto none = BuildIncidentPackage("It froze", FindGameLogs(bare.path, {})[0], SampleFacts(), {}, true);
+    CHECK(none && !none->crash_dump && none->crash_dump_requested);
+}
+
+void TestUnexpectedDumpNamesAreRefused() {
+    TempFolder temp;
+    WriteLog(temp.path, LogName(3), kGameplaySession, 10);
+    WriteDump(temp.path, "alienation_003.dmp", 5000, 10);
+    const GameLog log = FindGameLogs(temp.path, {})[0];
+    CHECK(CheckCrashDump(log, temp.path / "alienation_003.dmp") == DumpProblem::kNone);
+    for (const char* name : {"alienation_003.dmp.exe", "alienation_003.dmp.txt", "alienation_003_2.dmp", "alienation_0030.dmp", "alienation_03.dmp",
+                             "crash.dmp", "alienation_003.log", "alienation_003", ".dmp", "alienation_003.dmpx", "xalienation_003.dmp", "alienation_002.dmp"}) {
+        WriteDump(temp.path, name, 5000, 10);
+        CHECK(CheckCrashDump(log, temp.path / name) == DumpProblem::kNotThisLog);
+    }
+    // A package built from a log whose dump was swapped for another file keeps the log and drops the dump.
+    GameLog swapped = log;
+    swapped.crash = CrashDump{temp.path / "alienation_002.dmp", "alienation_003.dmp", 5000};
+    const auto package = BuildIncidentPackage("It crashed", swapped, SampleFacts(), {}, true);
+    CHECK(package && !package->crash_dump && package->crash_dump_requested);
+}
+
+void TestDumpPathTraversalIsRefused() {
+    TempFolder temp;
+    WriteLog(temp.path, LogName(3), kGameplaySession, 10);
+    WriteDump(temp.path, "alienation_003.dmp", 5000, 10);
+    fs::create_directories(temp.path / "inner");
+    WriteDump(temp.path / "inner", "alienation_003.dmp", 5000, 10);
+    const GameLog log = FindGameLogs(temp.path, {})[0];
+    CHECK(CheckCrashDump(log, temp.path / "inner" / "alienation_003.dmp") == DumpProblem::kNotThisLog);
+    CHECK(CheckCrashDump(log, temp.path / ".." / "alienation_003.dmp") == DumpProblem::kNotThisLog);
+    CHECK(CheckCrashDump(log, temp.path / ".." / temp.path.filename() / "inner" / ".." / "inner" / "alienation_003.dmp") == DumpProblem::kNotThisLog);
+    CHECK(CheckCrashDump(log, fs::path("alienation_003.dmp")) == DumpProblem::kNotThisLog);
+    CHECK(CheckCrashDump(log, fs::path("..\\alienation_003.dmp")) == DumpProblem::kNotThisLog);
+    CHECK(CheckCrashDump(log, fs::path("../alienation_003.dmp")) == DumpProblem::kNotThisLog);
+    CHECK(CheckCrashDump(log, temp.path / "alienation_003.dmp\\..\\alienation_002.dmp") == DumpProblem::kNotThisLog);
+    GameLog elsewhere = log;
+    elsewhere.crash = CrashDump{temp.path / "inner" / "alienation_003.dmp", "alienation_003.dmp", 5000};
+    const auto package = BuildIncidentPackage("It crashed", elsewhere, SampleFacts(), {}, true);
+    CHECK(package && !package->crash_dump);
+    CHECK(CheckCrashDump(log, temp.path / "alienation_003.dmp") == DumpProblem::kNone);
+}
+
+void TestOversizedDumpIsRefusedCleanly() {
+    TempFolder temp;
+    WriteLog(temp.path, LogName(3), kGameplaySession, 10);
+    WriteDump(temp.path, "alienation_003.dmp", kMostDumpBytes, 10);
+    GameLog log = FindGameLogs(temp.path, {})[0];
+    CHECK(log.Crashed() && log.CanAttachCrash() && log.crash->bytes == kMostDumpBytes);
+    WriteDump(temp.path, "alienation_003.dmp", kMostDumpBytes + 1, 10);
+    log = FindGameLogs(temp.path, {})[0];
+    // The crash is still reported, the dump is not offered, and a package asked for it sends the log alone.
+    CHECK(log.Crashed() && !log.CanAttachCrash() && log.crash_problem == DumpProblem::kTooLarge && !DefaultAttachCrashReport(log));
+    const auto package = BuildIncidentPackage("It crashed", log, SampleFacts(), {}, true);
+    CHECK(package && !package->crash_dump && package->crash_dump_requested);
+    CHECK(package && !IncidentRequestBody(*package).has("dump_file"));
+}
+
+void TestEmptyAndForeignDumpFiles() {
+    TempFolder temp;
+    WriteLog(temp.path, LogName(3), kGameplaySession, 10);
+    WriteDump(temp.path, "alienation_003.dmp", 0, 10);
+    CHECK(!FindGameLogs(temp.path, {})[0].Crashed());
+    WriteDump(temp.path, "alienation_003.dmp", 5000, 10, false);
+    const GameLog log = FindGameLogs(temp.path, {})[0];
+    CHECK(log.Crashed() && !log.CanAttachCrash() && log.crash_problem == DumpProblem::kNotADump);
+    WriteDump(temp.path, "alienation_003.dmp", kFewestDumpBytes - 1, 10);
+    CHECK(FindGameLogs(temp.path, {})[0].crash_problem == DumpProblem::kNotADump);
+    fs::remove(temp.path / "alienation_003.dmp");
+    fs::create_directories(temp.path / "alienation_003.dmp");
+    CHECK(!FindGameLogs(temp.path, {})[0].Crashed());
+}
+
+void TestCrashPageKeepsItsLabels() {
+    const std::string page = ReadAll(kSource / "launcher" / "incident_page.cpp");
+    // The crash label is added to the session's own label; the checkbox exists only for a crashed log and is off when the dump
+    // cannot be sent.
+    CHECK(Has(page, "const char* role = LogRoleText(log.role);") && Has(page, "if (role) AccentText(ui, role);"));
+    CHECK(Has(page, "ImGui::TextUnformatted(Tr(\"Crash detected\"));"));
+    CHECK(Has(page, "if (!log.Crashed()) return;") && Has(page, "ImGui::BeginDisabled(sending || !attachable);"));
+    CHECK(Has(page, "ImGui::Checkbox(Tr(\"Attach crash report\"), &attach_crash_report_)"));
+    CHECK(Has(page, "Includes the crash dump to help diagnose the problem. A crash dump may contain process memory used for diagnostics."));
+    CHECK(Has(page, "attach_crash_report_ && logs_[selected_].CanAttachCrash()"));
+    CHECK(std::string_view(LogRoleText(LogRole::kCurrentLauncher)) == "Current launcher session" &&
+          std::string_view(LogRoleText(LogRole::kLastGameplay)) == "Last gameplay");
+    // No control picks a dump: the page has no file chooser for one, only the log's own.
+    CHECK(!Has(page, "FileBrowser") && !Has(page, "OpenFileDialog") && !Has(page, ".dmp"));
+    // Turning the box on or off changes what goes out, so a preview is shown again; sending stays held while anything runs.
+    CHECK(Has(page, "if (ImGui::Checkbox(Tr(\"Attach crash report\"), &attach_crash_report_)) ForgetPreview();"));
+    CHECK(Has(page, "const bool sending = delivery_ != nullptr || dump_retry_ != nullptr;"));
+    CHECK(Has(page, "The report was sent, but its crash report could not be uploaded."));
+    CHECK(Has(page, "UploadCrashDump(config, ticket, receipt, dump)"));
+}
+
+void TestRetryNeverFilesAgain() {
+    const std::string report = ReadAll(kSource / "launcher" / "incident_report.cpp");
+    const size_t once = report.find("DumpStep SendDumpOnce(");
+    const size_t file = report.find("IncidentReceipt FileIncident(");
+    CHECK(once != std::string::npos && file != std::string::npos && once < file);
+    const std::string upload = report.substr(once, file - once);
+    CHECK(!Has(upload, "kIncidentOperation") && !Has(upload, "IncidentRequestBody") && !Has(upload, "hello_body"));
+    CHECK(Has(upload, "kIncidentDumpOperation") && Has(upload, "kIncidentDumpEndOperation") && Has(upload, "ReceiptClaim(ticket, receipt)"));
+    // One filing per Send: the dump is sent after the report was accepted, on its answer, and never refiles the report.
+    CHECK(CountOf(report, "session.call(kIncidentOperation") == 1);
+    const std::string page = ReadAll(kSource / "launcher" / "incident_page.cpp");
+    CHECK(CountOf(page, "FileIncident(") == 1 && CountOf(page, "UploadCrashDump(") == 1);
+    CHECK(Has(report, "(*answer)[\"dump\"].as_string() != \"expected\""));
+}
+
+void TestDumpWireMatchesTheWorker() {
+    const std::string desk = ReadAll(kSource / "server" / "lobby" / "src" / "incidents.js");
+    CHECK(Has(desk, "dumpBytes: " + std::to_string(kMostDumpBytes / 1024 / 1024) + " * 1024 * 1024,"));
+    CHECK(Has(desk, "dumpChunkBytes: " + std::to_string(kDumpChunkBytes / 1024) + " * 1024,"));
+    CHECK(Has(desk, "dumpMinBytes: " + std::to_string(kFewestDumpBytes) + ","));
+    CHECK(Has(desk, "DUMP_FRAME = { magic: [0x44, 0x49], version: 1, chunk: 1, headerBytes: 4 }"));
+    const std::string lobby = ReadAll(kSource / "server" / "lobby" / "src" / "lobby.js");
+    CHECK(Has(lobby, std::string("'") + kIncidentDumpOperation + "'(att, msg)") && Has(lobby, std::string("'") + kIncidentDumpEndOperation + "'(att, msg)"));
+    CHECK(kMostDumpBytes > 2876968 * 2 && kMostDumpBytes <= 16 * 1024 * 1024);
+}
+
 void TestLobbyAgrees() {
     const std::string desk = ReadAll(kSource / "server" / "lobby" / "src" / "incidents.js");
     const std::string lobby = ReadAll(kSource / "server" / "lobby" / "src" / "lobby.js");
@@ -1101,6 +1350,19 @@ int main() {
     TestExpandedReportIsOneFramedItem();
     TestWhatWasSentStaysInTheReport();
     TestSelectedLogButtonSitsInItsFacts();
+    TestCrashNeedsItsOwnDump();
+    TestLogWordsDoNotMakeACrash();
+    TestDumpOfAnotherRunIsNotPaired();
+    TestSelectedCrashLogAttachesByDefault();
+    TestUncheckedSendsOnlyTheLog();
+    TestCheckedSendsTheLogAndItsDump();
+    TestUnexpectedDumpNamesAreRefused();
+    TestDumpPathTraversalIsRefused();
+    TestOversizedDumpIsRefusedCleanly();
+    TestEmptyAndForeignDumpFiles();
+    TestCrashPageKeepsItsLabels();
+    TestRetryNeverFilesAgain();
+    TestDumpWireMatchesTheWorker();
     TestLobbyAgrees();
     TestProductionLobbyOnly();
     std::printf("%d checks, %d failures\n", g_checks, g_failures);

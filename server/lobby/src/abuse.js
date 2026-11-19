@@ -17,6 +17,7 @@ export const PROTECTION = {
   incidentLookupAll: { burst: 200, perSecond: 2 },
   incidentStatusAddress: { burst: 20, perSecond: 1 / 15 },
   incidentReadAddress: { burst: 10, perSecond: 1 / 30 },
+  incidentDumpAddress: { burst: 12, perSecond: 1 / 20 },
   lobbyPublishAccount: { burst: 6, perSecond: 1 / 10 },
   lobbyListAccount: { burst: 6, perSecond: 1 / 5 },
   lobbyListAddress: { burst: 60, perSecond: 3 },

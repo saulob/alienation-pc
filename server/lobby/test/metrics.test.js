@@ -241,7 +241,7 @@ test('no per-session or per-player analytics table exists', () => {
   online(env);
   const tables = env.host.sql.all(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`)
     .map((r) => r.name).sort();
-  assert.deepEqual(tables, ['accounts', 'friend_requests', 'friends', 'incident_quota', 'incident_tracking', 'incidents',
+  assert.deepEqual(tables, ['accounts', 'friend_requests', 'friends', 'incident_dump_chunks', 'incident_dumps', 'incident_quota', 'incident_tracking', 'incidents',
     'invitations', 'members', 'meta', 'metrics_daily', 'metrics_daily_dimensions', 'metrics_samples', 'registrations',
     'room_sessions', 'rooms']);
   const forbidden = /account|name|ip|port|code|friend|room_id|session_id|user|device|machine|hash|city|lat|lon|postal/;

@@ -79,6 +79,20 @@ session with `presence: false`, so Online play does not have to be on). The Work
 `ticket` (`ALN-XXXXXX`) and a **receipt**: 256 random bits, a capability for that one report. The launcher keeps the
 receipt in its own report history file, never in `alienation.ini` or a log; the Worker stores only a salted SHA-256 of it.
 
+A session that crashed leaves `alienation_NNN.dmp` beside `alienation_NNN.log`. The Bug Report page marks such a log
+"Crash detected" and, for the selected one, offers **Attach crash report** (on by default). Only the log's own dump is ever
+sent: exactly that name, in the same folder, a regular file written within two minutes of the log's last line, 32 bytes to
+8 MiB (the largest real dump is 2.9 MB) and starting with `MDMP`; a log never pairs with a dump of another number or run,
+and a new log never takes a number that has a dump. With the box checked the same `incident.file` carries `dump_file` and
+`dump_bytes`, and the answer says `dump: "expected"`. The bytes then follow on the same socket as binary messages
+(`"DI"`, version 1, type 1, up to 64 KiB each): `incident.dump` {ticket, receipt} starts or resumes at the first byte the
+Worker does not hold, `incident.dump_end` closes the upload and the Worker keeps it only when the announced size arrived and
+it begins like a minidump. The dump lives in the Durable Object's SQLite as 64 KiB rows (never in JSON), beside its report
+and under its Report ID, at most the newest 100 are kept, and an upload nobody finished is dropped after a day. The
+dashboard shows "Crash report" among the report's facts and a **Download minidump** button beside **Download log**. When the
+report is filed but the dump does not arrive, the page says so and offers **Retry crash report upload**, which resumes with
+the receipt and never files a second report.
+
 `incident.status` and `incident.read` take no `hello` and accept only a ticket with its receipt, so a lookup never involves
 the account. My reports shows the status the developer set in `/admin` (New, Investigating, Fixed, Cannot reproduce,
 Duplicate, Not a bug, Closed). An account may file 2 accepted reports per rolling hour and 10 per 24 hours; the Worker

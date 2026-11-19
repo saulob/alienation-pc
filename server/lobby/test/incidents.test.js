@@ -6,7 +6,7 @@ import { startLobbyServer } from '../local/server.js';
 import { ADMIN_CSS, ADMIN_HTML, ADMIN_JS } from '../src/admin_page.js';
 import { handleAdmin, internalIncidentRoute } from '../src/admin.js';
 import { PROTECTION } from '../src/abuse.js';
-import { INCIDENT, INCIDENT_STATUSES, isTicket, logDownloadName, readIncident } from '../src/incidents.js';
+import { DUMP_FRAME, INCIDENT, INCIDENT_STATUSES, dumpDownloadName, isTicket, logDownloadName, readIncident } from '../src/incidents.js';
 import { LIMITS, Lobby } from '../src/lobby.js';
 import { Client, makeLobby } from './harness.js';
 
@@ -58,6 +58,7 @@ function adminSource(env) {
     history: async (days) => env.lobby.metricsHistory(days),
     incidents: async () => env.lobby.incidentList(),
     incident: async (ticket) => env.lobby.incidentForAdmin(ticket),
+    incidentDump: async (ticket) => env.lobby.incidentDump(ticket),
     setIncidentStatus: async (ticket, change) => env.lobby.setIncidentStatus(ticket, change),
     deleteIncident: async (ticket) => env.lobby.deleteIncident(ticket),
   };
@@ -1919,4 +1920,280 @@ test('the dashboard token never reaches a URL, cookie or localStorage, and only 
   assert.ok(page.requests.length > 0 && page.requests.every((r) => !r.path.includes(TOKEN) && r.authorization === `Bearer ${TOKEN}`));
   assert.deepEqual([...page.store.keys()].sort(), [TOKEN_KEY, VIEW_KEY].sort());
   assert.ok([...page.store.values()].every((value) => value === TOKEN || value === 'bugs'));
+});
+
+// ---- ALN-YB9NZA: a crash dump travels with its report ----
+
+const DUMP_NAME = 'alienation_042.dmp';
+
+// A few bytes that begin like a minidump; the rest is a counting pattern, so a lost or reordered byte shows.
+function fakeDump(size) {
+  const bytes = new Uint8Array(size);
+  for (let i = 0; i < size; i++) bytes[i] = (i * 31 + 7) & 0xff;
+  bytes.set([0x4d, 0x44, 0x4d, 0x50]);
+  return bytes;
+}
+
+const dumpFields = (bytes, fields = {}) => ({ dump_file: DUMP_NAME, dump_bytes: bytes.length, ...fields });
+
+function frameOf(bytes) {
+  const frame = new Uint8Array(DUMP_FRAME.headerBytes + bytes.length);
+  frame.set([...DUMP_FRAME.magic, DUMP_FRAME.version, DUMP_FRAME.chunk]);
+  frame.set(bytes, DUMP_FRAME.headerBytes);
+  return frame;
+}
+
+// The launcher's way: chunks of the announced size, from `from`.
+function sendDump(client, bytes, from = 0, until = bytes.length) {
+  for (let at = from; at < until; at += INCIDENT.dumpChunkBytes) {
+    client.sendBinary(frameOf(bytes.subarray(at, Math.min(at + INCIDENT.dumpChunkBytes, until))));
+  }
+}
+
+const claim = ({ ticket, receipt }) => ({ ticket, receipt });
+
+function fileWithDump(env, bytes, fields = {}) {
+  const client = greeted(env);
+  const answer = file(client, dumpFields(bytes, fields));
+  assert.equal(answer.code, 'ok', JSON.stringify(answer));
+  return { client, answer };
+}
+
+function uploaded(env, bytes) {
+  const { client, answer } = fileWithDump(env, bytes);
+  assert.equal(client.call('incident.dump', claim(answer)).code, 'ok');
+  sendDump(client, bytes);
+  assert.equal(client.call('incident.dump_end', claim(answer)).code, 'ok');
+  return { client, answer };
+}
+
+test('ALN-YB9NZA: a report without a crash dump is accepted as before and has none', async () => {
+  const env = makeLobby();
+  const answer = file(greeted(env));
+  assert.equal(answer.code, 'ok');
+  assert.deepEqual(Object.keys(answer).sort(), ['code', 're', 'receipt', 'submitted_at', 'ticket']);
+  const admin = env.lobby.incidentForAdmin(answer.ticket);
+  assert.equal(admin.dump_status, 'none');
+  assert.equal(admin.dump_bytes, 0);
+  assert.equal((await adminGet(env, `/admin/api/incidents/${answer.ticket}`).then((r) => r.json())).dump_status, 'none');
+  assert.equal(env.lobby.incidentList().incidents[0].dump_status, 'none');
+  assert.equal(env.host.sql.get('SELECT COUNT(*) AS n FROM incident_dumps').n, 0);
+});
+
+test('ALN-YB9NZA: a log and its dump are one report under one Report ID', () => {
+  const env = makeLobby();
+  const bytes = fakeDump(2 * INCIDENT.dumpChunkBytes + 1234);
+  const { client, answer } = fileWithDump(env, bytes);
+  assert.equal(answer.dump, 'expected');
+  assert.equal(answer.dump_chunk_bytes, INCIDENT.dumpChunkBytes);
+  assert.equal(env.lobby.incidentForAdmin(answer.ticket).dump_status, 'uploading');
+  const begun = client.call('incident.dump', claim(answer));
+  assert.deepEqual([begun.code, begun.stored, begun.bytes, begun.complete], ['ok', 0, bytes.length, false]);
+  sendDump(client, bytes);
+  const ended = client.call('incident.dump_end', claim(answer));
+  assert.deepEqual([ended.code, ended.stored, ended.complete], ['ok', bytes.length, true]);
+  assert.equal(env.lobby.incidentList().incidents.length, 1);
+  assert.equal(env.host.sql.get('SELECT COUNT(*) AS n FROM incidents').n, 1);
+  assert.equal(env.host.sql.get('SELECT COUNT(*) AS n FROM incident_dumps').n, 1);
+  assert.equal(env.lobby.incidents.dump(answer.ticket).ticket, answer.ticket);
+  assert.equal(env.lobby.metrics.pending.get('incident_dump_stored'), 1);
+});
+
+test('ALN-YB9NZA: the admin metadata says a dump is attached, how large, and under which name', async () => {
+  const env = makeLobby();
+  const bytes = fakeDump(70000);
+  const { answer } = uploaded(env, bytes);
+  const incident = await adminGet(env, `/admin/api/incidents/${answer.ticket}`).then((r) => r.json());
+  assert.equal(incident.dump_status, 'stored');
+  assert.equal(incident.dump_bytes, bytes.length);
+  assert.equal(incident.dump_file, DUMP_NAME);
+  assert.equal(incident.log_file, 'alienation_042.log');
+  assert.equal(env.lobby.incidentList().incidents.find((r) => r.ticket === answer.ticket).dump_status, 'stored');
+  const pending = fileWithDump(env, fakeDump(40000)).answer;
+  assert.equal(env.lobby.incidentForAdmin(pending.ticket).dump_status, 'uploading');
+});
+
+test('ALN-YB9NZA: the dump download returns the exact stored bytes, apart from the log download', async () => {
+  const env = makeLobby();
+  const bytes = fakeDump(3 * INCIDENT.dumpChunkBytes + 99);
+  const { answer } = uploaded(env, bytes);
+  const got = await adminGet(env, `/admin/api/incidents/${answer.ticket}/dump`);
+  assert.equal(got.status, 200);
+  assert.equal(got.headers.get('Content-Type'), 'application/octet-stream');
+  assert.equal(got.headers.get('Content-Disposition'), `attachment; filename="${answer.ticket}-${DUMP_NAME}"`);
+  assert.equal(got.headers.get('Cache-Control'), 'no-store');
+  assert.deepEqual(new Uint8Array(await got.arrayBuffer()), bytes);
+  const log = await adminGet(env, `/admin/api/incidents/${answer.ticket}/log`);
+  assert.equal(log.status, 200);
+  assert.equal(await log.text(), report().log_text);
+  assert.equal((await adminGet(env, `/admin/api/incidents/${answer.ticket}/dump`, 'wrong-token-wrong-token')).status, 401);
+  assert.equal((await adminGet(env, '/admin/api/incidents/ALN-ZZZZZZ/dump')).status, 404);
+  assert.equal(dumpDownloadName({ ticket: answer.ticket, log_file: '../x' }), `${answer.ticket}.dmp`);
+});
+
+test('ALN-YB9NZA: an incident without a dump has no crash download, and neither does an unfinished upload', async () => {
+  const env = makeLobby();
+  const plain = file(greeted(env));
+  const missing = await adminGet(env, `/admin/api/incidents/${plain.ticket}/dump`);
+  assert.equal(missing.status, 404);
+  assert.equal((await missing.json()).error, 'not_found');
+  assert.equal((await adminGet(env, `/admin/api/incidents/${plain.ticket}/log`)).status, 200);
+  const bytes = fakeDump(100000);
+  const { client, answer } = fileWithDump(env, bytes);
+  client.call('incident.dump', claim(answer));
+  sendDump(client, bytes, 0, INCIDENT.dumpChunkBytes);
+  assert.equal((await adminGet(env, `/admin/api/incidents/${answer.ticket}/dump`)).status, 404);
+  assert.equal(client.call('incident.dump_end', claim(answer)).code, 'dump_incomplete');
+  assert.equal((await adminGet(env, `/admin/api/incidents/${answer.ticket}/dump`)).status, 404);
+});
+
+test('ALN-YB9NZA: the dashboard offers the dump next to the log only for a report that has one', () => {
+  assert.ok(ADMIN_HTML.includes('id="bug-download"') && ADMIN_HTML.includes('Download log'));
+  assert.ok(/id="bug-download-dump"[^>]*hidden[^>]*>Download minidump</.test(ADMIN_HTML));
+  assert.ok(ADMIN_JS.includes("$('bug-download-dump').hidden = r.dump_status !== 'stored';"));
+  assert.ok(ADMIN_JS.includes("downloadBugFile('log', '.log', 'the log')"));
+  assert.ok(ADMIN_JS.includes("downloadBugFile('dump', '.dmp', 'the minidump')"));
+  assert.ok(ADMIN_JS.includes("bugFact(facts, 'Crash report', bugDumpLabel(r));"));
+});
+
+test('ALN-YB9NZA: a dump whose name is not the log\'s, or that is traversal, is refused and stores nothing', () => {
+  const env = makeLobby();
+  const client = greeted(env);
+  const bytes = fakeDump(5000);
+  const names = ['alienation_041.dmp', '../alienation_042.dmp', '..\\alienation_042.dmp', 'alienation_042.dmp.exe', 'alienation_042.log',
+    'alienation_042.DMP', ' alienation_042.dmp', 'C:\\Users\\me\\alienation_042.dmp', 'alienation_042_2.dmp', '', 7, null];
+  for (const name of names) {
+    env.advance(120000);
+    assert.equal(file(client, dumpFields(bytes, { dump_file: name })).code, 'bad_request', String(name));
+  }
+  env.advance(120000);
+  assert.equal(file(client, { dump_file: DUMP_NAME }).code, 'bad_request');
+  env.advance(120000);
+  assert.equal(file(client, { dump_bytes: 5000 }).code, 'bad_request');
+  env.advance(120000);
+  assert.equal(file(client, { ...dumpFields(bytes), dump_path: 'C:\\x\\alienation_042.dmp' }).code, 'bad_request');
+  assert.equal(env.lobby.incidentList().incidents.length, 0);
+  assert.equal(env.host.sql.get('SELECT COUNT(*) AS n FROM incident_dumps').n, 0);
+});
+
+test('ALN-YB9NZA: the dump size is bounded and a report over it is refused cleanly', () => {
+  const env = makeLobby();
+  const client = greeted(env);
+  assert.equal(INCIDENT.dumpBytes, 8 * 1024 * 1024);
+  const sizes = [[INCIDENT.dumpBytes + 1, 'too_large'], [2 ** 40, 'too_large'], [INCIDENT.dumpMinBytes - 1, 'bad_request'], [0, 'bad_request'],
+    [-5, 'bad_request'], [1.5, 'bad_request'], ['5000', 'bad_request'], [null, 'bad_request']];
+  for (const [size, code] of sizes) {
+    env.advance(120000);
+    assert.equal(file(client, { dump_file: DUMP_NAME, dump_bytes: size }).code, code, String(size));
+  }
+  assert.equal(env.lobby.incidentList().incidents.length, 0);
+  env.advance(120000);
+  assert.equal(file(client, { dump_file: DUMP_NAME, dump_bytes: INCIDENT.dumpBytes }).code, 'ok');
+});
+
+test('ALN-YB9NZA: bytes beyond the announced size, or a stranger\'s upload, end the connection and store nothing', () => {
+  const env = makeLobby();
+  const bytes = fakeDump(70000);
+  const { client, answer } = fileWithDump(env, bytes);
+  client.call('incident.dump', claim(answer));
+  sendDump(client, bytes);
+  client.sendBinary(frameOf(new Uint8Array(10)));
+  assert.equal(client.closedWith?.code, 1008);
+  assert.equal(env.lobby.incidents.dumpStored(answer.ticket), bytes.length);
+
+  const stray = greeted(env);
+  stray.sendBinary(frameOf(fakeDump(100)));
+  assert.equal(stray.closedWith?.code, 1008);
+  assert.equal(env.host.sql.get('SELECT COUNT(*) AS n FROM incident_dump_chunks').n, 2);
+
+  const other = fileWithDump(env, fakeDump(5000));
+  const thief = greeted(env);
+  const forged = { ticket: other.answer.ticket, receipt: 'f'.repeat(64) };
+  assert.equal(thief.call('incident.dump', forged).code, 'not_found');
+  assert.equal(thief.call('incident.dump_end', forged).code, 'not_found');
+  thief.sendBinary(frameOf(fakeDump(5000)));
+  assert.equal(thief.closedWith?.code, 1008);
+  assert.equal(env.lobby.incidents.dumpStored(other.answer.ticket), 0);
+});
+
+test('ALN-YB9NZA: something that is not a minidump is never stored as a crash dump', async () => {
+  const env = makeLobby();
+  const junk = new Uint8Array(6000).fill(0x41);
+  const { client, answer } = fileWithDump(env, junk);
+  client.call('incident.dump', claim(answer));
+  sendDump(client, junk);
+  assert.equal(client.call('incident.dump_end', claim(answer)).code, 'bad_request');
+  assert.equal(env.lobby.incidents.dumpStored(answer.ticket), 0);
+  assert.equal(env.lobby.incidentForAdmin(answer.ticket).dump_status, 'uploading');
+  assert.equal((await adminGet(env, `/admin/api/incidents/${answer.ticket}/dump`)).status, 404);
+  assert.equal(client.closedWith, null);
+});
+
+test('ALN-YB9NZA: a retry resumes the same report; it never makes a second incident', async () => {
+  const env = makeLobby();
+  const bytes = fakeDump(3 * INCIDENT.dumpChunkBytes + 500);
+  const first = fileWithDump(env, bytes);
+  first.client.call('incident.dump', claim(first.answer));
+  sendDump(first.client, bytes, 0, 2 * INCIDENT.dumpChunkBytes);
+  first.client.drop();
+
+  // The launcher asks again with the receipt it kept, on a connection that never signed in.
+  env.advance(1000);
+  const again = env.connect('203.0.113.200');
+  const begun = again.call('incident.dump', claim(first.answer));
+  assert.deepEqual([begun.code, begun.stored, begun.complete], ['ok', 2 * INCIDENT.dumpChunkBytes, false]);
+  sendDump(again, bytes, begun.stored);
+  assert.equal(again.call('incident.dump_end', claim(first.answer)).code, 'ok');
+  assert.equal(again.call('incident.dump_end', claim(first.answer)).code, 'ok');
+  const done = again.call('incident.dump', claim(first.answer));
+  assert.deepEqual([done.code, done.stored, done.complete], ['ok', bytes.length, true]);
+  assert.equal(env.lobby.incidentList().incidents.length, 1);
+  assert.equal(env.host.sql.get('SELECT COUNT(*) AS n FROM incident_tracking').n, 1);
+  const got = await adminGet(env, `/admin/api/incidents/${first.answer.ticket}/dump`);
+  assert.deepEqual(new Uint8Array(await got.arrayBuffer()), bytes);
+});
+
+test('ALN-YB9NZA: a report that announced no dump takes none, and an unknown report is not found', () => {
+  const env = makeLobby();
+  const plain = file(greeted(env));
+  const client = env.connect('203.0.113.201');
+  assert.equal(client.call('incident.dump', claim(plain)).code, 'bad_request');
+  assert.equal(client.call('incident.dump_end', claim(plain)).code, 'bad_request');
+  assert.equal(client.call('incident.dump', { ticket: 'ALN-ZZZZZZ', receipt: 'a'.repeat(64) }).code, 'not_found');
+  assert.equal(client.call('incident.dump', { ticket: plain.ticket }).code, 'not_found');
+});
+
+test('ALN-YB9NZA: deleting a report deletes its dump, and old dumps and unfinished uploads are trimmed', () => {
+  const env = makeLobby();
+  const kept = uploaded(env, fakeDump(3000)).answer;
+  assert.ok(env.lobby.deleteIncident(kept.ticket));
+  assert.equal(env.host.sql.get('SELECT COUNT(*) AS n FROM incident_dumps').n, 0);
+  assert.equal(env.host.sql.get('SELECT COUNT(*) AS n FROM incident_dump_chunks').n, 0);
+
+  const unfinished = fileWithDump(env, fakeDump(3000)).answer;
+  env.advance(INCIDENT.dumpPendingMs + 1000);
+  assert.equal(file(greeted(env)).code, 'ok');
+  assert.equal(env.lobby.incidents.dump(unfinished.ticket), null);
+  assert.equal(env.lobby.incidentList().incidents.some((r) => r.ticket === unfinished.ticket), true);
+
+  const first = uploaded(env, fakeDump(100)).answer;
+  for (let i = 0; i < INCIDENT.dumpsKept; i++) {
+    env.advance(SPACED_MS);
+    uploaded(env, fakeDump(100));
+  }
+  assert.equal(env.host.sql.get('SELECT COUNT(*) AS n FROM incident_dumps').n, INCIDENT.dumpsKept);
+  assert.equal(env.lobby.incidents.dump(first.ticket), null);
+  assert.equal(env.lobby.incidentForAdmin(first.ticket).dump_status, 'none');
+  assert.equal(env.host.sql.get('SELECT COUNT(DISTINCT ticket) AS n FROM incident_dump_chunks').n, INCIDENT.dumpsKept);
+});
+
+test('ALN-YB9NZA: the wire constants the launcher sends are the ones the Worker reads', () => {
+  const header = readFileSync(new URL('../../../launcher/incident_report.h', import.meta.url), 'utf8');
+  const launcher = readFileSync(new URL('../../../launcher/incident_report.cpp', import.meta.url), 'utf8');
+  assert.ok(header.includes(`kMostDumpBytes = ${INCIDENT.dumpBytes / 1024 / 1024} * 1024 * 1024;`));
+  assert.ok(header.includes(`kDumpChunkBytes = ${INCIDENT.dumpChunkBytes / 1024} * 1024;`));
+  assert.ok(header.includes('kIncidentDumpOperation[] = "incident.dump";'));
+  assert.ok(header.includes('kIncidentDumpEndOperation[] = "incident.dump_end";'));
+  assert.ok(launcher.includes('kDumpFrameHeader[] = {0x44, 0x49, 1, 1}'));
+  assert.deepEqual([...DUMP_FRAME.magic, DUMP_FRAME.version, DUMP_FRAME.chunk], [0x44, 0x49, 1, 1]);
 });

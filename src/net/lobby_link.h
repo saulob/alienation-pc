@@ -143,6 +143,9 @@ public:
               std::string* refusal = nullptr);
     // The answer, or nullopt with `code` set ("timeout" or the lobby's error code).
     std::optional<Json> call(const std::string& op, Json body, std::string* code);
+    // One binary message, in order with the calls; false once the socket is gone.
+    bool send_binary(const uint8_t* data, size_t size);
+    bool connected() const { return socket_ != nullptr; }
     void close();
 
 private:

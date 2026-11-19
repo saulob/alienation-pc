@@ -37,9 +37,17 @@ private:
         IncidentReceipt receipt;
         std::shared_ptr<const IncidentPackage> package;
     };
+    // The crash dump of a filed report sent again, with the receipt the report came with.
+    struct DumpRetry {
+        std::atomic<bool> done{false};
+        CrashUpload outcome = CrashUpload::kFailed;
+    };
 
     void FindLogs();
     void CollectDelivery();
+    void CollectDumpRetry();
+    void RetryDump(trg::Ui& ui);
+    void SelectLog(size_t index);
     void ForgetPreview();
     bool AcceptDraft();
     std::shared_ptr<const IncidentPackage> BuildPackage(const ReportFacts& facts);
@@ -47,6 +55,7 @@ private:
     void Send(trg::Ui& ui, const ReportFacts& facts);
     void DrawDescription(trg::Ui& ui, bool sending);
     void DrawLogs(trg::Ui& ui, bool sending);
+    void DrawCrashReport(trg::Ui& ui, bool sending);
     void DrawPreview(trg::Ui& ui, const ReportFacts& facts, bool sending);
     void DrawSend(trg::Ui& ui, const ReportFacts& facts, bool sending);
     void DrawResult(trg::Ui& ui);
@@ -63,6 +72,9 @@ private:
     std::string preview_text_;
     bool log_failed_ = false;
     std::shared_ptr<Delivery> delivery_;
+    std::shared_ptr<DumpRetry> dump_retry_;
+    std::optional<CrashDump> sent_dump_;
+    bool attach_crash_report_ = false;
     std::optional<IncidentReceipt> result_;
     bool bring_result_into_view_ = false;
     bool sent_report_remembered_ = true;
