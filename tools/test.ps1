@@ -101,7 +101,7 @@ Add-Exes $s @(
     , @('aln-log-tests', 'log with closed standard streams; ALN-YB9NZA: a crash dump keeps its log number taken')
     , @('aln-module-history-tests', 'crash report: module history, call sites, startup phase')
     , @('aln-crash-guard-tests', 'crash reporting in isolated crashing child processes; ALN-XXJJ7R: a STOP ends through the crash report with a minidump, or with its status when no guard is installed')
-    , @('aln-rtc-tests', 'libSceRtc through the import resolver')
+    , @('aln-rtc-tests', 'libSceRtc through the import resolver; ALN-P8JPZ8: the clocks the game seeds its random generators from (time, TSC, process time, RTC tick) are the host clocks and advance')
     , @('aln-ime-keyboard-tests', 'libSceIme keyboard through the import resolver')
     , @('aln-json2-tests', 'libSceJson2 through the import resolver')
     , @('aln-thread-cancel-tests', 'thread cancellation')

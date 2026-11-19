@@ -2,6 +2,7 @@
 #include "runtime.h"
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 static int checks, failures;
 #define CHECK(condition) do { ++checks; if (!(condition)) { ++failures; printf("FAIL line %d: %s\n", __LINE__, #condition); } } while (0)
@@ -89,6 +90,30 @@ int main(void) {
     CHECK(set(NULL, 0) == RTC_INVALID_POINTER);
     const uint64_t last = filetime_of(get, (DateTime){9999, 12, 31, 23, 59, 59, 999999}, &r);
     CHECK(set(&epoch, last) == 0 && epoch.year == 9999 && set(&epoch, last + 10) == RTC_INVALID_VALUE);
+
+    /* ALN-P8JPZ8: the game seeds its random generators from these imports; each must be the host clock, advancing. */
+    typedef int64_t (ABI *Time)(int64_t *out);
+    typedef uint64_t (ABI *Counter)(void);
+    typedef int32_t (ABI *CurrentTick)(uint64_t *tick);
+    const Time guest_time = (Time)runtime_resolve("wLlFkwG9UcQ#libc", 0);
+    const Counter tsc = (Counter)runtime_resolve("-2IRUCO--PM#libkernel", 0);
+    const Counter process_time = (Counter)runtime_resolve("4J2sUJmuHZQ#libkernel", 0);
+    const CurrentTick current_tick = (CurrentTick)runtime_resolve("18B2NS1y9UU#libSceRtc", 0);
+    CHECK(guest_time && tsc && process_time && current_tick);
+    if (!guest_time || !tsc || !process_time || !current_tick) return 1;
+    int64_t stored = 0;
+    const int64_t now = guest_time(&stored);
+    const int64_t host_now = (int64_t)time(NULL);
+    CHECK(stored == now && now >= host_now - 2 && now <= host_now + 2);
+    uint64_t tick_before = 0, tick_after = 0;
+    CHECK(current_tick(&tick_before) == 0);
+    CHECK((int64_t)((tick_before - UINT64_C(0xdcbffeff2bc000)) / 1000000) >= now - 2);
+    const uint64_t tsc_before = tsc(), process_before = process_time();
+    uint64_t process_after = process_before;
+    for (long spin = 0; spin < 1000000000L && process_after - process_before < 2000; ++spin) process_after = process_time();
+    CHECK(process_after - process_before >= 2000);
+    CHECK(tsc() > tsc_before);
+    CHECK(current_tick(&tick_after) == 0 && tick_after > tick_before);
     printf("rtc tests: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }
