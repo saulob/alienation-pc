@@ -1048,6 +1048,91 @@ void TestEveryCacheReaderRecoversFromCorruptData() {
     CHECK(Count(storage, "WriteFileAtomically(path, bytes)") == 1);
 }
 
+// ---------------------------------------------------------------------------------------------
+// Startup policy with pipeline binaries: restore in the background, on demand when that cannot start
+
+struct StartupProbe {
+    bool starts;
+    int calls = 0;
+    bool operator()() {
+        ++calls;
+        return starts;
+    }
+};
+
+void TestBackgroundStartupIsPreferred() {
+    for (const char* env : {static_cast<const char*>(nullptr), "", "0"}) {
+        StartupProbe started{true};
+        CHECK(ChoosePipelineStartup(env, started) == PipelineStartup::Background);
+        CHECK(started.calls == 1);
+        StartupProbe refused{false};
+        CHECK(ChoosePipelineStartup(env, refused) == PipelineStartup::OnDemand);
+        CHECK(refused.calls == 1);
+    }
+}
+
+void TestOnDemandOverrideSkipsTheBackgroundStart() {
+    for (const char* env : {"1", "2", "true", "yes", "on", "00", "0 ", " 0", "-1", "anything"}) {
+        for (const bool starts : {true, false}) {
+            StartupProbe probe{starts};
+            CHECK(PipelineOnDemandRequested(env));
+            CHECK(ChoosePipelineStartup(env, probe) == PipelineStartup::OnDemand);
+            CHECK(probe.calls == 0);
+        }
+    }
+    CHECK(!PipelineOnDemandRequested(nullptr));
+    CHECK(!PipelineOnDemandRequested(""));
+    CHECK(!PipelineOnDemandRequested("0"));
+}
+
+void TestPresenterStartupPolicy() {
+    const auto presenter = ReadSource("gpu/shadps4/video_core/renderer_vulkan/vk_presenter.cpp");
+    const auto serialization =
+        ReadSource("gpu/shadps4/video_core/renderer_vulkan/vk_pipeline_serialization.cpp");
+    CHECK(!presenter.empty() && !serialization.empty());
+
+    const auto binaries = Pos(presenter, "if (instance.GetPipelineBinaryGlobalKey().keySize != 0) {");
+    const auto choose = Pos(presenter, "PipelineCachePolicy::ChoosePipelineStartup(");
+    const auto background = Pos(presenter, "return rasterizer->GetPipelineCache().StartBackgroundWarmUp();");
+    const auto fallback = Pos(presenter, "PipelineCachePolicy::PipelineStartup::OnDemand) {");
+    const auto on_demand = Pos(presenter, "rasterizer->GetPipelineCache().StartOnDemand();");
+    const auto binary_return = presenter.find("return;\n    }\n", on_demand);
+    const auto without_binaries = Pos(presenter, "// Without pipeline binaries");
+    CHECK(binaries < choose && choose < background && background < fallback && fallback < on_demand);
+    CHECK(binary_return != std::string::npos && binary_return < without_binaries);
+    CHECK(Count(presenter, "StartOnDemand()") == 1);
+    CHECK(Count(presenter, "std::getenv(\"ALN_PIPELINE_ON_DEMAND\")") == 1);
+
+    // No blocking warm-up in the binary path; the path without binaries is as it was.
+    const auto binary_path = presenter.substr(binaries, without_binaries - binaries);
+    CHECK(Count(binary_path, ".WarmUp(") == 0);
+    CHECK(Count(binary_path, "PresentLoadingFrame") == 0 && Count(binary_path, "SetLoading") == 0);
+    const auto old_path = presenter.substr(without_binaries);
+    CHECK(Pos(old_path, "if (rasterizer->GetPipelineCache().StartBackgroundWarmUp()) {") <
+          Pos(old_path, "AlnOverlay::SetLoading(true, 0, 0);"));
+    CHECK(Pos(old_path, "AlnOverlay::SetLoading(true, 0, 0);") <
+          Pos(old_path, "rasterizer->GetPipelineCache().WarmUp([&](u32 done, u32 total) {"));
+    CHECK(Count(old_path, "WarmUp([&]") == 1);
+    CHECK(Count(old_path, "StartOnDemand") == 0);
+
+    // Background warm-up still refuses a store that cannot be read concurrently, before it starts anything.
+    const auto start = Pos(serialization, "bool PipelineCache::StartBackgroundWarmUp() {");
+    const auto guard = Pos(serialization, "if (!Storage::DataBase::Instance().ConcurrentReads()) {");
+    const auto first_use = Pos(serialization, "background = new BackgroundWarmup;");
+    CHECK(start < guard && guard < first_use);
+    CHECK(guard != std::string::npos && serialization.substr(guard, 80).find("return false;") != std::string::npos);
+
+    // Background builds use the shared build gate and publish only the first pipeline of a key.
+    CHECK(Count(serialization, "build_gate, PipelineCachePolicy::BuildGate::Kind::Warmup}") == 1);
+    CHECK(Count(serialization, "PublishFirst(") >= 2);
+    CHECK(Count(serialization, "background->pool->Drain();") == 1);
+    CHECK(Count(serialization, "OnWarmupBuildFailure(") == 1);
+
+    CHECK(presenter.find("DEBUG_" "SAULO") == std::string::npos);
+    CHECK(ReadSource("gpu/shadps4/video_core/pipeline_cache_policy.h").find("DEBUG_" "SAULO") ==
+          std::string::npos);
+}
+
 } // namespace
 
 int main() {
@@ -1083,6 +1168,9 @@ int main() {
     TestPauseWaitsForParallelBuildsAndTimesOut();
     TestBinaryCacheFallbacksAreUntouched();
     TestEveryCacheReaderRecoversFromCorruptData();
+    TestBackgroundStartupIsPreferred();
+    TestOnDemandOverrideSkipsTheBackgroundStart();
+    TestPresenterStartupPolicy();
     std::printf("pipeline cache tests: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

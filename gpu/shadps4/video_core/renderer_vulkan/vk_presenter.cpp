@@ -16,6 +16,7 @@
 #include "aln_overlay.h"
 #include "aln_settings.h"
 #include "aln_graphics.h"
+#include "video_core/pipeline_cache_policy.h"
 #include "video_core/renderer_vulkan/vk_presenter.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/texture_cache/image.h"
@@ -27,6 +28,8 @@
 #include <chrono>
 #include <cmath>
 #include <csetjmp>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <filesystem>
@@ -160,7 +163,15 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
     AlnOverlay::Init(instance, swapchain.GetSurfaceFormat().format, num_images);
 
     if (instance.GetPipelineBinaryGlobalKey().keySize != 0) {
-        rasterizer->GetPipelineCache().StartOnDemand();
+        const char* on_demand = std::getenv("ALN_PIPELINE_ON_DEMAND");
+        const auto startup = PipelineCachePolicy::ChoosePipelineStartup(
+            on_demand, [&] { return rasterizer->GetPipelineCache().StartBackgroundWarmUp(); });
+        if (startup == PipelineCachePolicy::PipelineStartup::OnDemand) {
+            if (PipelineCachePolicy::PipelineOnDemandRequested(on_demand)) {
+                std::printf("Pipeline startup: ALN_PIPELINE_ON_DEMAND set, no background warm-up\n");
+            }
+            rasterizer->GetPipelineCache().StartOnDemand();
+        }
         return;
     }
 
