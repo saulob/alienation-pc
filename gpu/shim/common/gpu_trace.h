@@ -20,11 +20,23 @@ enum class Event : u32 {
     AllocationFallback,
     ForeignRecording,
     VulkanFailure,
+    HeapBudget,
 };
 
 enum class PipelineKind : u64 { Graphics = 1, Compute = 2 };
 
+// AllocationFallback third argument.
+enum class Fallback : u64 { ImageOverBudget = 1, ImageInSystemMemory = 2, BufferOverBudget = 3 };
+
 void Record(Event event, u64 a = 0, u64 b = 0, u64 c = 0, u64 d = 0) noexcept;
+
+// Shaders recorded into the submission being built. A pipeline notes itself once per generation;
+// SetSubmittedTick keeps the set under that tick and starts a new generation.
+u64 ShaderGeneration() noexcept;
+void NoteShaders(PipelineKind kind, u64 first, u64 second = 0, u64 third = 0) noexcept;
+
+// Records a heap crossing its budget in either direction; true the first time that heap goes over.
+bool NoteHeapBudget(u32 heap, u64 used, u64 budget) noexcept;
 
 u32 CurrentThreadId() noexcept;
 // The thread's description (host threads name themselves), or "unnamed".

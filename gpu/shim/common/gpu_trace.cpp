@@ -1,4 +1,5 @@
 // aln: see gpu_trace.h.
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdio>
@@ -42,6 +43,85 @@ std::atomic<bool> fault_reported{};
 char device_identity[256];
 char layer_summary[512];
 char dispatch_summary[384];
+
+constexpr u32 ShadersPerSet = 64;
+constexpr u32 KeptSets = 4;
+constexpr u32 TrackedHeaps = 16;
+
+struct ShaderUse {
+    std::atomic<u64> kind{}, first{}, second{}, third{};
+};
+
+struct ShaderSet {
+    std::atomic<u64> tick{};
+    std::atomic<u32> count{};
+    std::array<ShaderUse, ShadersPerSet> uses{};
+};
+
+ShaderSet recording_set;
+std::array<ShaderSet, KeptSets> submitted_sets;
+std::atomic<u64> shader_generation{1};
+std::array<std::atomic<bool>, TrackedHeaps> heap_over{};
+std::array<std::atomic<bool>, TrackedHeaps> heap_reported{};
+
+void KeepRecordedShaders(u64 tick) noexcept {
+    ShaderSet& set = submitted_sets[tick % KeptSets];
+    set.tick.store(0, std::memory_order_relaxed);
+    const u32 count = recording_set.count.load(std::memory_order_relaxed);
+    for (u32 i = 0; i < std::min(count, ShadersPerSet); ++i) {
+        const ShaderUse& from = recording_set.uses[i];
+        ShaderUse& to = set.uses[i];
+        to.kind.store(from.kind.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        to.first.store(from.first.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        to.second.store(from.second.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        to.third.store(from.third.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    }
+    set.count.store(count, std::memory_order_relaxed);
+    set.tick.store(tick, std::memory_order_release);
+    recording_set.count.store(0, std::memory_order_relaxed);
+    shader_generation.fetch_add(1, std::memory_order_relaxed);
+}
+
+void PrintShaderSet(const ShaderSet& set) noexcept {
+    const u32 count = set.count.load(std::memory_order_relaxed);
+    const u32 kept = std::min(count, ShadersPerSet);
+    for (u32 i = 0; i < kept; ++i) {
+        const ShaderUse& use = set.uses[i];
+        if (use.kind.load(std::memory_order_relaxed) == u64(PipelineKind::Compute)) {
+            std::fprintf(stderr, "GPU trace:   cs %#010llx\n",
+                         (unsigned long long)use.first.load(std::memory_order_relaxed));
+        } else {
+            std::fprintf(stderr, "GPU trace:   vs %#010llx gs %#010llx ps %#010llx\n",
+                         (unsigned long long)use.first.load(std::memory_order_relaxed),
+                         (unsigned long long)use.second.load(std::memory_order_relaxed),
+                         (unsigned long long)use.third.load(std::memory_order_relaxed));
+        }
+    }
+    if (count > kept) {
+        std::fprintf(stderr, "GPU trace:   and %u more pipelines\n", count - kept);
+    }
+}
+
+void PrintUnfinishedShaders(u64 submitted, u64 completed) noexcept {
+    std::array<u64, KeptSets> ticks{};
+    u32 found = 0;
+    for (const ShaderSet& set : submitted_sets) {
+        const u64 tick = set.tick.load(std::memory_order_acquire);
+        if (tick > completed && tick <= submitted) {
+            ticks[found++] = tick;
+        }
+    }
+    std::sort(ticks.begin(), ticks.begin() + found);
+    for (u32 i = 0; i < found; ++i) {
+        const ShaderSet& set = submitted_sets[ticks[i] % KeptSets];
+        std::fprintf(stderr, "GPU trace: tick %llu was not completed; it recorded %u pipelines\n",
+                     (unsigned long long)ticks[i], set.count.load(std::memory_order_relaxed));
+        PrintShaderSet(set);
+    }
+    std::fprintf(stderr, "GPU trace: %u pipelines recorded since the last submission\n",
+                 recording_set.count.load(std::memory_order_relaxed));
+    PrintShaderSet(recording_set);
+}
 
 u32 ThreadId() noexcept {
     static thread_local const u32 tid = static_cast<u32>(gettid());
@@ -148,9 +228,22 @@ void PrintEntry(u64 seq, Event event, u32 thread, const u64 (&a)[4]) noexcept {
                      (unsigned long long)seq, thread, (unsigned long long)a[0], tag);
         break;
     case Event::AllocationFallback:
+        if (a[2] == u64(Fallback::BufferOverBudget)) {
+            PrintTag(tag, a[1]);
+            std::fprintf(stderr, "  #%llu tid %u %s buffer of %llu MiB allocated over the memory budget\n",
+                         (unsigned long long)seq, thread, tag, (unsigned long long)(a[0] >> 20));
+            break;
+        }
         std::fprintf(stderr, "  #%llu tid %u image %llux%llu allocated %s\n", (unsigned long long)seq,
                      thread, (unsigned long long)a[0], (unsigned long long)a[1],
-                     a[2] == 1 ? "over the memory budget" : "in system memory");
+                     a[2] == u64(Fallback::ImageOverBudget) ? "over the memory budget"
+                                                            : "in system memory");
+        break;
+    case Event::HeapBudget:
+        std::fprintf(stderr, "  #%llu tid %u heap %llu %s: %llu MiB used of %llu MiB budget\n",
+                     (unsigned long long)seq, thread, (unsigned long long)a[0],
+                     a[3] ? "went over its budget" : "is back within its budget",
+                     (unsigned long long)(a[1] >> 20), (unsigned long long)(a[2] >> 20));
         break;
     case Event::ForeignRecording:
         std::fprintf(stderr, "  #%llu tid %u recorded while thread %llu owns recording, at %s:%llu\n",
@@ -180,6 +273,37 @@ void Record(Event event, u64 a, u64 b, u64 c, u64 d) noexcept {
     entry.args[2].store(c, std::memory_order_relaxed);
     entry.args[3].store(d, std::memory_order_relaxed);
     entry.seq.store(seq, std::memory_order_release);
+}
+
+u64 ShaderGeneration() noexcept {
+    return shader_generation.load(std::memory_order_relaxed);
+}
+
+void NoteShaders(PipelineKind kind, u64 first, u64 second, u64 third) noexcept {
+    const u32 index = recording_set.count.fetch_add(1, std::memory_order_relaxed);
+    if (index >= ShadersPerSet) {
+        return;
+    }
+    ShaderUse& use = recording_set.uses[index];
+    use.kind.store(u64(kind), std::memory_order_relaxed);
+    use.first.store(first, std::memory_order_relaxed);
+    use.second.store(second, std::memory_order_relaxed);
+    use.third.store(third, std::memory_order_relaxed);
+}
+
+bool NoteHeapBudget(u32 heap, u64 used, u64 budget) noexcept {
+    if (heap >= TrackedHeaps || budget == 0) {
+        return false;
+    }
+    // Back within budget only below 90%, so a heap hovering at its budget does not flood the ring.
+    const bool was_over = heap_over[heap].load(std::memory_order_relaxed);
+    const bool over = was_over ? used > budget - budget / 10 : used > budget;
+    if (over == was_over) {
+        return false;
+    }
+    heap_over[heap].store(over, std::memory_order_relaxed);
+    Record(Event::HeapBudget, heap, used, budget, over);
+    return over && !heap_reported[heap].exchange(true, std::memory_order_relaxed);
 }
 
 u32 CurrentThreadId() noexcept {
@@ -212,6 +336,7 @@ void ThreadName(u32 tid, char* out, size_t size) noexcept {
 }
 
 void SetSubmittedTick(u64 tick) noexcept {
+    KeepRecordedShaders(tick);
     submitted_tick.store(tick, std::memory_order_relaxed);
 }
 
@@ -302,6 +427,8 @@ void Dump(const char* reason) noexcept {
                  (unsigned long long)last_cs.load(std::memory_order_relaxed),
                  (unsigned long long)(dims & 0x1FFFFF), (unsigned long long)((dims >> 21) & 0x1FFFFF),
                  (unsigned long long)((dims >> 42) & 0x1FFFFF));
+    PrintUnfinishedShaders(submitted_tick.load(std::memory_order_relaxed),
+                           completed_tick.load(std::memory_order_relaxed));
     if (const char* file = replay_file.load(std::memory_order_relaxed)) {
         std::fprintf(stderr, "GPU trace: command buffer replay was inside a command recorded at %s:%u\n",
                      file, replay_line.load(std::memory_order_relaxed));

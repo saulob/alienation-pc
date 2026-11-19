@@ -30,9 +30,14 @@ void Pipeline::TraceUse(u32 groups_x, u32 groups_y, u32 groups_z) const {
         return info ? info->pgm_hash : 0;
     };
     const bool first = !first_use_traced.exchange(true, std::memory_order_relaxed);
+    const u64 generation = ShaderGeneration();
+    const bool note = noted_generation.exchange(generation, std::memory_order_relaxed) != generation;
     if (is_compute) {
         const u64 cs = hash(Shader::SwStage::Compute);
         SetLastDispatch(cs, groups_x, groups_y, groups_z);
+        if (note) {
+            NoteShaders(PipelineKind::Compute, cs);
+        }
         if (first) {
             Record(Event::PipelineFirstUse, u64(PipelineKind::Compute), cs,
                    PackGroups(groups_x, groups_y, groups_z));
@@ -43,6 +48,9 @@ void Pipeline::TraceUse(u32 groups_x, u32 groups_y, u32 groups_z) const {
     const u64 gs = hash(Shader::SwStage::Geometry);
     const u64 ps = hash(Shader::SwStage::Fragment);
     SetLastGraphics(vs, gs, ps);
+    if (note) {
+        NoteShaders(PipelineKind::Graphics, vs, gs, ps);
+    }
     if (first) {
         Record(Event::PipelineFirstUse, u64(PipelineKind::Graphics), vs, gs, ps);
     }

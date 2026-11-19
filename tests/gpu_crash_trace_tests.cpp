@@ -5,6 +5,7 @@
 
 #include "common/gpu_trace.h"
 #include "shader_recompiler/backend/spirv/geometry_output.h"
+#include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/texture_cache/image.h"
 
 namespace {
@@ -89,6 +90,7 @@ std::string ReadFile(const char* path) {
         }
         std::fclose(file);
     }
+    std::erase(text, '\r');
     return text;
 }
 
@@ -111,11 +113,34 @@ void TraceIsBoundedAndPrintedOnce(const char* path) {
     }
     Record(Event::RenderingMismatch, 1);
     Record(Event::NonUniformSubgroupOp, 0x1234, Tag("Ballot"));
-    Record(Event::AllocationFallback, 1920, 1080, 2);
+    Record(Event::AllocationFallback, 1920, 1080, u64(Fallback::ImageInSystemMemory));
+    Record(Event::AllocationFallback, 128ull << 20, Tag("Stream"), u64(Fallback::BufferOverBudget));
     Record(Event::ForeignRecording, CurrentThreadId(), 7, reinterpret_cast<u64>("vk_rasterizer.cpp"),
            99);
-    SetSubmittedTick(2000);
-    SetCompletedTick(1990);
+    // ALN-2RDFRU: Heap 2 (214 MiB) at 162 MiB used of a 51 MiB budget.
+    constexpr u64 MiB = 1ull << 20;
+    CHECK(NoteHeapBudget(2, 162 * MiB, 51 * MiB));
+    CHECK(!NoteHeapBudget(2, 162 * MiB, 51 * MiB));
+    CHECK(!NoteHeapBudget(2, 50 * MiB, 51 * MiB));
+    CHECK(!NoteHeapBudget(2, 40 * MiB, 51 * MiB));
+    CHECK(!NoteHeapBudget(2, 162 * MiB, 51 * MiB));
+    CHECK(!NoteHeapBudget(0, 3524 * MiB, 0));
+    CHECK(!NoteHeapBudget(64, 2 * MiB, 1 * MiB));
+
+    // ALN-2RDFRU: one tick outstanding (34967 submitted, 34966 completed). The trace names every pipeline
+    // recorded into it, not only the last recorded draw and dispatch; completed ticks are left out.
+    NoteShaders(PipelineKind::Compute, 0x8c0c9537);
+    SetSubmittedTick(34966);
+    const u64 generation = ShaderGeneration();
+    NoteShaders(PipelineKind::Compute, 0x7d39f28a);
+    NoteShaders(PipelineKind::Graphics, 0xba848b76, 0, 0xb1b00b34);
+    NoteShaders(PipelineKind::Compute, 0x03813bb4);
+    SetSubmittedTick(34967);
+    CHECK(ShaderGeneration() == generation + 1);
+    for (u64 i = 0; i < 70; ++i) {
+        NoteShaders(PipelineKind::Compute, 0x11110000 + i);
+    }
+    SetCompletedTick(34966);
     SetLastDispatch(0xabcd, 8, 4, 1);
     SetPendingWork(3, 2);
     SetDispatchSummary("vkQueueSubmit test.dll, vkCmdDraw driver.dll");
@@ -126,7 +151,7 @@ void TraceIsBoundedAndPrintedOnce(const char* path) {
         CHECK(false);
         return;
     }
-    VulkanFailure("semwait", -4, 1991);
+    VulkanFailure("semwait", -4, 34967);
     Dump("second dump is ignored");
     std::fflush(stderr);
 
@@ -135,9 +160,9 @@ void TraceIsBoundedAndPrintedOnce(const char* path) {
     CHECK(text.find("second dump") == std::string::npos);
     CHECK(text.find("Test GPU (driver 1.0, Vulkan 1.3)") != std::string::npos);
     CHECK(text.find("VK_LAYER_TEST") != std::string::npos);
-    CHECK(text.find("last submitted tick 2000, last completed tick 1990") != std::string::npos);
+    CHECK(text.find("last submitted tick 34967, last completed tick 34966") != std::string::npos);
     CHECK(text.find("cs 0x0000abcd groups 8x4x1") != std::string::npos);
-    CHECK(text.find("DEVICE LOST at semwait, result -4, tick 1991") != std::string::npos);
+    CHECK(text.find("DEVICE LOST at semwait, result -4, tick 34967") != std::string::npos);
     // The ring keeps the newest 512 events: the early shader compile is gone, the last submits stay.
     CHECK(text.find("replay was inside a command recorded at vk_rasterizer.cpp:1234") != std::string::npos);
     CHECK(text.find("Vulkan dispatch vkQueueSubmit test.dll, vkCmdDraw driver.dll") != std::string::npos);
@@ -145,15 +170,52 @@ void TraceIsBoundedAndPrintedOnce(const char* path) {
     CHECK(text.find("unpaired dynamic rendering (kind 1), corrected") != std::string::npos);
     CHECK(text.find("shader 0x0000000000001234: Ballot in non-uniform control flow") != std::string::npos);
     CHECK(text.find("image 1920x1080 allocated in system memory") != std::string::npos);
+    CHECK(text.find("Stream buffer of 128 MiB allocated over the memory budget") != std::string::npos);
+    CHECK(text.find("image 134217728x") == std::string::npos);
+    CHECK(Count(text, "heap 2 went over its budget: 162 MiB used of 51 MiB budget") == 2);
+    CHECK(Count(text, "heap 2 is back within its budget: 40 MiB used of 51 MiB budget") == 1);
+    CHECK(Count(text, "heap 2 ") == 3);
+    CHECK(text.find("tick 34967 was not completed; it recorded 3 pipelines\n"
+                    "GPU trace:   cs 0x7d39f28a\n"
+                    "GPU trace:   vs 0xba848b76 gs 0000000000 ps 0xb1b00b34\n"
+                    "GPU trace:   cs 0x03813bb4\n") != std::string::npos);
+    CHECK(text.find("tick 34966 was not completed") == std::string::npos);
+    CHECK(text.find("0x8c0c9537") == std::string::npos);
+    CHECK(text.find("70 pipelines recorded since the last submission\nGPU trace:   cs 0x11110000\n") !=
+          std::string::npos);
+    CHECK(text.find("cs 0x1111003f\n") != std::string::npos);
+    CHECK(text.find("cs 0x11110040") == std::string::npos);
+    CHECK(text.find("and 6 more pipelines") != std::string::npos);
     CHECK(text.find("recorded while thread 7 owns recording, at vk_rasterizer.cpp:99") !=
           std::string::npos);
     CHECK(text.find("GPU trace: thread " + std::to_string(CurrentThreadId()) + " is ") !=
           std::string::npos);
     CHECK(text.find("detected on thread " + std::to_string(CurrentThreadId()) + " (") !=
           std::string::npos);
-    CHECK(Count(text, " submit tick ") == 507);
+    CHECK(Count(text, " submit tick ") == 503);
     CHECK(text.find("submit tick 2000,") != std::string::npos);
     CHECK(text.find("compile gs") == std::string::npos);
+}
+
+// ALN-2RDFRU: the RTX 3090 heaps of the report; heap 2 is the host-visible video memory window.
+void MemoryHeapKinds() {
+    using Heap = vk::MemoryHeapFlagBits;
+    using Property = vk::MemoryPropertyFlagBits;
+    vk::PhysicalDeviceMemoryProperties props{};
+    props.memoryHeapCount = 3;
+    props.memoryHeaps[0] = vk::MemoryHeap{24326ull << 20, Heap::eDeviceLocal};
+    props.memoryHeaps[1] = vk::MemoryHeap{16339ull << 20, {}};
+    props.memoryHeaps[2] = vk::MemoryHeap{214ull << 20, Heap::eDeviceLocal};
+    props.memoryTypeCount = 4;
+    props.memoryTypes[0] = vk::MemoryType{Property::eDeviceLocal, 0};
+    props.memoryTypes[1] = vk::MemoryType{Property::eHostVisible | Property::eHostCoherent, 1};
+    props.memoryTypes[2] =
+        vk::MemoryType{Property::eHostVisible | Property::eHostCoherent | Property::eHostCached, 1};
+    props.memoryTypes[3] =
+        vk::MemoryType{Property::eDeviceLocal | Property::eHostVisible | Property::eHostCoherent, 2};
+    CHECK(Vulkan::MemoryHeapKind(props, 0) == "device-local");
+    CHECK(Vulkan::MemoryHeapKind(props, 1) == "system");
+    CHECK(Vulkan::MemoryHeapKind(props, 2) == "device-local, host-visible");
 }
 
 void ImageBarrierStages() {
@@ -185,6 +247,7 @@ int main(int argc, char** argv) {
     TotalComponentLimit();
     VertexLimit();
     ImageBarrierStages();
+    MemoryHeapKinds();
     const std::string trace_path = std::string{argc > 0 ? argv[0] : "gpu_crash_trace_tests"} + ".trace.txt";
     TraceIsBoundedAndPrintedOnce(trace_path.c_str());
     std::remove(trace_path.c_str());

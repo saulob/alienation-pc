@@ -273,13 +273,27 @@ void Instance::LogDispatchModules() const {
     Common::GpuTrace::SetDispatchSummary(dispatch.c_str());
 }
 
+std::string MemoryHeapKind(const vk::PhysicalDeviceMemoryProperties& props, u32 heap) {
+    if (!(props.memoryHeaps[heap].flags & vk::MemoryHeapFlagBits::eDeviceLocal)) {
+        return "system";
+    }
+    for (u32 type = 0; type < props.memoryTypeCount; ++type) {
+        if (props.memoryTypes[type].heapIndex == heap &&
+            (props.memoryTypes[type].propertyFlags & vk::MemoryPropertyFlagBits::eHostVisible)) {
+            return "device-local, host-visible";
+        }
+    }
+    return "device-local";
+}
+
 void Instance::ReportDeviceFault() const {
     if (supports_memory_budget) {
         vk::PhysicalDeviceMemoryBudgetPropertiesEXT budget{};
         vk::PhysicalDeviceMemoryProperties2 props{.pNext = &budget};
         physical_device.getMemoryProperties2(&props);
         for (u32 heap = 0; heap < props.memoryProperties.memoryHeapCount; ++heap) {
-            LOG_CRITICAL(Render_Vulkan, "Heap {}: {} MiB used of {} MiB budget, size {} MiB", heap,
+            LOG_CRITICAL(Render_Vulkan, "Heap {} ({}): {} MiB used of {} MiB budget, size {} MiB",
+                         heap, MemoryHeapKind(props.memoryProperties, heap),
                          budget.heapUsage[heap] >> 20, budget.heapBudget[heap] >> 20,
                          props.memoryProperties.memoryHeaps[heap].size >> 20);
         }
@@ -969,6 +983,15 @@ u64 Instance::GetDeviceMemoryUsage() const {
     };
     physical_device.getMemoryProperties2(&props);
 
+    for (u32 heap = 0; heap < props.memoryProperties.memoryHeapCount; ++heap) {
+        if (Common::GpuTrace::NoteHeapBudget(heap, memory_budget_props.heapUsage[heap],
+                                             memory_budget_props.heapBudget[heap])) {
+            LOG_WARNING(Render_Vulkan, "Heap {} ({}) went over its budget: {} MiB used of {} MiB",
+                        heap, MemoryHeapKind(props.memoryProperties, heap),
+                        memory_budget_props.heapUsage[heap] >> 20,
+                        memory_budget_props.heapBudget[heap] >> 20);
+        }
+    }
     u64 total_usage = 0;
     for (const size_t heap : valid_heaps) {
         total_usage += memory_budget_props.heapUsage[heap];

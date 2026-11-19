@@ -110,7 +110,6 @@ Add-Exes $s @(
     , @('aln-sdl-compat-tests', 'SDL compatibility')
     , @('aln-trophy-tests', 'trophies')
     , @('aln-incident-tests', 'bug reports and incident report; ALN-YB9NZA: crash detection by exact dump, Attach crash report, name, path and size checks')
-    , @('aln-debug-saulo-crash-fixture-tests', 'DEBUG_SAULO (temporary): crash report fixture script seen as a crash with an attachable dump by the launcher, removed cleanly')
     , @('aln-paths-tests', 'data folder beside the program (Linux: beside the AppImage, XDG fallback)')
 )
 
@@ -122,7 +121,7 @@ Add-Exes $s @(
     , @('aln-resolution-patch-tests', 'render resolution, aspect and frame rate patches per build')
     , @('aln-tiling-tests', 'GPU tiling')
     , @('aln-gds-lane-offset-tests', 'GPU GDS lane offset')
-    , @('aln-gpu-crash-trace-tests', 'GPU crash trace and geometry output')
+    , @('aln-gpu-crash-trace-tests', 'GPU crash trace and geometry output; ALN-2RDFRU: pipelines of unfinished ticks, heap kinds and budget crossings, buffer fallbacks')
     , @('aln-gpu-recording-tests', 'GPU deferred command recording')
     , @('aln-renderer-selection-tests', 'renderer selection')
     , @('aln-opengl-backend-tests', 'OpenGL backend (no context)')
@@ -169,12 +168,8 @@ if ($pwsh -and $pwsh.Source -ne $hostExe) {
 } elseif (-not $pwsh) {
     Add-NotRun $s 'online instance script under PowerShell 7' 'PowerShell 7 (pwsh) is not installed: winget install Microsoft.PowerShell'
 }
-<<<<<<< HEAD
-Add-Suite $s 'hle' 'aln-online-hle-tests' 'Matching2 rooms of 2, 3 and 4 players with a full mesh of peers, four-player invitations, launcher Accept and play, sessions, relay and DGRAM_P2P on a loopback lobby; ALN-YB9NZA: the game joining a squad already in a mission'
-=======
 Add-Suite $s 'hle' 'aln-incident-upload-tests' 'ALN-YB9NZA: the launcher uploads a report and its crash dump under one Report ID on a loopback lobby; log-only, unsendable dump, resumed retry and receipt guard'
-Add-Suite $s 'hle' 'aln-online-hle-tests' 'Matching2 rooms of 2, 3 and 4 players with a full mesh of peers, four-player invitations, launcher Accept and play, sessions, relay and DGRAM_P2P on a loopback lobby'
->>>>>>> 5bef993 (Add crash dump attachments to bug reports)
+Add-Suite $s 'hle' 'aln-online-hle-tests' 'Matching2 rooms of 2, 3 and 4 players with a full mesh of peers, four-player invitations, launcher Accept and play, sessions, relay and DGRAM_P2P on a loopback lobby; ALN-YB9NZA: the game joining a squad already in a mission'
 
 $s = 'Online Worker'
 Add-Suite $s 'node' 'server\lobby (npm test)' 'the whole Worker suite (ALN-YB9NZA: crash dump upload, storage, admin metadata and download): protocol, friends, rooms, sessions, relay, edge and ingress abuse protection, hibernation, write budgets, diagnostics, admin data (in memory, no network)'

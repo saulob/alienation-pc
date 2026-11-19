@@ -106,7 +106,8 @@ void UniqueBuffer::Create(vk::BufferCreateInfo& buffer_ci, MemoryType mem_type,
         if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY) {
             alloc_ci.flags &= ~VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
             Common::GpuTrace::Record(Common::GpuTrace::Event::AllocationFallback, buffer_ci.size,
-                                     static_cast<u64>(mem_type), 3);
+                                     Common::GpuTrace::Tag(BufferTypeName(mem_type).data()),
+                                     u64(Common::GpuTrace::Fallback::BufferOverBudget));
             result = vmaCreateBuffer(allocator, &buffer_ci_unsafe, &alloc_ci, &unsafe_buffer,
                                      &allocation, out_alloc_info);
             LOG_WARNING(Render_Vulkan, "Allocating a {} MiB {} buffer over budget: {}",

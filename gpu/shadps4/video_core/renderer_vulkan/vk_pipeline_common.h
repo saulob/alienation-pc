@@ -77,6 +77,7 @@ protected:
     bool uses_push_descriptors{};
     bool is_compute;
     mutable std::atomic<bool> first_use_traced{};
+    mutable std::atomic<u64> noted_generation{};
 };
 
 } // namespace Vulkan

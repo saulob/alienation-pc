@@ -6,6 +6,7 @@
 #include <limits>
 #include <string>
 #include "common/assert.h"
+#include "common/gpu_trace.h"
 #include "common/logging/log.h"
 #include "core/emulator_settings.h"
 #include "aln_present.h"
@@ -150,9 +151,8 @@ bool Swapchain::AcquireNextImage() {
         needs_recreation = true;
         break;
     default:
-        LOG_CRITICAL(Render_Vulkan, "Swapchain acquire returned unknown result {}",
-                     vk::to_string(result));
-        UNREACHABLE();
+        Common::GpuTrace::VulkanFailure("acquire", s32(result));
+        ASSERT_MSG(false, "Swapchain image acquisition failed: {}", vk::to_string(result));
         break;
     }
 
@@ -171,9 +171,9 @@ bool Swapchain::Present() {
     auto result = instance.GetPresentQueue().presentKHR(present_info);
     if (result == vk::Result::eErrorOutOfDateKHR || result == vk::Result::eSuboptimalKHR) {
         needs_recreation = true;
-    } else {
-        ASSERT_MSG(result == vk::Result::eSuccess, "Swapchain presentation failed: {}",
-                   vk::to_string(result));
+    } else if (result != vk::Result::eSuccess) {
+        Common::GpuTrace::VulkanFailure("present", s32(result));
+        ASSERT_MSG(false, "Swapchain presentation failed: {}", vk::to_string(result));
     }
 
     frame_index = (frame_index + 1) % image_count;

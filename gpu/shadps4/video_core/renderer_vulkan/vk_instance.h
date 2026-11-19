@@ -23,6 +23,9 @@ namespace Vulkan {
 /// The device meets the renderer's Vulkan version, extension and feature requirements.
 bool IsDeviceUsable(vk::PhysicalDevice physical);
 
+/// "device-local", "device-local, host-visible" or "system", from the heap and its memory types.
+std::string MemoryHeapKind(const vk::PhysicalDeviceMemoryProperties& props, u32 heap);
+
 class Instance {
 public:
     explicit Instance(bool validation = false, bool crash_diagnostic = false);

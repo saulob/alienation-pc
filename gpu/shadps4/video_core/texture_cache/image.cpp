@@ -123,7 +123,8 @@ void UniqueImage::Create(const vk::ImageCreateInfo& image_ci) {
         LOG_WARNING(Render_Vulkan, "Video memory budget exceeded: image {}x{}x{} retried over budget",
                     image_ci.extent.width, image_ci.extent.height, image_ci.extent.depth);
         Common::GpuTrace::Record(Common::GpuTrace::Event::AllocationFallback, image_ci.extent.width,
-                                 image_ci.extent.height, 1);
+                                 image_ci.extent.height,
+                                 u64(Common::GpuTrace::Fallback::ImageOverBudget));
         result = vmaCreateImage(allocator, &image_ci_unsafe, &alloc_ci, &unsafe_image, &allocation,
                                 &alloc_info);
     }
@@ -132,7 +133,8 @@ void UniqueImage::Create(const vk::ImageCreateInfo& image_ci) {
         LOG_WARNING(Render_Vulkan, "Out of video memory: image {}x{}x{} in system memory",
                     image_ci.extent.width, image_ci.extent.height, image_ci.extent.depth);
         Common::GpuTrace::Record(Common::GpuTrace::Event::AllocationFallback, image_ci.extent.width,
-                                 image_ci.extent.height, 2);
+                                 image_ci.extent.height,
+                                 u64(Common::GpuTrace::Fallback::ImageInSystemMemory));
         result = vmaCreateImage(allocator, &image_ci_unsafe, &alloc_ci, &unsafe_image, &allocation,
                                 &alloc_info);
     }

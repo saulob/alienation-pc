@@ -159,15 +159,6 @@ target_link_libraries(aln-incident-upload-tests PRIVATE aln_launcher_core)
 set_target_properties(aln-incident-upload-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 target_compile_options(aln-incident-upload-tests PRIVATE -Wall -Wextra)
 
-# DEBUG_SAULO (temporary): the manual crash report fixture script against the launcher's own log discovery.
-if (WIN32)
-    add_executable(aln-debug-saulo-crash-fixture-tests EXCLUDE_FROM_ALL ../tests/debug_saulo_crash_fixture_tests.cpp)
-    target_compile_definitions(aln-debug-saulo-crash-fixture-tests PRIVATE ALN_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
-    target_link_libraries(aln-debug-saulo-crash-fixture-tests PRIVATE aln_launcher_core)
-    set_target_properties(aln-debug-saulo-crash-fixture-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
-    target_compile_options(aln-debug-saulo-crash-fixture-tests PRIVATE -Wall -Wextra)
-endif()
-
 # Focused tests of Install game and Install update, on synthetic packages and folders: no window, no game files needed.
 add_executable(aln-game-install-tests EXCLUDE_FROM_ALL ../tests/game_install_tests.cpp)
 target_compile_definitions(aln-game-install-tests PRIVATE ALN_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
