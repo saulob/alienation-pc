@@ -138,8 +138,7 @@ static ABI __attribute__((noreturn)) void unresolved(uint32_t id, uintptr_t argu
     runtime_report();
     puts(entered_game ? "Original guest entry instructions executed; game initialization is incomplete." :
                         "Native libc initialization is incomplete; game entry has not run.");
-    runtime_log_flush();
-    _exit(20); /* no destructors: GPU, audio and guest threads are still running */
+    runtime_stop(20);
 }
 #ifndef _WIN32
 /* enter_on_stack(entry, arg0, arg1, stack_top): call entry(arg0,arg1) on a new stack. */
@@ -577,6 +576,7 @@ int main(int argc, char **argv) {
     struct sigaction ignore_pipe = {0}; ignore_pipe.sa_handler = SIG_IGN;
     sigemptyset(&ignore_pipe.sa_mask); sigaction(SIGPIPE, &ignore_pipe, NULL);
 #endif
+    alngpu_set_fatal_stop(runtime_log_fatal);
     if (game_child) {
         puts("Startup: game-only child process");
 #ifdef _WIN32

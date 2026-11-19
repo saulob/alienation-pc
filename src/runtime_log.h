@@ -40,6 +40,12 @@ void runtime_log_mark_clean_exit(void);
 /* Marks a crash, so the log is kept even if the process exits through a normal path. */
 void runtime_log_mark_crash(void);
 
+/* Ends the process after an error the game cannot continue from, with `status` as the exit code: through the crash
+ * reporter when one is installed (Windows: crash report and minidump beside the log), otherwise flushed and marked. */
+__attribute__((noreturn)) void runtime_log_fatal(const char *what, int status);
+/* The crash guard's reporter for runtime_log_fatal; it does not return. */
+void runtime_log_set_fatal_reporter(void (*reporter)(const char *what, int status));
+
 /* Records the file this run writes; called by runtime_log_start. */
 void runtime_log_set_session_path(const char *path);
 const char *runtime_log_session_path(void);

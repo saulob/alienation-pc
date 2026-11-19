@@ -196,8 +196,7 @@ static ABI __attribute__((noreturn)) void hard_exit(int status) {
 static ABI __attribute__((noreturn)) void raise_exception(uint32_t code,uint64_t argument) {
     fprintf(stderr,"STOP: guest raised debug exception code=0x%x argument=0x%llx\n",code,(unsigned long long)argument);
     runtime_report();
-    runtime_log_flush();
-    _exit(23); /* GPU and guest threads are running: exit() would run destructors under them */
+    runtime_stop(23);
 }
 /* The process was started without arguments other than its own name. */
 static const char *guest_argv[]={"eboot.bin",NULL};
@@ -224,8 +223,7 @@ static ABI void pthread_cxa_finalize(void *dso) { (void)dso; }
 static ABI __attribute__((noreturn)) void unwind_resume(void) {
     fputs("STOP: guest C++ exception unwinding (sigreturn/__Ux86_64_setcontext) is not supported\n",stderr);
     runtime_report();
-    runtime_log_flush();
-    _exit(23); /* GPU and guest threads are running: exit() would run destructors under them */
+    runtime_stop(23);
 }
 static ABI int32_t print_backtrace(void) {
     fputs("Runtime: guest requested a backtrace (not available)\n",stderr);
@@ -291,7 +289,7 @@ static ABI int32_t guest_sysctl(const int32_t *name,uint32_t namelen,void *old,u
     fprintf(stderr,"STOP: unsupported sysctl mib");
     for (uint32_t i=0;i<namelen && i<8;++i) fprintf(stderr," %d",name[i]);
     fputc('\n',stderr);
-    runtime_exit(21);
+    runtime_stop(21);
 }
 
 /* ---- pthread_once and thread-specific data ---- */

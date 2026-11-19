@@ -28,6 +28,8 @@ uintptr_t alngpu_resolve(const char *scoped_nid);
 /* Called first by the loader's fault handler: 1 when a GPU page-tracking fault was handled. */
 int alngpu_handle_fault(void *context, void *address);
 void alngpu_dump_guest_writes(void *context);
+/* What a GPU assertion ends the process through, after its own report; it does not return. */
+void alngpu_set_fatal_stop(void (*stop)(const char *what, int status));
 /* Number of symbols registered by the video core (diagnostics). */
 unsigned alngpu_symbol_count(void);
 /* Queues the shutdown a closed window performs (clean-exit mark, log finalize, process exit). Callable from any thread;

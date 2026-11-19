@@ -120,6 +120,7 @@ static int run_child(const char *mode, const char *directory) {
     const int production_name = !strcmp(mode, "production_name");
     snprintf(log, sizeof(log), "%s\\crash_guard_test.log", directory);
     if (!runtime_log_start(directory, production_name ? NULL : log, path, sizeof(path))) return 90;
+    if (!strcmp(mode, "fatal_stop_unguarded")) runtime_log_fatal("GPU library assertion failed", 23);
     AlnCrashHooks hooks = {plain_detail, describe_module, memory_context};
     if (!strcmp(mode, "detail_fault")) hooks.detail = faulting_detail;
     aln_crash_guard_install(&hooks);
@@ -170,6 +171,7 @@ static int run_child(const char *mode, const char *directory) {
     }
     if (!strcmp(mode, "stack")) return recurse(0);
     if (!strcmp(mode, "abort")) { abort(); }
+    if (!strcmp(mode, "fatal_stop")) runtime_log_fatal("GPU library assertion failed", 23);
     return 92;
 }
 
@@ -179,6 +181,7 @@ typedef struct {
     int terminal;
     const char *const *expect;
     const char *const *reject;
+    DWORD exception;
 } Case;
 
 static char directory[MAX_PATH];
@@ -218,7 +221,7 @@ static int count_of(const char *text, const char *needle) {
 
 typedef BOOL(WINAPI *ReadStream)(PVOID, MINIDUMP_STREAM_TYPE, PMINIDUMP_DIRECTORY *, PVOID *, ULONG *);
 
-static void check_dump(const char *name, DWORD pid, DWORD exit_code, const char *log, const char *own_exe) {
+static void check_dump(const char *name, DWORD pid, DWORD exception_code, const char *log, const char *own_exe) {
     char path[MAX_PATH + 300];
     snprintf(path, sizeof(path), "%s\\%s", directory, name);
     HANDLE file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
@@ -235,7 +238,7 @@ static void check_dump(const char *name, DWORD pid, DWORD exit_code, const char 
         ULONG stream_size;
         CHECK(read_stream(view, ExceptionStream, &directory_entry, &stream, &stream_size));
         const MINIDUMP_EXCEPTION_STREAM *exception = stream;
-        CHECK(exception->ExceptionRecord.ExceptionCode == (exit_code == 3 ? 0x40000015u : exit_code));
+        CHECK(exception->ExceptionRecord.ExceptionCode == exception_code);
         const char *thread_text = strstr(log, "; thread ");
         CHECK(thread_text && exception->ThreadId == (DWORD)strtoul(thread_text + 9, NULL, 10));
         CHECK(read_stream(view, CommentStreamA, &directory_entry, &stream, &stream_size));
@@ -316,7 +319,8 @@ static void run_case(const char *self, const Case *test) {
         char own[MAX_PATH];
         const char *base = strrchr(self, '\\');
         snprintf(own, sizeof(own), "%s", base ? base + 1 : self);
-        check_dump(dump_name, pid, test->exit_code, log, own);
+        const DWORD exception = test->exception ? test->exception : test->exit_code == 3 ? 0x40000015u : test->exit_code;
+        check_dump(dump_name, pid, exception, log, own);
     }
     if (failures != before) printf("---- %s log ----\n%s\n", test->mode, log);
     free(log);
@@ -335,6 +339,8 @@ static void classification(void) {
     CHECK(!aln_crash_dump_path(path, 8, "C:\\logs\\alienation_017.log", 1));
     CHECK(!aln_crash_dump_path(path, sizeof(path), "C:\\logs.d\\noextension", 1));
     CHECK(!strcmp(aln_crash_code_name(0xC0000005u), "access violation"));
+    CHECK(!strcmp(aln_crash_code_name(ALN_CRASH_FATAL_STOP), "fatal stop"));
+    CHECK(aln_crash_classify(ALN_CRASH_FATAL_STOP, 1, 1) == ALN_FAULT_IGNORE);
 }
 
 int main(int argc, char **argv) {
@@ -364,23 +370,29 @@ int main(int argc, char **argv) {
     static const char *const second_text[] = {"a second fault on the crashing thread", "read at 0x10", NULL};
     static const char *const production_text[] = {"minidump: alienation_001.dmp", NULL};
     static const char *const no_unreachable[] = {"no handler can be reached", NULL};
+    /* ALN-XXJJ7R: a STOP (GPU assertion, device lost) leaves the crash report and a minidump the launcher can attach. */
+    static const char *const fatal_stop_text[] = {"CRASH: fatal stop (0xe0000023)", "[GPU library assertion failed]",
+                                                  "minidump: crash_guard_test.dmp", "CRASH: the process ends with exit code 0x17", NULL};
+    static const char *const unguarded_text[] = {"Runtime: GPU library assertion failed; the process ends with status 23", NULL};
 
     static const Case cases[] = {
-        {"read", 0xC0000005u, 1, read_text, NULL},
-        {"write", 0xC0000005u, 1, write_text, NULL},
-        {"worker", 0xC0000005u, 1, worker_text, NULL},
-        {"foreign_read", 0xC0000005u, 1, foreign_text, no_unreachable},
-        {"foreign_write", 0xC0000005u, 1, foreign_write_text, no_unreachable},
-        {"recovered", 0, 0, recovered_text, NULL},
-        {"unwind_less", 0xC0000005u, 1, unwind_text, NULL},
-        {"unwind_less_write", 0xC0000005u, 1, unwind_write_text, NULL},
-        {"guest_frame", 0xC0000005u, 1, guest_text, NULL},
-        {"replaced", 0xC0000005u, 1, replaced_text, NULL},
-        {"replaced_silently", 0xC0000005u, 1, silent_text, NULL},
-        {"stack", 0xC00000FDu, 1, NULL, NULL},
-        {"abort", 3, 1, NULL, NULL},
-        {"detail_fault", 0xC0000005u, 1, second_text, NULL},
-        {"production_name", 0xC0000005u, 1, production_text, NULL},
+        {"read", 0xC0000005u, 1, read_text, NULL, 0},
+        {"write", 0xC0000005u, 1, write_text, NULL, 0},
+        {"worker", 0xC0000005u, 1, worker_text, NULL, 0},
+        {"foreign_read", 0xC0000005u, 1, foreign_text, no_unreachable, 0},
+        {"foreign_write", 0xC0000005u, 1, foreign_write_text, no_unreachable, 0},
+        {"recovered", 0, 0, recovered_text, NULL, 0},
+        {"unwind_less", 0xC0000005u, 1, unwind_text, NULL, 0},
+        {"unwind_less_write", 0xC0000005u, 1, unwind_write_text, NULL, 0},
+        {"guest_frame", 0xC0000005u, 1, guest_text, NULL, 0},
+        {"replaced", 0xC0000005u, 1, replaced_text, NULL, 0},
+        {"replaced_silently", 0xC0000005u, 1, silent_text, NULL, 0},
+        {"stack", 0xC00000FDu, 1, NULL, NULL, 0},
+        {"abort", 3, 1, NULL, NULL, 0},
+        {"detail_fault", 0xC0000005u, 1, second_text, NULL, 0},
+        {"production_name", 0xC0000005u, 1, production_text, NULL, 0},
+        {"fatal_stop", 23, 1, fatal_stop_text, NULL, ALN_CRASH_FATAL_STOP},
+        {"fatal_stop_unguarded", 23, 0, unguarded_text, NULL, 0},
     };
     for (size_t i = 0; i < sizeof(cases) / sizeof(*cases); ++i) run_case(argv[0], &cases[i]);
 

@@ -242,8 +242,7 @@ static DWORD win_prot(int prot) {
 }
 static void win_fail(const char *what, uintptr_t address, uint64_t size) {
     fprintf(stderr,"STOP: %s failed at %p (+0x%" PRIx64 "), error %lu\n",what,(void *)address,size,GetLastError());
-    runtime_log_flush();
-    _exit(21); /* GPU workers may be running: exit() would destruct their state under them */
+    runtime_stop(21);
 }
 static size_t region_index(uintptr_t a) { /* first region with end > a */
     size_t lo=0, hi=region_count;
@@ -524,7 +523,7 @@ void runtime_memory_reserve(void) {
     if (base!=(void *)USER_MIN) {
         fprintf(stderr,"STOP: cannot reserve the PS4 address range %p-%p (%s)\n",(void *)USER_MIN,(void *)USER_MAX,
                 base==MAP_FAILED ? strerror(errno) : "the kernel placed it elsewhere");
-        runtime_exit(21);
+        runtime_stop(21);
     }
     reserved=1;
 }
@@ -562,7 +561,7 @@ static void queue_hook(int kind, uintptr_t address, uint64_t size) {
     if (pending_count==pending_capacity) {
         size_t capacity=pending_capacity ? pending_capacity*2 : 64;
         PendingHook *grown=realloc(pending,capacity*sizeof(*grown));
-        if (!grown) { fputs("STOP: GPU hook queue allocation failed\n",stderr); runtime_exit(21); }
+        if (!grown) { fputs("STOP: GPU hook queue allocation failed\n",stderr); runtime_stop(21); }
         pending=grown; pending_capacity=capacity;
     }
     pending[pending_count++]=(PendingHook){kind,address,size};

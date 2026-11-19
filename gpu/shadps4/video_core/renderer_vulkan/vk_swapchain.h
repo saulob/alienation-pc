@@ -18,6 +18,10 @@ namespace Vulkan {
 class Instance;
 class Scheduler;
 
+/// The acquire gave out an image and will signal its semaphore, so the image must be presented
+/// (a suboptimal one too) before the swapchain is recreated.
+bool AcquireHandsOutImage(vk::Result result);
+
 class Swapchain {
 public:
     explicit Swapchain(const Instance& instance, const Frontend::WindowSDL& window);

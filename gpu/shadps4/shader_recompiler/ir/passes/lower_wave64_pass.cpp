@@ -8,29 +8,68 @@
 #include "shader_recompiler/ir/basic_block.h"
 #include "shader_recompiler/ir/breadth_first_search.h"
 #include "shader_recompiler/ir/ir_emitter.h"
+#include "shader_recompiler/ir/passes/resource_pass.h"
 #include "shader_recompiler/ir/program.h"
 #include "shader_recompiler/profile.h"
 
 namespace Shader::Optimization {
 
-static bool IsDivergentCondition(const IR::U1& condition) {
+static bool IsWrittenBinding(const IR::Inst& inst, auto&& resources) {
+    if (!inst.Arg(0).IsImmediate() || inst.Arg(0).U32() >= resources.size()) {
+        return true;
+    }
+    return resources[inst.Arg(0).U32()].is_written;
+}
+
+// A value that can differ between the invocations of one workgroup. The lowering's workgroup barrier
+// is only safe under conditions built without one.
+static bool VariesInWorkgroup(const IR::Inst& inst, const Info& info) {
+    switch (inst.GetOpcode()) {
+    case IR::Opcode::LaneId:
+    case IR::Opcode::WarpId:
+    case IR::Opcode::GetExec:
+    case IR::Opcode::Ballot:
+    case IR::Opcode::BallotFindLsb:
+    case IR::Opcode::InverseBallot:
+    case IR::Opcode::GroupAny:
+    case IR::Opcode::ReadFirstLane:
+    case IR::Opcode::ReadLane:
+    case IR::Opcode::WriteLane:
+    case IR::Opcode::Shuffle:
+    case IR::Opcode::ShuffleXor:
+    case IR::Opcode::QuadBroadcast:
+    case IR::Opcode::LoadSharedU16:
+    case IR::Opcode::LoadSharedU32:
+    case IR::Opcode::LoadSharedU64:
+        return true;
+    case IR::Opcode::GetAttributeU32: {
+        const IR::Attribute attribute = inst.Arg(0).Attribute();
+        return attribute != IR::Attribute::WorkgroupId &&
+               attribute != IR::Attribute::WorkgroupIndex;
+    }
+    case IR::Opcode::ImageRead:
+        return IsWrittenBinding(inst, info.images);
+    default:
+        break;
+    }
+    if (IsBufferAtomic(inst) || IsImageAtomicInstruction(inst) || IsDataRingInstruction(inst) ||
+        IR::NameOf(inst.GetOpcode()).starts_with("SharedAtomic")) {
+        return true;
+    }
+    if (IR::NameOf(inst.GetOpcode()).starts_with("LoadBuffer")) {
+        return IsWrittenBinding(inst, info.buffers);
+    }
+    return false;
+}
+
+static bool IsDivergentCondition(const IR::U1& condition, const Info& info) {
     if (condition.IsImmediate()) {
         return false;
     }
-    const IR::Inst* const condition_inst = condition.Inst();
-    return IR::BreadthFirstSearch(condition_inst,
-                                  [](const IR::Inst* inst) -> std::optional<bool> {
-                                      switch (inst->GetOpcode()) {
-                                      case IR::Opcode::LaneId:
+    return IR::BreadthFirstSearch(condition.Inst(),
+                                  [&info](const IR::Inst* inst) -> std::optional<bool> {
+                                      if (VariesInWorkgroup(*inst, info)) {
                                           return true;
-                                      case IR::Opcode::GetAttributeU32:
-                                          if (inst->Arg(0).Attribute() ==
-                                              IR::Attribute::LocalInvocationId) {
-                                              return true;
-                                          }
-                                          break;
-                                      default:
-                                          break;
                                       }
                                       return std::nullopt;
                                   })
@@ -52,7 +91,7 @@ static std::vector<IR::Block*> FindUniformBlocks(const IR::Program& program) {
     for (const IR::AbstractSyntaxNode& node : program.syntax_list) {
         switch (node.type) {
         case Type::If: {
-            const bool divergent = IsDivergentCondition(node.data.if_node.cond);
+            const bool divergent = IsDivergentCondition(node.data.if_node.cond, program.info);
             conditionals.push_back({node.data.if_node.merge, divergent});
             divergence_depth += static_cast<u32>(divergent);
             break;

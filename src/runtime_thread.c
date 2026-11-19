@@ -116,18 +116,18 @@ static DWORD tls_slot=TLS_OUT_OF_INDEXES;
 uint32_t runtime_thread_tcb_offset(void) {
     if (tls_slot==TLS_OUT_OF_INDEXES) {
         tls_slot=TlsAlloc();
-        if (tls_slot>=64) { fprintf(stderr,"STOP: no TEB TLS slot below 64 (got %lu)\n",tls_slot); runtime_exit(21); }
+        if (tls_slot>=64) { fprintf(stderr,"STOP: no TEB TLS slot below 64 (got %lu)\n",tls_slot); runtime_stop(21); }
     }
     return 0x1480+8*(uint32_t)tls_slot;
 }
 static void set_gs(void *base) {
     runtime_thread_tcb_offset();
-    if (!TlsSetValue(tls_slot,base)) { fprintf(stderr,"STOP: TlsSetValue failed (%lu)\n",GetLastError()); runtime_exit(21); }
+    if (!TlsSetValue(tls_slot,base)) { fprintf(stderr,"STOP: TlsSetValue failed (%lu)\n",GetLastError()); runtime_stop(21); }
 }
 #define tls_block_alloc(size) _aligned_malloc(size,64)
 #else
 static void set_gs(void *base) {
-    if (syscall(SYS_arch_prctl,ARCH_SET_GS,(unsigned long)base)) { perror("STOP: arch_prctl(ARCH_SET_GS)"); runtime_exit(21); }
+    if (syscall(SYS_arch_prctl,ARCH_SET_GS,(unsigned long)base)) { perror("STOP: arch_prctl(ARCH_SET_GS)"); runtime_stop(21); }
 }
 #define tls_block_alloc(size) aligned_alloc(64,size)
 #endif
@@ -458,7 +458,7 @@ static int32_t create(GuestThread **out,ThreadAttr **attr_slot,GuestEntry entry,
     *out=t;
     int e=pthread_create(&t->host,&host,host_start,t);
     pthread_attr_destroy(&host);
-    if (e) { fprintf(stderr,"STOP: host pthread_create failed: %d\n",e); runtime_exit(21); }
+    if (e) { fprintf(stderr,"STOP: host pthread_create failed: %d\n",e); runtime_stop(21); }
 #ifdef _WIN32
     if (t->detached) pthread_detach(t->host);
 #endif
@@ -488,7 +488,7 @@ static ABI int32_t thread_join(GuestThread *t,void **result) {
     runtime_thread_note_wait(NULL,0);
     void *value=NULL;
     int e=pthread_join(t->host,&value);
-    if (e) { fprintf(stderr,"STOP: host pthread_join failed: %d\n",e); runtime_exit(21); }
+    if (e) { fprintf(stderr,"STOP: host pthread_join failed: %d\n",e); runtime_stop(21); }
     if (result) *result=t->result;
 #ifndef _WIN32
     if (t->stack) release_stack(t);
@@ -534,7 +534,7 @@ static ABI int32_t thread_cancel(GuestThread *t) {
 }
 static ABI __attribute__((noreturn)) void thread_exit(void *value) {
     GuestThread *t=runtime_thread_current();
-    if (t->host_owned) { fputs("STOP: pthread_exit on host-owned/main thread\n",stderr); runtime_exit(21); }
+    if (t->host_owned) { fputs("STOP: pthread_exit on host-owned/main thread\n",stderr); runtime_stop(21); }
     t->result=value;
     /* No host unwinder: guest frames have no registered FDEs. */
     exit_longjmp(t);

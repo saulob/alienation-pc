@@ -104,6 +104,7 @@ const char *aln_crash_code_name(uint32_t code) {
     case CODE_STACK_CHECK: return "stack check failure";
     case CODE_DATATYPE_MISALIGNMENT: return "datatype misalignment";
     case 0x40000015u: return "abort";
+    case ALN_CRASH_FATAL_STOP: return "fatal stop";
     default: return "exception";
     }
 }
@@ -561,6 +562,10 @@ void aln_crash_guard_set_guest(uintptr_t image, uint64_t size) {
     guest_image = image;
 }
 
+static void report_fatal_stop(const char *what, int status) {
+    aln_crash_guard_report_here(what, ALN_CRASH_FATAL_STOP, (uint32_t)status);
+}
+
 void aln_crash_guard_install(const AlnCrashHooks *installed) {
     if (installed) hooks = *installed;
     start_tick = GetTickCount64();
@@ -581,6 +586,7 @@ void aln_crash_guard_install(const AlnCrashHooks *installed) {
     if (begin_event && detail_done && dump_done)
         watchdog = CreateThread(NULL, 256 * 1024, watchdog_main, NULL, STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
     SetUnhandledExceptionFilter(unhandled);
+    runtime_log_set_fatal_reporter(report_fatal_stop);
     printf("Crash diagnostics: %s, minidump %s\n", watchdog ? "crash thread ready" : "no crash thread",
            write_minidump ? "next to this log" : "unavailable");
 }

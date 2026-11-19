@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include "runtime_log.h"
 #ifdef _WIN32
 #include "compat_win.h"
 /* No signals on Windows: the exception handler resumes the thread in aln_longjmp
@@ -26,6 +27,10 @@ static inline __attribute__((noreturn)) void runtime_exit(int status) {
     fprintf(stderr,"Runtime: process ends with status %d\n",status);
     fflush(NULL);
     _Exit(status);
+}
+/* A STOP: printed above by the caller; the crash report and, on Windows, a minidump follow. */
+static inline __attribute__((noreturn)) void runtime_stop(int status) {
+    runtime_log_fatal("the runtime stopped the game (see the STOP line above)", status);
 }
 void runtime_start(uint64_t capabilities);
 uintptr_t runtime_resolve(const char *name, int is_data);

@@ -55,8 +55,7 @@ static HostFiber *fiber_of(void *guest) {
 }
 static void fiber_returned(HostFiber *f) {
     fprintf(stderr, "STOP: fiber %s returned from its entry function\n", f->name);
-    fflush(NULL);
-    _exit(22);
+    runtime_stop(22);
 }
 
 #ifdef _WIN32

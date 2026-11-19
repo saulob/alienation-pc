@@ -100,9 +100,8 @@ void UniqueImage::Destroy() {
     }
 }
 
-void UniqueImage::Create(const vk::ImageCreateInfo& image_ci) {
-    this->image_ci = image_ci;
-    ASSERT(!image);
+VkResult AllocateImageWithFallback(const vk::ImageCreateInfo& image_ci,
+                                   const std::function<VkResult(const VmaAllocationCreateInfo&)>& attempt) {
     VmaAllocationCreateInfo alloc_ci = {
         .flags = VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT,
         .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
@@ -111,13 +110,7 @@ void UniqueImage::Create(const vk::ImageCreateInfo& image_ci) {
         .pool = VK_NULL_HANDLE,
         .pUserData = nullptr,
     };
-
-    const VkImageCreateInfo image_ci_unsafe = static_cast<VkImageCreateInfo>(image_ci);
-    VkImage unsafe_image{};
-    VmaAllocationInfo alloc_info{};
-    VkResult result = vmaCreateImage(allocator, &image_ci_unsafe, &alloc_ci, &unsafe_image,
-                                     &allocation, &alloc_info);
-    // A full card keeps the image over budget, then in system memory, instead of ending the game.
+    VkResult result = attempt(alloc_ci);
     if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY) {
         alloc_ci.flags &= ~VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
         LOG_WARNING(Render_Vulkan, "Video memory budget exceeded: image {}x{}x{} retried over budget",
@@ -125,8 +118,7 @@ void UniqueImage::Create(const vk::ImageCreateInfo& image_ci) {
         Common::GpuTrace::Record(Common::GpuTrace::Event::AllocationFallback, image_ci.extent.width,
                                  image_ci.extent.height,
                                  u64(Common::GpuTrace::Fallback::ImageOverBudget));
-        result = vmaCreateImage(allocator, &image_ci_unsafe, &alloc_ci, &unsafe_image, &allocation,
-                                &alloc_info);
+        result = attempt(alloc_ci);
     }
     if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY) {
         alloc_ci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
@@ -135,8 +127,7 @@ void UniqueImage::Create(const vk::ImageCreateInfo& image_ci) {
         Common::GpuTrace::Record(Common::GpuTrace::Event::AllocationFallback, image_ci.extent.width,
                                  image_ci.extent.height,
                                  u64(Common::GpuTrace::Fallback::ImageInSystemMemory));
-        result = vmaCreateImage(allocator, &image_ci_unsafe, &alloc_ci, &unsafe_image, &allocation,
-                                &alloc_info);
+        result = attempt(alloc_ci);
     }
     if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY) {
         LOG_CRITICAL(Render_Vulkan,
@@ -144,6 +135,20 @@ void UniqueImage::Create(const vk::ImageCreateInfo& image_ci) {
                      "attempts; the game cannot continue",
                      image_ci.extent.width, image_ci.extent.height, image_ci.extent.depth);
     }
+    return result;
+}
+
+void UniqueImage::Create(const vk::ImageCreateInfo& image_ci) {
+    this->image_ci = image_ci;
+    ASSERT(!image);
+    const VkImageCreateInfo image_ci_unsafe = static_cast<VkImageCreateInfo>(image_ci);
+    VkImage unsafe_image{};
+    VmaAllocationInfo alloc_info{};
+    const VkResult result =
+        AllocateImageWithFallback(image_ci, [&](const VmaAllocationCreateInfo& alloc_ci) {
+            return vmaCreateImage(allocator, &image_ci_unsafe, &alloc_ci, &unsafe_image,
+                                  &allocation, &alloc_info);
+        });
     ASSERT_MSG(result == VK_SUCCESS, "Failed allocating image with error {}",
                vk::to_string(vk::Result{result}));
     image = vk::Image{unsafe_image};

@@ -100,8 +100,7 @@ static __attribute__((noreturn)) void stop_decode(uint32_t codec, uint64_t bytes
     fprintf(stderr,"STOP: Ajm decode requested for codec %u (%llu input bytes); no Ajm codec is implemented\n",codec,
             (unsigned long long)bytes);
     runtime_report();
-    runtime_log_flush();
-    _exit(24); /* GPU, audio and guest threads are running */
+    runtime_stop(24);
 }
 /* Control jobs (reset, initialize, gapless, statistics) need no decoder: their sideband reports success. */
 static void run_job(Context *ctx, uint32_t id, const Job *job) {

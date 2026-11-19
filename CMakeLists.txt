@@ -312,6 +312,20 @@ target_include_directories(aln-gds-lane-offset-tests PRIVATE gpu/shim gpu/shadps
     gpu/third_party/gcn/include gpu/third_party/half/include gpu/third_party/xbyak)
 target_link_libraries(aln-gds-lane-offset-tests PRIVATE alngpu)
 
+# Focused tests of renderer resource lifetime under load (tools/test.ps1); not part of the default build.
+add_executable(aln-render-lifetime-tests EXCLUDE_FROM_ALL tests/render_lifetime_tests.cpp)
+set_target_properties(aln-render-lifetime-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_include_directories(aln-render-lifetime-tests PRIVATE gpu/shim gpu/shadps4 tests src ${CMAKE_BINARY_DIR}/gpu/include
+    gpu/third_party/gcn/include gpu/third_party/half/include gpu/third_party/xbyak)
+target_link_libraries(aln-render-lifetime-tests PRIVATE alngpu)
+
+# Focused tests of the wave64 Ballot lowering on hand-built IR (tools/test.ps1); not part of the default build.
+add_executable(aln-wave64-lowering-tests EXCLUDE_FROM_ALL tests/wave64_lowering_tests.cpp)
+set_target_properties(aln-wave64-lowering-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_include_directories(aln-wave64-lowering-tests PRIVATE gpu/shim gpu/shadps4 tests src ${CMAKE_BINARY_DIR}/gpu/include
+    gpu/third_party/gcn/include gpu/third_party/half/include gpu/third_party/xbyak)
+target_link_libraries(aln-wave64-lowering-tests PRIVATE alngpu)
+
 # Focused tests of the geometry shader output bound and the GPU crash trace (tools/test.ps1); not part of the
 # default build.
 add_executable(aln-gpu-crash-trace-tests EXCLUDE_FROM_ALL tests/gpu_crash_trace_tests.cpp)

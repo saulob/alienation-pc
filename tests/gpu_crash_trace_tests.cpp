@@ -1,12 +1,19 @@
 // GPU crash trace and geometry output tests: the OutputVertices bound of a translated geometry shader, and the
 // bounded GPU operation trace printed on device loss. No Vulkan device, window or game files.
 #include <cstdio>
+#include <cstdlib>
 #include <string>
+#ifndef _WIN32
+#include <sys/wait.h>
+#endif
 
+#include "common/assert.h"
 #include "common/gpu_trace.h"
 #include "shader_recompiler/backend/spirv/geometry_output.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/texture_cache/image.h"
+
+extern "C" void alngpu_set_fatal_stop(void (*stop)(const char* what, int status));
 
 namespace {
 
@@ -237,9 +244,49 @@ void ImageBarrierStages() {
     CHECK(Image::NeedsBarrier(fragment_read, vk::ImageLayout::eGeneral, read, Stage::eFragmentShader));
 }
 
+constexpr int StopMarkStatus = 40;
+
+void RecordFatalStop(const char* what, int status) {
+    std::fprintf(stderr, "fatal stop: %s, status %d\n", what, status);
+    std::fflush(stderr);
+    std::_Exit(status + StopMarkStatus);
+}
+
+int AssertChild(const std::string& path) {
+    if (!std::freopen(path.c_str(), "w", stderr)) {
+        return 2;
+    }
+    alngpu_set_fatal_stop(RecordFatalStop);
+    ASSERT_MSG(false, "ALN-XXJJ7R child assertion");
+    return 3;
+}
+
+// ALN-XXJJ7R: a GPU assertion (device lost, a failed Vulkan call) ends through the runtime's fatal stop, which writes
+// the crash report and minidump, after the GPU trace; it used to end the process with no dump.
+void AssertionReachesFatalStop(const char* self, const std::string& path) {
+    const std::string command = std::string{"\""} + self + "\" --assert-child";
+    int status = std::system(command.c_str());
+#ifndef _WIN32
+    status = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+#endif
+    CHECK(status == 23 + StopMarkStatus);
+    const std::string text = ReadFile(path.c_str());
+    const size_t trace = text.find("GPU trace: GPU assertion failed");
+    const size_t stop_line = text.find("STOP: GPU library assertion failed");
+    const size_t stop = text.find("fatal stop: GPU library assertion failed, status 23");
+    CHECK(trace != std::string::npos);
+    CHECK(stop_line != std::string::npos && stop_line > trace);
+    CHECK(stop != std::string::npos && stop > stop_line);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
+    const std::string self = argc > 0 ? argv[0] : "gpu_crash_trace_tests";
+    const std::string assert_path = self + ".assert.txt";
+    if (argc == 2 && std::string{argv[1]} == "--assert-child") {
+        return AssertChild(assert_path);
+    }
     RingBoundsMaxVertOut();
     MaxVertOutWhenRingIsLarger();
     MaxVertOutWithoutRingLayout();
@@ -248,7 +295,9 @@ int main(int argc, char** argv) {
     VertexLimit();
     ImageBarrierStages();
     MemoryHeapKinds();
-    const std::string trace_path = std::string{argc > 0 ? argv[0] : "gpu_crash_trace_tests"} + ".trace.txt";
+    AssertionReachesFatalStop(self.c_str(), assert_path);
+    std::remove(assert_path.c_str());
+    const std::string trace_path = self + ".trace.txt";
     TraceIsBoundedAndPrintedOnce(trace_path.c_str());
     std::remove(trace_path.c_str());
     std::printf("%d checks, %d failures\n", g_checks, g_failures);

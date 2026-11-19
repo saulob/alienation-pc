@@ -10,6 +10,9 @@
 
 typedef enum { ALN_FAULT_IGNORE, ALN_FAULT_CRASH } AlnFaultAction;
 
+/* The exception code of a STOP (runtime_log_fatal) in the report and the minidump. */
+#define ALN_CRASH_FATAL_STOP 0xE0000023u
+
 typedef struct {
     /* The detailed report, on the crashing thread, after the one-line report. Optional. */
     void (*detail)(EXCEPTION_POINTERS *info);

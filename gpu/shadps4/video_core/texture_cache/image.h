@@ -12,6 +12,7 @@
 
 #include <atomic>
 #include <deque>
+#include <functional>
 #include <optional>
 #include <boost/container/small_vector.hpp>
 #include <boost/container/static_vector.hpp>
@@ -23,6 +24,8 @@ class Runtime;
 
 VK_DEFINE_HANDLE(VmaAllocation)
 VK_DEFINE_HANDLE(VmaAllocator)
+
+struct VmaAllocationCreateInfo;
 
 namespace VideoCore {
 
@@ -41,6 +44,11 @@ DECLARE_ENUM_FLAG_OPERATORS(ImageFlagBits)
 
 /// Bytes held by live UniqueImages (VMA allocation sizes), whoever owns them.
 inline std::atomic<u64> device_image_bytes{0};
+
+/// Allocates through `attempt`: within the memory budget, then over it, then in system memory, so a
+/// full card degrades performance instead of ending the game. Returns the last attempt's result.
+VkResult AllocateImageWithFallback(const vk::ImageCreateInfo& image_ci,
+                                   const std::function<VkResult(const VmaAllocationCreateInfo&)>& attempt);
 
 struct UniqueImage {
     explicit UniqueImage() = default;

@@ -18,6 +18,19 @@ void runtime_log_mark_clean_exit(void) { clean_exit = 1; }
 
 void runtime_log_mark_crash(void) { crash_reported = 1; }
 
+static void (*fatal_reporter)(const char *what, int status);
+
+void runtime_log_set_fatal_reporter(void (*reporter)(const char *what, int status)) { fatal_reporter = reporter; }
+
+void runtime_log_fatal(const char *what, int status) {
+    runtime_log_mark_crash();
+    if (fatal_reporter) fatal_reporter(what, status);
+    fprintf(stderr, "Runtime: %s; the process ends with status %d\n", what, status);
+    fflush(NULL);
+    runtime_log_flush();
+    _Exit(status);
+}
+
 void runtime_log_set_session_path(const char *path) {
     snprintf(session_log_path, sizeof(session_log_path), "%s", path ? path : "");
     clean_exit = 0;

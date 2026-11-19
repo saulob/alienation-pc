@@ -78,7 +78,7 @@ Globals& State() { return globals; }
 [[noreturn]] void Stop(const char* what) {
     std::fprintf(stderr, "STOP: %s\n", what);
     runtime_report();
-    runtime_exit(21);
+    runtime_stop(21);
 }
 
 void Construct(String& s, const std::string& text) { s.text = new std::string(text); }

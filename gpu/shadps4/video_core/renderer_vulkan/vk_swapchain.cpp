@@ -135,16 +135,21 @@ void Swapchain::SetHDR(bool hdr) {
                                                  : surface_format.format);
 }
 
+bool AcquireHandsOutImage(vk::Result result) {
+    return result == vk::Result::eSuccess || result == vk::Result::eSuboptimalKHR;
+}
+
 bool Swapchain::AcquireNextImage() {
     vk::Device device = instance.GetDevice();
     vk::Result result =
         device.acquireNextImageKHR(swapchain, std::numeric_limits<u64>::max(),
                                    image_acquired[frame_index], VK_NULL_HANDLE, &image_index);
 
+    if (AcquireHandsOutImage(result)) {
+        needs_recreation |= result == vk::Result::eSuboptimalKHR;
+        return true;
+    }
     switch (result) {
-    case vk::Result::eSuccess:
-        break;
-    case vk::Result::eSuboptimalKHR:
     case vk::Result::eErrorSurfaceLostKHR:
     case vk::Result::eErrorOutOfDateKHR:
     case vk::Result::eErrorUnknown:
