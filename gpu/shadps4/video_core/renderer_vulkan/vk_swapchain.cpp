@@ -156,7 +156,8 @@ bool Swapchain::AcquireNextImage() {
         needs_recreation = true;
         break;
     default:
-        Common::GpuTrace::VulkanFailure("acquire", s32(result));
+        Common::GpuTrace::VulkanFailure("acquire", s32(result), 0,
+                                        Common::GpuTrace::Timeline::Present);
         ASSERT_MSG(false, "Swapchain image acquisition failed: {}", vk::to_string(result));
         break;
     }
@@ -177,7 +178,8 @@ bool Swapchain::Present() {
     if (result == vk::Result::eErrorOutOfDateKHR || result == vk::Result::eSuboptimalKHR) {
         needs_recreation = true;
     } else if (result != vk::Result::eSuccess) {
-        Common::GpuTrace::VulkanFailure("present", s32(result));
+        Common::GpuTrace::VulkanFailure("present", s32(result), 0,
+                                        Common::GpuTrace::Timeline::Present);
         ASSERT_MSG(false, "Swapchain presentation failed: {}", vk::to_string(result));
     }
 

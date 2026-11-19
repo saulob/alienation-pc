@@ -28,8 +28,10 @@ namespace Vulkan {
 
 std::mutex Scheduler::submit_mutex;
 
-Scheduler::Scheduler(const Instance& instance, bool threaded_recording)
-    : instance{instance}, work_semaphore{instance}, command_pool{instance, &work_semaphore} {
+Scheduler::Scheduler(const Instance& instance, bool threaded_recording,
+                     Common::GpuTrace::Timeline timeline)
+    : instance{instance}, work_semaphore{instance, timeline},
+      command_pool{instance, &work_semaphore} {
     if (threaded_recording) {
         record_chunk = AcquireChunk();
         recorder_thread = std::jthread([this](std::stop_token stop) { RecorderThread(stop); });
@@ -533,15 +535,19 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
 
     ImGui::Core::TextureManager::Submit();
     auto submit_result = instance.GetGraphicsQueue().submit(submit_info, info.fence);
+    const auto trace_timeline = work_semaphore.GetTimeline();
     Common::GpuTrace::Record(Common::GpuTrace::Event::Submit, signal_value, info.num_wait_semas,
-                             info.num_wait_semas ? info.wait_ticks[0] : 0, u32(submit_result));
-    Common::GpuTrace::SetSubmittedTick(signal_value);
-    Common::GpuTrace::SetPendingWork(num_pending_ops.load(std::memory_order_relaxed),
-                                     queued_chunks.load(std::memory_order_relaxed));
-    Common::GpuTrace::SetRecordingOwner(recording_owner.Owner(), recording_owner.Changes(),
-                                        recording_takeovers.load(std::memory_order_relaxed));
+                             info.num_wait_semas ? info.wait_ticks[0] : 0,
+                             u32(submit_result) | u64(trace_timeline) << 32);
+    Common::GpuTrace::SetSubmittedTick(trace_timeline, signal_value);
+    if (trace_timeline == Common::GpuTrace::Timeline::Draw) {
+        Common::GpuTrace::SetPendingWork(num_pending_ops.load(std::memory_order_relaxed),
+                                         queued_chunks.load(std::memory_order_relaxed));
+        Common::GpuTrace::SetRecordingOwner(recording_owner.Owner(), recording_owner.Changes(),
+                                            recording_takeovers.load(std::memory_order_relaxed));
+    }
     if (submit_result != vk::Result::eSuccess) {
-        Common::GpuTrace::VulkanFailure("submit", s32(submit_result), signal_value);
+        Common::GpuTrace::VulkanFailure("submit", s32(submit_result), signal_value, trace_timeline);
     }
     ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
     ASSERT_MSG(submit_result == vk::Result::eSuccess, "Queue submit failed: {}",

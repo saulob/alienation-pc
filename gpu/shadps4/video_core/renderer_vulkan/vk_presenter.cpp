@@ -134,7 +134,9 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
     : window{window_}, liverpool{liverpool_},
       instance{window, EmulatorSettings.GetGpuId(), EmulatorSettings.IsVkValidationEnabled(),
                EmulatorSettings.IsVkCrashDiagnosticEnabled()},
-      draw_scheduler{instance, true}, present_scheduler{instance}, flip_scheduler{instance},
+      draw_scheduler{instance, true},
+      present_scheduler{instance, false, Common::GpuTrace::Timeline::Present},
+      flip_scheduler{instance, false, Common::GpuTrace::Timeline::Flip},
       swapchain{instance, window}, runtime{instance, draw_scheduler},
       rasterizer{std::make_unique<Rasterizer>(instance, draw_scheduler, runtime, liverpool)},
       texture_cache{rasterizer->GetTextureCache()} {
@@ -283,7 +285,8 @@ Frame* Presenter::PrepareLastFrame() {
         if (result == vk::Result::eTimeout) {
             continue;
         }
-        Common::GpuTrace::VulkanFailure("frmfence", s32(result));
+        Common::GpuTrace::VulkanFailure("frmfence", s32(result), 0,
+                                        Common::GpuTrace::Timeline::Present);
         ASSERT_MSG(result != vk::Result::eErrorDeviceLost,
                    "Device lost during waiting for a frame");
         UNREACHABLE_MSG("Frame fence wait failed: {}", vk::to_string(result));
@@ -768,7 +771,8 @@ Frame* Presenter::GetRenderFrame() {
         if (result == vk::Result::eTimeout) {
             continue;
         }
-        Common::GpuTrace::VulkanFailure("prsfence", s32(result));
+        Common::GpuTrace::VulkanFailure("prsfence", s32(result), 0,
+                                        Common::GpuTrace::Timeline::Present);
         ASSERT_MSG(result != vk::Result::eErrorDeviceLost,
                    "Device lost during waiting for a frame");
         UNREACHABLE_MSG("Present fence wait failed: {}", vk::to_string(result));

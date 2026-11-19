@@ -7,6 +7,7 @@
 #include <condition_variable>
 #include <thread>
 #include <queue>
+#include "common/gpu_trace.h"
 #include "common/types.h"
 #include "video_core/renderer_vulkan/vk_common.h"
 
@@ -17,7 +18,8 @@ class Scheduler;
 
 class Semaphore {
 public:
-    explicit Semaphore(const Instance& instance_);
+    explicit Semaphore(const Instance& instance_,
+                       Common::GpuTrace::Timeline timeline_ = Common::GpuTrace::Timeline::Draw);
     ~Semaphore();
 
     [[nodiscard]] u64 CurrentTick() const noexcept {
@@ -40,6 +42,10 @@ public:
         return semaphore.get();
     }
 
+    [[nodiscard]] Common::GpuTrace::Timeline GetTimeline() const noexcept {
+        return timeline;
+    }
+
     /// Refresh the known GPU tick
     void Refresh();
 
@@ -48,6 +54,7 @@ public:
 
 protected:
     const Instance& instance;
+    Common::GpuTrace::Timeline timeline;
     vk::UniqueSemaphore semaphore;    ///< Timeline semaphore.
     std::atomic<u64> gpu_tick{0};     ///< Current known GPU tick.
     std::atomic<u64> current_tick{1}; ///< Current logical tick.

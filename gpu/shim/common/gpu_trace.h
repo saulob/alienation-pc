@@ -25,13 +25,16 @@ enum class Event : u32 {
 
 enum class PipelineKind : u64 { Graphics = 1, Compute = 2 };
 
+// Each timeline semaphore counts its own ticks: a tick is only meaningful with its timeline.
+enum class Timeline : u32 { Draw, Present, Flip, SparseBind, Count };
+
 // AllocationFallback third argument.
 enum class Fallback : u64 { ImageOverBudget = 1, ImageInSystemMemory = 2, BufferOverBudget = 3 };
 
 void Record(Event event, u64 a = 0, u64 b = 0, u64 c = 0, u64 d = 0) noexcept;
 
-// Shaders recorded into the submission being built. A pipeline notes itself once per generation;
-// SetSubmittedTick keeps the set under that tick and starts a new generation.
+// Shaders recorded into the draw submission being built. A pipeline notes itself once per
+// generation; a draw-timeline SetSubmittedTick keeps the set under that tick and starts a new one.
 u64 ShaderGeneration() noexcept;
 void NoteShaders(PipelineKind kind, u64 first, u64 second = 0, u64 third = 0) noexcept;
 
@@ -42,8 +45,8 @@ u32 CurrentThreadId() noexcept;
 // The thread's description (host threads name themselves), or "unnamed".
 void ThreadName(u32 tid, char* out, size_t size) noexcept;
 
-void SetSubmittedTick(u64 tick) noexcept;
-void SetCompletedTick(u64 tick) noexcept;
+void SetSubmittedTick(Timeline timeline, u64 tick) noexcept;
+void SetCompletedTick(Timeline timeline, u64 tick) noexcept;
 void SetPendingWork(u64 pending_operations, u64 queued_record_chunks) noexcept;
 // Recording owner thread at the last submission, how often ownership changed, and how many
 // changes were takeovers by the GPU command thread with the draw pipeline idle.
@@ -60,7 +63,8 @@ void SetDispatchSummary(const char* summary) noexcept;
 void SetFaultReporter(void (*reporter)()) noexcept;
 
 // Records a fatal VkResult and prints the trace once.
-void VulkanFailure(const char* where, s32 vk_result, u64 tick = 0) noexcept;
+void VulkanFailure(const char* where, s32 vk_result, u64 tick = 0,
+                   Timeline timeline = Timeline::Draw) noexcept;
 void Dump(const char* reason) noexcept;
 
 constexpr u64 PackGroups(u32 x, u32 y, u32 z) noexcept {

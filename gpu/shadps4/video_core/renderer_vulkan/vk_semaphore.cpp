@@ -12,7 +12,8 @@ namespace Vulkan {
 
 constexpr u64 WAIT_TIMEOUT = std::numeric_limits<u64>::max();
 
-Semaphore::Semaphore(const Instance& instance_) : instance{instance_} {
+Semaphore::Semaphore(const Instance& instance_, Common::GpuTrace::Timeline timeline_)
+    : instance{instance_}, timeline{timeline_} {
     const vk::StructureChain semaphore_chain = {
         vk::SemaphoreCreateInfo{},
         vk::SemaphoreTypeCreateInfo{
@@ -36,7 +37,7 @@ void Semaphore::Refresh() {
         this_tick = gpu_tick.load(std::memory_order_acquire);
         auto [counter_result, cntr] = instance.GetDevice().getSemaphoreCounterValue(*semaphore);
         if (counter_result != vk::Result::eSuccess) {
-            Common::GpuTrace::VulkanFailure("semread", s32(counter_result), this_tick);
+            Common::GpuTrace::VulkanFailure("semread", s32(counter_result), this_tick, timeline);
         }
         ASSERT_MSG(counter_result == vk::Result::eSuccess,
                    "Failed to get master semaphore value: {}", vk::to_string(counter_result));
@@ -44,7 +45,7 @@ void Semaphore::Refresh() {
         if (counter < this_tick) {
             return;
         }
-        Common::GpuTrace::SetCompletedTick(counter);
+        Common::GpuTrace::SetCompletedTick(timeline, counter);
     } while (!gpu_tick.compare_exchange_weak(this_tick, counter, std::memory_order_release,
                                              std::memory_order_relaxed));
 }
@@ -67,7 +68,8 @@ void Semaphore::Wait(u64 tick) {
         .pValues = &tick,
     };
 
-    Common::GpuTrace::Record(Common::GpuTrace::Event::BlockingWait, tick, gpu_tick.load());
+    Common::GpuTrace::Record(Common::GpuTrace::Event::BlockingWait, tick, gpu_tick.load(),
+                             u64(timeline));
     for (;;) {
         const vk::Result result = instance.GetDevice().waitSemaphores(&wait_info, WAIT_TIMEOUT);
         if (result == vk::Result::eSuccess) {
@@ -76,7 +78,7 @@ void Semaphore::Wait(u64 tick) {
         if (result == vk::Result::eTimeout) {
             continue;
         }
-        Common::GpuTrace::VulkanFailure("semwait", s32(result), tick);
+        Common::GpuTrace::VulkanFailure("semwait", s32(result), tick, timeline);
         ASSERT_MSG(result != vk::Result::eErrorDeviceLost, "Device lost while waiting for the GPU");
         UNREACHABLE_MSG("Timeline semaphore wait failed: {}", vk::to_string(result));
     }

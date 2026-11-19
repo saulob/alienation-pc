@@ -136,18 +136,29 @@ void TraceIsBoundedAndPrintedOnce(const char* path) {
 
     // ALN-2RDFRU: one tick outstanding (34967 submitted, 34966 completed). The trace names every pipeline
     // recorded into it, not only the last recorded draw and dispatch; completed ticks are left out.
+    // ALN-GLZYXD: the present and flip schedulers and the sparse binds count their own ticks. A present
+    // submission between the draw thread's pipelines and its submit neither keeps nor drops them, and no
+    // timeline's ticks stand for another's in the header.
     NoteShaders(PipelineKind::Compute, 0x8c0c9537);
-    SetSubmittedTick(34966);
+    SetSubmittedTick(Timeline::Draw, 34966);
     const u64 generation = ShaderGeneration();
     NoteShaders(PipelineKind::Compute, 0x7d39f28a);
     NoteShaders(PipelineKind::Graphics, 0xba848b76, 0, 0xb1b00b34);
+    Record(Event::Submit, 9091, 1, 34966, u64(Timeline::Present) << 32);
+    SetSubmittedTick(Timeline::Present, 9091);
+    SetSubmittedTick(Timeline::SparseBind, 213);
     NoteShaders(PipelineKind::Compute, 0x03813bb4);
-    SetSubmittedTick(34967);
+    SetSubmittedTick(Timeline::Draw, 34967);
     CHECK(ShaderGeneration() == generation + 1);
+    Record(Event::Submit, 9092, 1, 34967, u64(Timeline::Present) << 32);
+    SetSubmittedTick(Timeline::Present, 9092);
     for (u64 i = 0; i < 70; ++i) {
         NoteShaders(PipelineKind::Compute, 0x11110000 + i);
     }
-    SetCompletedTick(34966);
+    SetCompletedTick(Timeline::Draw, 34966);
+    SetCompletedTick(Timeline::SparseBind, 212);
+    SetCompletedTick(Timeline::Present, 9090);
+    Record(Event::BlockingWait, 34967, 34966, u64(Timeline::Draw));
     SetLastDispatch(0xabcd, 8, 4, 1);
     SetPendingWork(3, 2);
     SetDispatchSummary("vkQueueSubmit test.dll, vkCmdDraw driver.dll");
@@ -167,9 +178,17 @@ void TraceIsBoundedAndPrintedOnce(const char* path) {
     CHECK(text.find("second dump") == std::string::npos);
     CHECK(text.find("Test GPU (driver 1.0, Vulkan 1.3)") != std::string::npos);
     CHECK(text.find("VK_LAYER_TEST") != std::string::npos);
-    CHECK(text.find("last submitted tick 34967, last completed tick 34966") != std::string::npos);
+    CHECK(text.find("draw timeline: last submitted tick 34967, last completed tick 34966") != std::string::npos);
+    CHECK(text.find("present timeline: last submitted tick 9092, last completed tick 9090") != std::string::npos);
+    CHECK(text.find("sparse bind timeline: last submitted tick 213, last completed tick 212") !=
+          std::string::npos);
+    CHECK(text.find("flip timeline") == std::string::npos);
+    CHECK(text.find("present submit tick 9092, 1 waits (first 34967)") != std::string::npos);
+    CHECK(text.find("blocking wait for draw tick 34967 (completed 34966)") != std::string::npos);
+    CHECK(text.find("tick 9091 was not completed") == std::string::npos);
+    CHECK(text.find("tick 9092 was not completed") == std::string::npos);
     CHECK(text.find("cs 0x0000abcd groups 8x4x1") != std::string::npos);
-    CHECK(text.find("DEVICE LOST at semwait, result -4, tick 34967") != std::string::npos);
+    CHECK(text.find("DEVICE LOST at semwait, result -4, draw tick 34967") != std::string::npos);
     // The ring keeps the newest 512 events: the early shader compile is gone, the last submits stay.
     CHECK(text.find("replay was inside a command recorded at vk_rasterizer.cpp:1234") != std::string::npos);
     CHECK(text.find("Vulkan dispatch vkQueueSubmit test.dll, vkCmdDraw driver.dll") != std::string::npos);
@@ -199,7 +218,7 @@ void TraceIsBoundedAndPrintedOnce(const char* path) {
           std::string::npos);
     CHECK(text.find("detected on thread " + std::to_string(CurrentThreadId()) + " (") !=
           std::string::npos);
-    CHECK(Count(text, " submit tick ") == 503);
+    CHECK(Count(text, " submit tick ") == 502);
     CHECK(text.find("submit tick 2000,") != std::string::npos);
     CHECK(text.find("compile gs") == std::string::npos);
 }

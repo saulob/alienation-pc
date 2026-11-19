@@ -62,7 +62,7 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
       memory_tracker{std::make_unique<MemoryTracker>(tracker)},
       stream_buffer{instance, scheduler, MemoryType::Stream, STREAM_BUFFER_SIZE},
       gds_buffer{instance, 0, GDS_BUFFER_SIZE, MemoryType::Stream, "GDS Buffer"},
-      memory_semaphore{instance} {
+      memory_semaphore{instance, Common::GpuTrace::Timeline::SparseBind} {
     while (arena_page_bits > MIN_ARENA_PAGE_BITS &&
            (u64{2} << arena_page_bits) > instance.GetMaxBufferSize()) {
         --arena_page_bits;
@@ -642,8 +642,10 @@ void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
     auto submit_result = instance.GetGraphicsQueue().bindSparse(sparse_info);
     Common::GpuTrace::Record(Common::GpuTrace::Event::SparseBind, signal_tick, buffer_binds.size(),
                              u32(submit_result));
+    Common::GpuTrace::SetSubmittedTick(Common::GpuTrace::Timeline::SparseBind, signal_tick);
     if (submit_result != vk::Result::eSuccess) {
-        Common::GpuTrace::VulkanFailure("sparse", s32(submit_result), signal_tick);
+        Common::GpuTrace::VulkanFailure("sparse", s32(submit_result), signal_tick,
+                                        Common::GpuTrace::Timeline::SparseBind);
     }
     ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
     ASSERT_MSG(submit_result == vk::Result::eSuccess, "Sparse bind failed: {}",

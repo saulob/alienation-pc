@@ -27,8 +27,24 @@ struct Entry {
 
 std::array<Entry, Capacity> ring;
 std::atomic<u64> next_seq{1};
-std::atomic<u64> submitted_tick{};
-std::atomic<u64> completed_tick{};
+constexpr u32 NumTimelines = u32(Timeline::Count);
+std::array<std::atomic<u64>, NumTimelines> submitted_ticks{};
+std::array<std::atomic<u64>, NumTimelines> completed_ticks{};
+
+const char* TimelineName(u64 timeline) noexcept {
+    switch (Timeline(timeline)) {
+    case Timeline::Draw:
+        return "draw";
+    case Timeline::Present:
+        return "present";
+    case Timeline::Flip:
+        return "flip";
+    case Timeline::SparseBind:
+        return "sparse bind";
+    default:
+        return "unknown";
+    }
+}
 std::atomic<u64> pending_operations{}, queued_record_chunks{};
 std::atomic<u32> recording_owner{};
 std::atomic<u64> ownership_changes{}, ownership_takeovers{};
@@ -163,8 +179,9 @@ void PrintEntry(u64 seq, Event event, u32 thread, const u64 (&a)[4]) noexcept {
     char tag[9];
     switch (event) {
     case Event::Submit:
-        std::fprintf(stderr, "  #%llu tid %u submit tick %llu, %llu waits (first %llu), result %lld\n",
-                     (unsigned long long)seq, thread, (unsigned long long)a[0],
+        std::fprintf(stderr,
+                     "  #%llu tid %u %s submit tick %llu, %llu waits (first %llu), result %lld\n",
+                     (unsigned long long)seq, thread, TimelineName(a[3] >> 32), (unsigned long long)a[0],
                      (unsigned long long)a[1], (unsigned long long)a[2], (long long)(s32)a[3]);
         break;
     case Event::SparseBind:
@@ -173,8 +190,8 @@ void PrintEntry(u64 seq, Event event, u32 thread, const u64 (&a)[4]) noexcept {
                      (unsigned long long)a[1], (long long)(s32)a[2]);
         break;
     case Event::BlockingWait:
-        std::fprintf(stderr, "  #%llu tid %u blocking wait for tick %llu (completed %llu)\n",
-                     (unsigned long long)seq, thread, (unsigned long long)a[0],
+        std::fprintf(stderr, "  #%llu tid %u blocking wait for %s tick %llu (completed %llu)\n",
+                     (unsigned long long)seq, thread, TimelineName(a[2]), (unsigned long long)a[0],
                      (unsigned long long)a[1]);
         break;
     case Event::ShaderCompile:
@@ -252,10 +269,10 @@ void PrintEntry(u64 seq, Event event, u32 thread, const u64 (&a)[4]) noexcept {
         break;
     case Event::VulkanFailure:
         PrintTag(tag, a[0]);
-        std::fprintf(stderr, "  #%llu tid %u %s at %s, result %lld, tick %llu\n",
+        std::fprintf(stderr, "  #%llu tid %u %s at %s, result %lld, %s tick %llu\n",
                      (unsigned long long)seq, thread,
                      s32(a[1]) == DeviceLostResult ? "DEVICE LOST" : "Vulkan failure", tag,
-                     (long long)(s32)a[1], (unsigned long long)a[2]);
+                     (long long)(s32)a[1], TimelineName(a[3]), (unsigned long long)a[2]);
         break;
     }
 }
@@ -335,13 +352,15 @@ void ThreadName(u32 tid, char* out, size_t size) noexcept {
 #endif
 }
 
-void SetSubmittedTick(u64 tick) noexcept {
-    KeepRecordedShaders(tick);
-    submitted_tick.store(tick, std::memory_order_relaxed);
+void SetSubmittedTick(Timeline timeline, u64 tick) noexcept {
+    if (timeline == Timeline::Draw) {
+        KeepRecordedShaders(tick);
+    }
+    submitted_ticks[u32(timeline)].store(tick, std::memory_order_relaxed);
 }
 
-void SetCompletedTick(u64 tick) noexcept {
-    completed_tick.store(tick, std::memory_order_relaxed);
+void SetCompletedTick(Timeline timeline, u64 tick) noexcept {
+    completed_ticks[u32(timeline)].store(tick, std::memory_order_relaxed);
 }
 
 void SetPendingWork(u64 operations, u64 record_chunks) noexcept {
@@ -387,8 +406,8 @@ void SetFaultReporter(void (*reporter)()) noexcept {
     fault_reporter.store(reporter, std::memory_order_release);
 }
 
-void VulkanFailure(const char* where, s32 vk_result, u64 tick) noexcept {
-    Record(Event::VulkanFailure, Tag(where), u64(u32(vk_result)), tick);
+void VulkanFailure(const char* where, s32 vk_result, u64 tick, Timeline timeline) noexcept {
+    Record(Event::VulkanFailure, Tag(where), u64(u32(vk_result)), tick, u64(timeline));
     Dump(vk_result == DeviceLostResult ? "Vulkan device lost" : "Vulkan operation failed");
     if (auto* reporter = fault_reporter.load(std::memory_order_acquire);
         reporter && !fault_reported.exchange(true)) {
@@ -411,9 +430,16 @@ void Dump(const char* reason) noexcept {
                  layer_summary[0] ? layer_summary : "unknown");
     std::fprintf(stderr, "GPU trace: Vulkan dispatch %s\n",
                  dispatch_summary[0] ? dispatch_summary : "unknown");
-    std::fprintf(stderr, "GPU trace: last submitted tick %llu, last completed tick %llu\n",
-                 (unsigned long long)submitted_tick.load(std::memory_order_relaxed),
-                 (unsigned long long)completed_tick.load(std::memory_order_relaxed));
+    for (u32 timeline = 0; timeline < NumTimelines; ++timeline) {
+        const u64 submitted = submitted_ticks[timeline].load(std::memory_order_relaxed);
+        if (submitted == 0 && timeline != u32(Timeline::Draw)) {
+            continue;
+        }
+        std::fprintf(stderr,
+                     "GPU trace: %s timeline: last submitted tick %llu, last completed tick %llu\n",
+                     TimelineName(timeline), (unsigned long long)submitted,
+                     (unsigned long long)completed_ticks[timeline].load(std::memory_order_relaxed));
+    }
     std::fprintf(stderr, "GPU trace: at the last submission %llu operations waited for GPU ticks, "
                          "%llu recorded chunks were queued\n",
                  (unsigned long long)pending_operations.load(std::memory_order_relaxed),
@@ -427,8 +453,8 @@ void Dump(const char* reason) noexcept {
                  (unsigned long long)last_cs.load(std::memory_order_relaxed),
                  (unsigned long long)(dims & 0x1FFFFF), (unsigned long long)((dims >> 21) & 0x1FFFFF),
                  (unsigned long long)((dims >> 42) & 0x1FFFFF));
-    PrintUnfinishedShaders(submitted_tick.load(std::memory_order_relaxed),
-                           completed_tick.load(std::memory_order_relaxed));
+    PrintUnfinishedShaders(submitted_ticks[u32(Timeline::Draw)].load(std::memory_order_relaxed),
+                           completed_ticks[u32(Timeline::Draw)].load(std::memory_order_relaxed));
     if (const char* file = replay_file.load(std::memory_order_relaxed)) {
         std::fprintf(stderr, "GPU trace: command buffer replay was inside a command recorded at %s:%u\n",
                      file, replay_line.load(std::memory_order_relaxed));
