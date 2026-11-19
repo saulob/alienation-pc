@@ -1,5 +1,5 @@
-// Renderer resource lifetime under graphics load: the texture cache's eviction pass and LRU list, the image
-// allocation fallback and the swapchain acquire rule. Production code with stand-in images: no Vulkan device.
+// Renderer resource lifetime under graphics load: the texture cache's eviction pass and LRU list, sampler lifetime,
+// the image allocation fallback and the swapchain acquire rule. Production code with stand-in images: no Vulkan device.
 #include <atomic>
 #include <cstdio>
 #include <random>
@@ -58,7 +58,7 @@ struct ImageCache {
     }
 
     GcRun Collect(u64 gc_tick, const GcLimits& limits) {
-        return CollectImages(
+        return CollectUnused(
             lru, gc_tick, limits, [this] { return usage; },
             [this](u32 id) { return images[id].pinned ? GcCandidate::Pinned : GcCandidate::Free; },
             [this](u32 id, bool) {
@@ -226,6 +226,94 @@ void SuboptimalImagesArePresented() {
     CHECK(!Vulkan::AcquireHandsOutImage(vk::Result::eTimeout));
 }
 
+// Samplers as the texture cache keeps them: each draw that binds one stamps it with the draw tick being recorded;
+// the collector may only destroy one whose last draw the GPU has finished.
+struct SamplerCache {
+    Lru lru;
+    std::vector<u64> last_use;
+    std::vector<size_t> lru_ids;
+    std::vector<bool> alive;
+    u64 live = 0;
+    u64 gpu_done = 0;
+    size_t destroyed_in_flight = 0;
+
+    u32 Create(u64 draw_tick, u64 gc_tick) {
+        const u32 id = static_cast<u32>(last_use.size());
+        last_use.push_back(draw_tick);
+        lru_ids.push_back(lru.Insert(id, gc_tick));
+        alive.push_back(true);
+        ++live;
+        return id;
+    }
+
+    void Use(u32 id, u64 draw_tick, u64 gc_tick) {
+        last_use[id] = draw_tick;
+        lru.Touch(lru_ids[id], gc_tick);
+    }
+
+    void Collect(u64 gc_tick, const GcLimits& limits) {
+        CollectUnused(
+            lru, gc_tick, limits, [this] { return live; },
+            [this](u32 id) { return gpu_done >= last_use[id] ? GcCandidate::Free : GcCandidate::Pinned; },
+            [this](u32 id, bool) {
+                destroyed_in_flight += last_use[id] > gpu_done;
+                alive[id] = false;
+                lru.Free(lru_ids[id]);
+                --live;
+            });
+    }
+};
+
+// ALN-GKAQG9: samplers used to be destroyed on LRU age alone, while a recorded draw could still use them.
+void SamplersOutliveTheirDraws() {
+    SamplerCache cache;
+    const GcLimits limits{.pressure = 5, .critical = 8};
+    const u32 in_flight = cache.Create(100, 0);
+    for (int i = 0; i < 9; ++i) {
+        cache.Create(50, 0);
+    }
+    cache.gpu_done = 99;
+    cache.Collect(1000, limits);
+    CHECK(cache.alive[in_flight]);
+    CHECK(cache.destroyed_in_flight == 0);
+    cache.gpu_done = 100;
+    cache.Collect(2000, limits);
+    CHECK(!cache.alive[in_flight]);
+}
+
+void SamplerStressStaysBoundedAndSafe() {
+    SamplerCache cache;
+    const GcLimits limits{.pressure = 3500, .critical = 3750};
+    constexpr u64 trigger = 3000;
+    std::mt19937 random{3};
+    std::vector<u32> hot;
+    for (int i = 0; i < 64; ++i) {
+        hot.push_back(cache.Create(1, 0));
+    }
+    u64 worst = 0;
+    for (u64 gc_tick = 1; gc_tick <= 6000; ++gc_tick) {
+        const u64 draw_tick = gc_tick * 3;
+        for (u32 id : hot) {
+            cache.Use(id, draw_tick, gc_tick);
+        }
+        for (int i = 0; i < 8; ++i) {
+            cache.Create(draw_tick - random() % 3, gc_tick);
+        }
+        cache.gpu_done = draw_tick - 4;
+        if (cache.live >= trigger) {
+            cache.Collect(gc_tick, limits);
+        }
+        worst = std::max(worst, cache.live);
+    }
+    std::printf("  samplers: %zu created, %llu live at most, %zu destroyed while in use\n", cache.last_use.size(),
+                (unsigned long long)worst, cache.destroyed_in_flight);
+    CHECK(cache.destroyed_in_flight == 0);
+    CHECK(worst < 4000);
+    for (u32 id : hot) {
+        CHECK(cache.alive[id]);
+    }
+}
+
 } // namespace
 
 int main() {
@@ -237,6 +325,8 @@ int main() {
     ConcurrentTouchAndFreeKeepTheListWhole();
     FrameImagesFallBackLikeOtherImages();
     SuboptimalImagesArePresented();
+    SamplersOutliveTheirDraws();
+    SamplerStressStaysBoundedAndSafe();
     std::printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

@@ -1298,10 +1298,11 @@ vk::Sampler TextureCache::GetSampler(const AmdGpu::Sampler& sampler,
     const auto [it, new_sampler] = samplers.try_emplace(hash, instance, sampler, border_color_base,
                                                         is_depth, extra_lod_bias);
     if (new_sampler) {
-        samplers.at(hash).lru_id = sampler_lru_cache.Insert(hash, gc_tick);
+        it.value().lru_id = sampler_lru_cache.Insert(hash, gc_tick);
     } else {
         sampler_lru_cache.Touch(it->second.lru_id, gc_tick);
     }
+    it.value().last_use_tick = scheduler.CurrentTick();
 
     return it->second.Handle();
 }
@@ -1521,7 +1522,7 @@ void TextureCache::GarbageCollectImages() {
         FreeImage(image_id);
     };
     const GcRun run =
-        CollectImages(lru_cache, gc_tick, {pressure_gc_memory, critical_gc_memory},
+        CollectUnused(lru_cache, gc_tick, {pressure_gc_memory, critical_gc_memory},
                       [this] { return total_used_memory; }, classify, evict);
     const bool pressured = run.pressured;
     // aln: evictions under memory pressure, at most every 5 s (ALN_FRAME_STATS or not).
@@ -1560,38 +1561,18 @@ void TextureCache::GarbageCollectSamplers() {
         return;
     }
     std::scoped_lock lock{samplers_mutex};
-    bool pressured = false;
-    bool aggresive = false;
-    u64 ticks_to_destroy = 0;
-    size_t num_deletions = 0;
-
-    const auto configure = [&](bool allow_aggressive) {
-        pressured = total_used_samplers >= pressure_gc_samplers;
-        aggresive = allow_aggressive && total_used_samplers >= critical_gc_samplers;
-        ticks_to_destroy = aggresive ? 160 : pressured ? 80 : 16;
-        ticks_to_destroy = std::min(ticks_to_destroy, gc_tick);
-        num_deletions = aggresive ? 40 : pressured ? 20 : 10;
+    // A sampler a recorded draw still uses lives until the GPU has finished that draw.
+    const auto classify = [this](u64 hash) {
+        return scheduler.IsFree(samplers.at(hash).last_use_tick) ? GcCandidate::Free
+                                                                 : GcCandidate::Pinned;
     };
-    const auto clean_up = [&](u64 hash) {
-        if (num_deletions == 0) {
-            return true;
-        }
-        --num_deletions;
-        const size_t lru_id = samplers.at(hash).lru_id;
+    const auto evict = [this](u64 hash, bool) {
+        sampler_lru_cache.Free(samplers.at(hash).lru_id);
         samplers.erase(hash);
-        sampler_lru_cache.Free(lru_id);
-        return false;
+        --total_used_samplers;
     };
-
-    // Try to remove anything old enough and not high priority.
-    configure(false);
-    sampler_lru_cache.ForEachItemBelow(gc_tick - ticks_to_destroy, clean_up);
-
-    if (total_used_samplers >= critical_gc_samplers) {
-        // If we are still over the critical limit, run an aggressive GC
-        configure(true);
-        sampler_lru_cache.ForEachItemBelow(gc_tick - ticks_to_destroy, clean_up);
-    }
+    CollectUnused(sampler_lru_cache, gc_tick, {pressure_gc_samplers, critical_gc_samplers},
+                  [this] { return total_used_samplers; }, classify, evict);
 }
 
 void TextureCache::RunGarbageCollector() {

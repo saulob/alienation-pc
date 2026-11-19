@@ -26,10 +26,10 @@ constexpr u64 GcMinimumAge(bool pressured, bool aggressive) {
 }
 
 /// One collection over `lru`, oldest first. `usage()` is read again after every eviction,
-/// `classify(id)` says what evicting the image takes and `evict(id, write_back)` frees it. Only
-/// evictions spend a pass's budget, so pinned images cannot hide younger ones behind them.
+/// `classify(id)` says what evicting the entry takes and `evict(id, write_back)` frees it. Only
+/// evictions spend a pass's budget, so pinned entries cannot hide younger ones behind them.
 template <typename Lru, typename Usage, typename Classify, typename Evict>
-GcRun CollectImages(Lru& lru, u64 gc_tick, const GcLimits& limits, Usage&& usage, Classify&& classify,
+GcRun CollectUnused(Lru& lru, u64 gc_tick, const GcLimits& limits, Usage&& usage, Classify&& classify,
                     Evict&& evict) {
     GcRun run{};
     u64 min_age = 0;

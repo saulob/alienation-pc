@@ -31,6 +31,7 @@ public:
     }
 
     size_t lru_id{};
+    u64 last_use_tick{};
 
 private:
     vk::UniqueSampler handle;
