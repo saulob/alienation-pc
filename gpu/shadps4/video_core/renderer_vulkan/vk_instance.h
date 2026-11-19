@@ -389,6 +389,9 @@ public:
         return push_descriptor_props.maxPushDescriptors;
     }
 
+    /// Buffers can be sparsely bound, partially resident, and bound on the graphics queue.
+    bool IsSparseBufferSupported() const;
+
     /// Returns the maximum size of a single VkDeviceMemory
     vk::DeviceSize MaxMemoryAllocationSize() const {
         return vk11_props.maxMemoryAllocationSize;
@@ -543,6 +546,7 @@ private:
     std::unordered_map<vk::Format, vk::FormatProperties3> format_properties;
     TracyVkCtx profiler_context{};
     u32 queue_family_index{0};
+    bool queue_sparse_binding{};
     bool custom_border_color{};
     bool fragment_shader_barycentric{};
     bool amd_shader_explicit_vertex_parameter{};

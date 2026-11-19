@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "video_core/buffer_cache/buffer_cache.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
@@ -225,7 +226,8 @@ void TileManager::RecordTilingDispatch(vk::Pipeline pipeline, const vk::Descript
     });
 }
 
-std::pair<const Buffer*, u64> TileManager::DetileImage(const VideoCore::Buffer* in_buffer,
+std::pair<const Buffer*, u64> TileManager::DetileImage(const BufferCache& buffer_cache,
+                                                       const VideoCore::Buffer* in_buffer,
                                                        u64 in_offset, const ImageInfo& info) {
     if (!info.props.is_tiled) {
         return {in_buffer, in_offset};
@@ -251,6 +253,8 @@ std::pair<const Buffer*, u64> TileManager::DetileImage(const VideoCore::Buffer* 
     };
 
     const auto staging = runtime.GetStagingPool().Request(info.guest_size, MemoryType::DeviceLocal);
+    // The params copy can wait for the GPU; faults processed then may have migrated the source arena.
+    buffer_cache.RefreshBinding(in_buffer, in_offset);
 
     scheduler.EndRendering();
     runtime.FlushBarriers();

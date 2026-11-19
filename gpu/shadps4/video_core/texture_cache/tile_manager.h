@@ -19,6 +19,7 @@ namespace VideoCore {
 
 struct ImageInfo;
 struct Image;
+class BufferCache;
 
 class TileManager {
     struct TilingKey {
@@ -51,7 +52,8 @@ public:
     void TileImage(Image& in_image, std::span<vk::BufferImageCopy> buffer_copies,
                    const VideoCore::Buffer* out_buffer, u64 out_offset);
 
-    std::pair<const Buffer*, u64> DetileImage(const VideoCore::Buffer* in_buffer, u64 in_offset,
+    std::pair<const Buffer*, u64> DetileImage(const BufferCache& buffer_cache,
+                                              const VideoCore::Buffer* in_buffer, u64 in_offset,
                                               const ImageInfo& info);
 
 private:

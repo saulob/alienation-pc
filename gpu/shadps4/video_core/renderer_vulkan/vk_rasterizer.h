@@ -285,15 +285,16 @@ private:
 
     /// ALN_GPU_PROFILE: a timestamp where a render pass starts (vk_gpu_profiler.h).
     void MarkPass(const GraphicsPipeline* pipeline, const RenderState& state);
-    void BindVertexBuffers(const GraphicsPipeline* pipeline,
-                           const PreparedDraw* prepared = nullptr);
-    void BindIndexBuffer(u32 index_offset = 0, bool is_indirect = false);
-    /// aln: BindVertexBuffers/BindIndexBuffer in two halves: obtaining the buffers
-    /// (vertex_binds, index_bind) and recording the binds.
+    /// aln: vertex and index buffers in two halves: obtaining the buffers (vertex_binds,
+    /// index_bind) and recording the binds.
     void ResolveVertexBuffers(const GraphicsPipeline* pipeline, const PreparedDraw* prepared);
     void EmitVertexBuffers();
     void ResolveIndexBuffer(u32 index_offset, bool is_indirect = false);
     void EmitIndexBuffer();
+
+    /// Points the resolved buffer bindings at the arenas now holding them; called after the last
+    /// ObtainBuffer of a command and before its bindings are recorded.
+    void RefreshArenaBindings();
 
     void ResetBindings(bool is_compute);
     bool pipeline_is_compute = false; ///< the pipeline of the current BindResources
@@ -336,6 +337,7 @@ private:
         vk::AccessFlags2 src_access;
     };
     std::vector<BoundBuffer> bound_buffers;
+    u64 bind_generation{}; ///< BufferCache::ArenaGeneration() when this command's binding began
 
     u32 set_write_index{};
     Pipeline::DescriptorWrites set_writes;

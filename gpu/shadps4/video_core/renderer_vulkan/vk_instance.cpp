@@ -18,6 +18,7 @@
 #include "aln_graphics.h"
 #include "aln_settings.h"
 #include "sdl_window.h"
+#include "video_core/buffer_cache/arena_layout.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
@@ -249,6 +250,11 @@ Instance::Instance(const Frontend::WindowSystemInfo& window_info, s32 physical_d
     CollectImageFormatInfo();
     CollectToolingInfo();
     RegisterFaultReporter(this);
+}
+
+bool Instance::IsSparseBufferSupported() const {
+    return VideoCore::ArenaLayout::SparseBuffersSupported(
+        features.sparseBinding, features.sparseResidencyBuffer, queue_sparse_binding);
 }
 
 Instance::~Instance() {
@@ -557,6 +563,8 @@ bool Instance::CreateDevice() {
         LOG_CRITICAL(Render_Vulkan, "Unable to find graphics and/or present queues.");
         return false;
     }
+    queue_sparse_binding = static_cast<bool>(family_properties[queue_family_index].queueFlags &
+                                             vk::QueueFlagBits::eSparseBinding);
 
     static constexpr std::array queue_priorities = {1.0f};
     const vk::DeviceQueueCreateInfo queue_info = {
