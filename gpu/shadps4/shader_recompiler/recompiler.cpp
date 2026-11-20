@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdio>
 #include <optional>
 #include "common/logging/classes.h"
 #include "common/shader_crash_context.h"
@@ -9,6 +10,7 @@
 #include "shader_recompiler/frontend/structured_control_flow.h"
 #include "shader_recompiler/frontend/translate/translate.h"
 #include "shader_recompiler/ir/passes/ir_passes.h"
+#include "shader_recompiler/ir/passes/spawn_loop_bound.h"
 #include "shader_recompiler/ir/post_order.h"
 #include "shader_recompiler/ir/program.h"
 #include "shader_recompiler/profile.h"
@@ -176,6 +178,10 @@ IR::Program TranslateProgram(const std::span<const u32>& code, Pools& pools, Inf
     Shader::Optimization::ConstantPropagationPass(program.post_order_blocks);
     Common::ShaderCrash::SetPass("DeadCodeEliminationPass");
     Shader::Optimization::DeadCodeEliminationPass(program);
+    Common::ShaderCrash::SetPass("BoundSpawnAppendLoops");
+    if (const u32 bounded = Optimization::BoundSpawnAppendLoops(program)) {
+        std::printf("%s\n", Optimization::SpawnLoopBoundNotice(info.pgm_hash, bounded).c_str());
+    }
     if (info.sw_stage == SwStage::Fragment && profile.needs_integer_interpolation_fix) {
         Common::ShaderCrash::SetPass("InterpolatedIntegerPass");
         Shader::Optimization::InterpolatedIntegerPass(program);

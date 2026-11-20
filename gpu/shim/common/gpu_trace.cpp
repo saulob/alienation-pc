@@ -60,18 +60,30 @@ char device_identity[256];
 char layer_summary[512];
 char dispatch_summary[384];
 
-constexpr u32 ShadersPerSet = 64;
+constexpr u32 ComputePerSet = 256;
+constexpr u32 GraphicsPerSet = 64;
+constexpr u32 GraphicsPrinted = 16;
+constexpr u32 DispatchesPerSet = 32;
 constexpr u32 KeptSets = 4;
 constexpr u32 TrackedHeaps = 16;
 
-struct ShaderUse {
-    std::atomic<u64> kind{}, first{}, second{}, third{};
+struct GraphicsUse {
+    std::atomic<u64> vs{}, gs{}, ps{};
 };
 
+struct DispatchUse {
+    std::atomic<u64> cs{}, groups{};
+};
+
+// Every distinct compute shader of a submission is kept: a hung dispatch is usually one of them.
 struct ShaderSet {
     std::atomic<u64> tick{};
-    std::atomic<u32> count{};
-    std::array<ShaderUse, ShadersPerSet> uses{};
+    std::atomic<u32> compute_count{};
+    std::atomic<u32> graphics_count{};
+    std::atomic<u64> dispatch_count{};
+    std::array<std::atomic<u64>, ComputePerSet> compute{};
+    std::array<GraphicsUse, GraphicsPerSet> graphics{};
+    std::array<DispatchUse, DispatchesPerSet> dispatches{};
 };
 
 ShaderSet recording_set;
@@ -80,42 +92,96 @@ std::atomic<u64> shader_generation{1};
 std::array<std::atomic<bool>, TrackedHeaps> heap_over{};
 std::array<std::atomic<bool>, TrackedHeaps> heap_reported{};
 
+template <typename T>
+void CopyRelaxed(std::atomic<T>& to, const std::atomic<T>& from) noexcept {
+    to.store(from.load(std::memory_order_relaxed), std::memory_order_relaxed);
+}
+
 void KeepRecordedShaders(u64 tick) noexcept {
     ShaderSet& set = submitted_sets[tick % KeptSets];
     set.tick.store(0, std::memory_order_relaxed);
-    const u32 count = recording_set.count.load(std::memory_order_relaxed);
-    for (u32 i = 0; i < std::min(count, ShadersPerSet); ++i) {
-        const ShaderUse& from = recording_set.uses[i];
-        ShaderUse& to = set.uses[i];
-        to.kind.store(from.kind.load(std::memory_order_relaxed), std::memory_order_relaxed);
-        to.first.store(from.first.load(std::memory_order_relaxed), std::memory_order_relaxed);
-        to.second.store(from.second.load(std::memory_order_relaxed), std::memory_order_relaxed);
-        to.third.store(from.third.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    const u32 compute = recording_set.compute_count.load(std::memory_order_relaxed);
+    for (u32 i = 0; i < std::min(compute, ComputePerSet); ++i) {
+        CopyRelaxed(set.compute[i], recording_set.compute[i]);
     }
-    set.count.store(count, std::memory_order_relaxed);
+    const u32 graphics = recording_set.graphics_count.load(std::memory_order_relaxed);
+    for (u32 i = 0; i < std::min(graphics, GraphicsPerSet); ++i) {
+        CopyRelaxed(set.graphics[i].vs, recording_set.graphics[i].vs);
+        CopyRelaxed(set.graphics[i].gs, recording_set.graphics[i].gs);
+        CopyRelaxed(set.graphics[i].ps, recording_set.graphics[i].ps);
+    }
+    for (u32 i = 0; i < DispatchesPerSet; ++i) {
+        CopyRelaxed(set.dispatches[i].cs, recording_set.dispatches[i].cs);
+        CopyRelaxed(set.dispatches[i].groups, recording_set.dispatches[i].groups);
+    }
+    set.compute_count.store(compute, std::memory_order_relaxed);
+    set.graphics_count.store(graphics, std::memory_order_relaxed);
+    CopyRelaxed(set.dispatch_count, recording_set.dispatch_count);
     set.tick.store(tick, std::memory_order_release);
-    recording_set.count.store(0, std::memory_order_relaxed);
+    recording_set.compute_count.store(0, std::memory_order_relaxed);
+    recording_set.graphics_count.store(0, std::memory_order_relaxed);
+    recording_set.dispatch_count.store(0, std::memory_order_relaxed);
     shader_generation.fetch_add(1, std::memory_order_relaxed);
 }
 
+void PrintGroups(char* out, size_t size, u64 groups) noexcept {
+    std::snprintf(out, size, "%llux%llux%llu", (unsigned long long)(groups & 0x1FFFFF),
+                  (unsigned long long)((groups >> 21) & 0x1FFFFF),
+                  (unsigned long long)((groups >> 42) & 0x1FFFFF));
+}
+
 void PrintShaderSet(const ShaderSet& set) noexcept {
-    const u32 count = set.count.load(std::memory_order_relaxed);
-    const u32 kept = std::min(count, ShadersPerSet);
-    for (u32 i = 0; i < kept; ++i) {
-        const ShaderUse& use = set.uses[i];
-        if (use.kind.load(std::memory_order_relaxed) == u64(PipelineKind::Compute)) {
-            std::fprintf(stderr, "GPU trace:   cs %#010llx\n",
-                         (unsigned long long)use.first.load(std::memory_order_relaxed));
-        } else {
-            std::fprintf(stderr, "GPU trace:   vs %#010llx gs %#010llx ps %#010llx\n",
-                         (unsigned long long)use.first.load(std::memory_order_relaxed),
-                         (unsigned long long)use.second.load(std::memory_order_relaxed),
-                         (unsigned long long)use.third.load(std::memory_order_relaxed));
+    const u32 compute = set.compute_count.load(std::memory_order_relaxed);
+    const u32 compute_kept = std::min(compute, ComputePerSet);
+    for (u32 i = 0; i < compute_kept; i += 8) {
+        char line[160];
+        int used = std::snprintf(line, sizeof(line), "GPU trace:   cs");
+        for (u32 j = i; j < std::min(i + 8, compute_kept); ++j) {
+            used += std::snprintf(line + used, sizeof(line) - size_t(used), " %#010llx",
+                                  (unsigned long long)set.compute[j].load(std::memory_order_relaxed));
         }
+        std::fprintf(stderr, "%s\n", line);
     }
-    if (count > kept) {
-        std::fprintf(stderr, "GPU trace:   and %u more pipelines\n", count - kept);
+    if (compute > compute_kept) {
+        std::fprintf(stderr, "GPU trace:   and %u more compute pipelines\n", compute - compute_kept);
     }
+    const u32 graphics = set.graphics_count.load(std::memory_order_relaxed);
+    const u32 graphics_shown = std::min(graphics, GraphicsPrinted);
+    for (u32 i = 0; i < graphics_shown; ++i) {
+        const GraphicsUse& use = set.graphics[i];
+        std::fprintf(stderr, "GPU trace:   vs %#010llx gs %#010llx ps %#010llx\n",
+                     (unsigned long long)use.vs.load(std::memory_order_relaxed),
+                     (unsigned long long)use.gs.load(std::memory_order_relaxed),
+                     (unsigned long long)use.ps.load(std::memory_order_relaxed));
+    }
+    if (graphics > graphics_shown) {
+        std::fprintf(stderr, "GPU trace:   and %u more graphics pipelines\n", graphics - graphics_shown);
+    }
+    const u64 dispatches = set.dispatch_count.load(std::memory_order_relaxed);
+    if (dispatches == 0) {
+        return;
+    }
+    const u64 first = dispatches > DispatchesPerSet ? dispatches - DispatchesPerSet : 0;
+    std::fprintf(stderr, "GPU trace:   dispatches %llu..%llu of %llu (oldest first):\n",
+                 (unsigned long long)first + 1, (unsigned long long)dispatches,
+                 (unsigned long long)dispatches);
+    for (u64 i = first; i < dispatches; i += 4) {
+        char line[192];
+        int used = std::snprintf(line, sizeof(line), "GPU trace:    ");
+        for (u64 j = i; j < std::min(i + 4, dispatches); ++j) {
+            const DispatchUse& use = set.dispatches[j % DispatchesPerSet];
+            char groups[48];
+            PrintGroups(groups, sizeof(groups), use.groups.load(std::memory_order_relaxed));
+            used += std::snprintf(line + used, sizeof(line) - size_t(used), " cs %#010llx %s",
+                                  (unsigned long long)use.cs.load(std::memory_order_relaxed), groups);
+        }
+        std::fprintf(stderr, "%s\n", line);
+    }
+}
+
+u32 PipelineCount(const ShaderSet& set) noexcept {
+    return set.compute_count.load(std::memory_order_relaxed) +
+           set.graphics_count.load(std::memory_order_relaxed);
 }
 
 void PrintUnfinishedShaders(u64 submitted, u64 completed) noexcept {
@@ -130,12 +196,17 @@ void PrintUnfinishedShaders(u64 submitted, u64 completed) noexcept {
     std::sort(ticks.begin(), ticks.begin() + found);
     for (u32 i = 0; i < found; ++i) {
         const ShaderSet& set = submitted_sets[ticks[i] % KeptSets];
-        std::fprintf(stderr, "GPU trace: tick %llu was not completed; it recorded %u pipelines\n",
-                     (unsigned long long)ticks[i], set.count.load(std::memory_order_relaxed));
+        std::fprintf(stderr,
+                     "GPU trace: tick %llu was not completed; it recorded %u pipelines (%u compute, %u "
+                     "graphics), %llu dispatches\n",
+                     (unsigned long long)ticks[i], PipelineCount(set),
+                     set.compute_count.load(std::memory_order_relaxed),
+                     set.graphics_count.load(std::memory_order_relaxed),
+                     (unsigned long long)set.dispatch_count.load(std::memory_order_relaxed));
         PrintShaderSet(set);
     }
     std::fprintf(stderr, "GPU trace: %u pipelines recorded since the last submission\n",
-                 recording_set.count.load(std::memory_order_relaxed));
+                 PipelineCount(recording_set));
     PrintShaderSet(recording_set);
 }
 
@@ -303,15 +374,21 @@ u64 ShaderGeneration() noexcept {
 }
 
 void NoteShaders(PipelineKind kind, u64 first, u64 second, u64 third) noexcept {
-    const u32 index = recording_set.count.fetch_add(1, std::memory_order_relaxed);
-    if (index >= ShadersPerSet) {
+    if (kind == PipelineKind::Compute) {
+        const u32 index = recording_set.compute_count.fetch_add(1, std::memory_order_relaxed);
+        if (index < ComputePerSet) {
+            recording_set.compute[index].store(first, std::memory_order_relaxed);
+        }
         return;
     }
-    ShaderUse& use = recording_set.uses[index];
-    use.kind.store(u64(kind), std::memory_order_relaxed);
-    use.first.store(first, std::memory_order_relaxed);
-    use.second.store(second, std::memory_order_relaxed);
-    use.third.store(third, std::memory_order_relaxed);
+    const u32 index = recording_set.graphics_count.fetch_add(1, std::memory_order_relaxed);
+    if (index >= GraphicsPerSet) {
+        return;
+    }
+    GraphicsUse& use = recording_set.graphics[index];
+    use.vs.store(first, std::memory_order_relaxed);
+    use.gs.store(second, std::memory_order_relaxed);
+    use.ps.store(third, std::memory_order_relaxed);
 }
 
 bool NoteHeapBudget(u32 heap, u64 used, u64 budget) noexcept {
@@ -389,6 +466,10 @@ void SetLastGraphics(u64 vs, u64 gs, u64 ps) noexcept {
 void SetLastDispatch(u64 cs, u32 x, u32 y, u32 z) noexcept {
     last_cs.store(cs, std::memory_order_relaxed);
     last_dispatch.store(PackGroups(x, y, z), std::memory_order_relaxed);
+    const u64 index = recording_set.dispatch_count.fetch_add(1, std::memory_order_relaxed);
+    DispatchUse& use = recording_set.dispatches[index % DispatchesPerSet];
+    use.cs.store(cs, std::memory_order_relaxed);
+    use.groups.store(PackGroups(x, y, z), std::memory_order_relaxed);
 }
 
 void SetDispatchSummary(const char* summary) noexcept {

@@ -357,6 +357,15 @@ target_compile_definitions(aln-pipeline-cache-tests PRIVATE ALN_SOURCE_DIR="${CM
 target_compile_options(aln-pipeline-cache-tests PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(aln-pipeline-cache-tests PRIVATE Threads::Threads)
 
+# Focused tests of the issue #10 particle spawn loop bound on hand-built IR (tools/test.ps1); not part of the default
+# build.
+add_executable(aln-spawn-loop-bound-tests EXCLUDE_FROM_ALL tests/spawn_loop_bound_tests.cpp)
+set_target_properties(aln-spawn-loop-bound-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_include_directories(aln-spawn-loop-bound-tests PRIVATE gpu/shim gpu/shadps4 tests src ${CMAKE_BINARY_DIR}/gpu/include
+    gpu/third_party/gcn/include gpu/third_party/half/include gpu/third_party/xbyak)
+target_compile_definitions(aln-spawn-loop-bound-tests PRIVATE ALN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+target_link_libraries(aln-spawn-loop-bound-tests PRIVATE alngpu)
+
 # Focused tests of the wave64 Ballot lowering on hand-built IR (tools/test.ps1); not part of the default build.
 add_executable(aln-wave64-lowering-tests EXCLUDE_FROM_ALL tests/wave64_lowering_tests.cpp)
 set_target_properties(aln-wave64-lowering-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)

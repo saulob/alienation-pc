@@ -148,11 +148,19 @@ void TraceIsBoundedAndPrintedOnce(const char* path) {
     SetSubmittedTick(Timeline::Present, 9091);
     SetSubmittedTick(Timeline::SparseBind, 213);
     NoteShaders(PipelineKind::Compute, 0x03813bb4);
+    // Issue #10: every compute shader of an unfinished submission is named, graphics pipelines are capped
+    // and the newest 32 dispatches keep their order and group counts.
+    for (u64 i = 0; i < 20; ++i) {
+        NoteShaders(PipelineKind::Graphics, 0x2000 + i, 0, 0x5000);
+    }
+    for (u32 i = 0; i < 40; ++i) {
+        SetLastDispatch(0x3000 + i, i + 1, 2, 1);
+    }
     SetSubmittedTick(Timeline::Draw, 34967);
     CHECK(ShaderGeneration() == generation + 1);
     Record(Event::Submit, 9092, 1, 34967, u64(Timeline::Present) << 32);
     SetSubmittedTick(Timeline::Present, 9092);
-    for (u64 i = 0; i < 70; ++i) {
+    for (u64 i = 0; i < 300; ++i) {
         NoteShaders(PipelineKind::Compute, 0x11110000 + i);
     }
     SetCompletedTick(Timeline::Draw, 34966);
@@ -201,17 +209,34 @@ void TraceIsBoundedAndPrintedOnce(const char* path) {
     CHECK(Count(text, "heap 2 went over its budget: 162 MiB used of 51 MiB budget") == 2);
     CHECK(Count(text, "heap 2 is back within its budget: 40 MiB used of 51 MiB budget") == 1);
     CHECK(Count(text, "heap 2 ") == 3);
-    CHECK(text.find("tick 34967 was not completed; it recorded 3 pipelines\n"
-                    "GPU trace:   cs 0x7d39f28a\n"
-                    "GPU trace:   vs 0xba848b76 gs 0000000000 ps 0xb1b00b34\n"
-                    "GPU trace:   cs 0x03813bb4\n") != std::string::npos);
+    CHECK(text.find("tick 34967 was not completed; it recorded 23 pipelines (2 compute, 21 graphics), "
+                    "40 dispatches\n"
+                    "GPU trace:   cs 0x7d39f28a 0x03813bb4\n"
+                    "GPU trace:   vs 0xba848b76 gs 0000000000 ps 0xb1b00b34\n") != std::string::npos);
+    CHECK(text.find("vs 0x0000200e gs 0000000000 ps 0x00005000\n") != std::string::npos);
+    CHECK(text.find("vs 0x0000200f") == std::string::npos);
+    CHECK(text.find("and 5 more graphics pipelines\n") != std::string::npos);
+    CHECK(text.find("dispatches 9..40 of 40 (oldest first):\n"
+                    "GPU trace:     cs 0x00003008 9x2x1 cs 0x00003009 10x2x1 cs 0x0000300a 11x2x1 cs 0x0000300b "
+                    "12x2x1\n") != std::string::npos);
+    CHECK(text.find("cs 0x00003027 40x2x1\n") != std::string::npos);
+    CHECK(text.find("cs 0x00003007 ") == std::string::npos);
     CHECK(text.find("tick 34966 was not completed") == std::string::npos);
     CHECK(text.find("0x8c0c9537") == std::string::npos);
-    CHECK(text.find("70 pipelines recorded since the last submission\nGPU trace:   cs 0x11110000\n") !=
+    CHECK(text.find("300 pipelines recorded since the last submission\n"
+                    "GPU trace:   cs 0x11110000 0x11110001 0x11110002 0x11110003 0x11110004 0x11110005 0x11110006 "
+                    "0x11110007\n") != std::string::npos);
+    for (u64 i = 0; i < 256; ++i) {
+        char hash[16];
+        std::snprintf(hash, sizeof(hash), " %#010llx", static_cast<unsigned long long>(0x11110000 + i));
+        CHECK(Count(text, hash) == 1);
+    }
+    CHECK(text.find("0x11110100") == std::string::npos);
+    CHECK(text.find("and 44 more compute pipelines\n") != std::string::npos);
+    CHECK(text.find("dispatches 1..1 of 1 (oldest first):\nGPU trace:     cs 0x0000abcd 8x4x1\n") !=
           std::string::npos);
-    CHECK(text.find("cs 0x1111003f\n") != std::string::npos);
-    CHECK(text.find("cs 0x11110040") == std::string::npos);
-    CHECK(text.find("and 6 more pipelines") != std::string::npos);
+    CHECK(Count(text, "GPU trace:   vs ") <= 16 * 5);
+    CHECK(Count(text, "GPU trace:   cs ") <= 32 * 5);
     CHECK(text.find("recorded while thread 7 owns recording, at vk_rasterizer.cpp:99") !=
           std::string::npos);
     CHECK(text.find("GPU trace: thread " + std::to_string(CurrentThreadId()) + " is ") !=

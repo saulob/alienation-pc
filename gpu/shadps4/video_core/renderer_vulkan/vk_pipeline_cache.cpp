@@ -565,7 +565,7 @@ void PipelineCache::PublishShaders(bool wait) {
         const auto perm_hash = HashCombine(hash, build->permutation);
         Vulkan::SetObjectName(instance.GetDevice(), build->module,
                              GetShaderName(build->info.hw_stage, hash, build->permutation));
-        RegisterShaderBinary(std::move(build->binary), hash, build->permutation);
+        RegisterShaderBinary(std::move(build->binary), build->info, build->permutation);
         {
             std::unique_lock lock{programs_mutex};
             if (build->initial) {
@@ -1100,7 +1100,7 @@ vk::ShaderModule PipelineCache::CompileModule(Shader::Info& info, Shader::Runtim
         module = CompileSPV(spv, instance.GetDevice());
     }
 
-    RegisterShaderBinary(std::move(spv), info.pgm_hash, perm_idx);
+    RegisterShaderBinary(std::move(spv), info, perm_idx);
 
     const auto name = GetShaderName(info.hw_stage, info.pgm_hash, perm_idx);
     Vulkan::SetObjectName(instance.GetDevice(), module, name);

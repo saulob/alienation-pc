@@ -57,6 +57,7 @@ void SetPendingWork(u64 pending_operations, u64 queued_record_chunks) noexcept;
 // changes were takeovers by the GPU command thread with the draw pipeline idle.
 void SetRecordingOwner(u32 owner, u64 changes, u64 takeovers) noexcept;
 void SetLastGraphics(u64 vs, u64 gs, u64 ps) noexcept;
+// Also kept in order with the submission being built: its newest 32 dispatches are traced.
 void SetLastDispatch(u64 cs, u32 x, u32 y, u32 z) noexcept;
 // Where the command being replayed into the command buffer was recorded; null when idle.
 void SetReplaySite(const char* file, u32 line) noexcept;

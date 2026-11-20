@@ -8,6 +8,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <mutex>
 #include <optional>
@@ -74,6 +75,21 @@ inline bool Unseal(std::vector<std::uint8_t>& bytes) {
     }
     bytes.resize(payload);
     return true;
+}
+
+/// Store name of a shader's SPIR-V. A nonzero translation revision gives a name that SPIR-V
+/// cached before that translation change never had, so it cannot be preloaded.
+inline std::string ShaderBinaryName(std::uint64_t pgm_hash, std::size_t perm_idx,
+                                    std::uint32_t revision) {
+    char name[64];
+    if (revision) {
+        std::snprintf(name, sizeof(name), "0x%016llx_%zu_r%u",
+                      static_cast<unsigned long long>(pgm_hash), perm_idx, revision);
+    } else {
+        std::snprintf(name, sizeof(name), "0x%016llx_%zu",
+                      static_cast<unsigned long long>(pgm_hash), perm_idx);
+    }
+    return name;
 }
 
 /// One store per game build: 1.00 and 1.06 of a title never share a folder.

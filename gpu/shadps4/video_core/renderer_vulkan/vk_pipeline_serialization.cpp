@@ -22,6 +22,7 @@
 #include "core/emulator_settings.h"
 #include "shader_recompiler/frontend/fetch_shader.h"
 #include "shader_recompiler/info.h"
+#include "shader_recompiler/ir/passes/spawn_loop_bound.h"
 #include "video_core/cache_files.h"
 #include "video_core/cache_storage.h"
 #include "video_core/pipeline_cache_policy.h"
@@ -160,6 +161,10 @@ std::atomic<u64> binary_key_ns{}, binary_load_ns{}, binary_handles_ns{};
 u64 ElapsedNs(std::chrono::steady_clock::time_point started) {
     return u64(std::chrono::duration_cast<std::chrono::nanoseconds>(
                    std::chrono::steady_clock::now() - started).count());
+}
+std::string SpirvBlobName(const Shader::Info& info, size_t perm_idx) {
+    return PipelineCachePolicy::ShaderBinaryName(info.pgm_hash, perm_idx,
+                                                 Shader::Optimization::SpawnLoopBoundRevision(info));
 }
 PipelineBinaryCache::Key BinaryKey(const vk::PipelineBinaryKeyKHR& key) {
     if (!key.keySize || key.keySize > VK_MAX_PIPELINE_BINARY_KEY_SIZE_KHR) {
@@ -586,13 +591,13 @@ void RegisterShaderMeta(const Shader::Info& info,
                                        fmt::format("{:#018x}", perm_hash), ar.TakeOff());
 }
 
-void RegisterShaderBinary(std::vector<u32>&& spv, u64 pgm_hash, size_t perm_idx) {
+void RegisterShaderBinary(std::vector<u32>&& spv, const Shader::Info& info, size_t perm_idx) {
     if (!Storage::DataBase::Instance().IsOpened()) {
         return;
     }
 
     Storage::DataBase::Instance().Save(Storage::BlobType::ShaderBinary,
-                                       fmt::format("{:#018x}_{}", pgm_hash, perm_idx),
+                                       SpirvBlobName(info, perm_idx),
                                        std::move(spv));
 }
 
@@ -798,7 +803,7 @@ bool PipelineCache::LoadPipelineStage(Serialization::Archive& ar, size_t stage) 
 
     std::vector<u32> spv{};
     Storage::DataBase::Instance().Load(Storage::BlobType::ShaderBinary,
-                                       fmt::format("{:#018x}_{}", program->info.pgm_hash, perm_idx),
+                                       SpirvBlobName(program->info, perm_idx),
                                        spv);
     if (spv.empty()) {
         return false;
@@ -1150,8 +1155,7 @@ void PipelineCache::ReadWarmEntry(BackgroundWarmup& warm, std::vector<u8>&& data
                                    stage->perm_idx)) {
                     std::vector<u32> spv;
                     db.Load(Storage::BlobType::ShaderBinary,
-                            fmt::format("{:#018x}_{}", stage->program->info.pgm_hash,
-                                        stage->perm_idx),
+                            SpirvBlobName(stage->program->info, stage->perm_idx),
                             spv);
                     if (!spv.empty()) {
                         const auto module_started = std::chrono::steady_clock::now();
