@@ -127,8 +127,9 @@ The simulation runs at the engine's frame rate in every build: the frame update 
 `0x1402f4f`, 1.06 `0x140996f`). With the binding a no-op the scripts' `engine_set_fps(29.97)` calls change nothing, so
 1.06 steps its game at 59.94 like 1.00, not only its presentation.
 
-### Game timing (not patched)
+### Game timing (not changed)
 
+The frame update is hooked only to log stepper counters; no timing value is modified.
 The Frame rate setting relies on these being the same in every build: at least one fixed step per frame, frames paced
 by waiting for each flip ([FIRST_BOOT.md](FIRST_BOOT.md#the-games-timing)). `tests/patch_site_tests.py` checks their
 masked fingerprints (unique, at these offsets), the stepper call, the 8-step clamp, the fixed `1 / 30` render delta and

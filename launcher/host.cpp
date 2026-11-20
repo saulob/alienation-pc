@@ -34,8 +34,8 @@ Rect ToRect(const SDL_Rect& rect) {
 #ifdef _WIN32
 bool PinModule(std::string_view name) {
     const std::wstring wide(name.begin(), name.end());
-    // Resolved like SDL_LoadObject resolves it, so the pinned module is the one the renderer uses.
-    if (!LoadLibraryW(wide.c_str())) {
+    // The system copy, so a dxgi.dll or d3d11.dll beside the executable is never pinned; SDL's by-name load reuses it.
+    if (!LoadLibraryExW(wide.c_str(), nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32)) {
         return false;
     }
     HMODULE pinned = nullptr;

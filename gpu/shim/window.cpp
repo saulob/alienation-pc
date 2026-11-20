@@ -218,7 +218,7 @@ void WindowSDL::RefreshTitle() {
     }
 }
 
-// The refresh of the display the window is on bounds the Frame rate's repeats with VSync on.
+// The refresh of the display the window is on bounds the Frame rate's repeats (VSync on or off).
 void WindowSDL::UpdateDisplayRefresh() {
     if (const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(window))) {
         AlnSettings::Get().display_refresh_hz = mode->refresh_rate;

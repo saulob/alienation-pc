@@ -87,7 +87,8 @@ void TestHostSource(const fs::path& source) {
     CHECK(host.find("SDL_HINT_RENDER_DRIVER") == std::string::npos);
 
     const std::string pin_module = Between(host, "bool PinModule(std::string_view name) {", "int64_t ThreadCpuNs()");
-    CHECK(pin_module.find("LoadLibraryW(") != std::string::npos);
+    CHECK(pin_module.find("LoadLibraryExW(") != std::string::npos);
+    CHECK(pin_module.find("LOAD_LIBRARY_SEARCH_SYSTEM32") != std::string::npos);
     CHECK(pin_module.find("GET_MODULE_HANDLE_EX_FLAG_PIN") != std::string::npos);
     CHECK(host.find("FreeLibrary") == std::string::npos && host.find("SDL_UnloadObject") == std::string::npos);
     CHECK(host.find("Sleep(") == std::string::npos);

@@ -16,7 +16,7 @@
 
 ## Status
 
-- **v0.1.0 is the first public release.**
+- **v0.1.1 is the current release**; v0.1.0 was the first public release.
 - **Windows is the primary tested platform.** The Linux x86_64 AppImage and Steam Deck support are **experimental**: they are checked headlessly, but have not been tested on Steam Deck hardware.
 - **Vulkan is the only supported release renderer.**
 - **Online 2-player** gameplay has been tested by hand. **3 and 4-player** online protocol and session paths are validated headlessly and have had less manual gameplay testing.

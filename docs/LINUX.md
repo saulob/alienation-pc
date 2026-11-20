@@ -53,8 +53,9 @@ under SteamOS; it has not been tested on Steam Deck hardware.
 | Data folder | SUPPORTED | EQUIVALENT | EQUIVALENT | all | beside alienation.exe; Linux: beside the AppImage file, or $XDG_DATA_HOME/AlienationPC when that folder is read-only; never inside the AppImage |
 | Allow overlay programs | SUPPORTED | UNAVAILABLE | UNAVAILABLE | all | Linux overlays are Vulkan layers or LD_PRELOAD libraries that attach to the game process as it is |
 
-Only one feature is missing on Linux, for want of a Windows API: Allow overlay programs (Linux overlays are Vulkan layers
-or `LD_PRELOAD` libraries that attach to the game process as it is). Alienation PC v0.1.0 requires Vulkan on Linux and
+Two things are missing on Linux, for want of a Windows API: Allow overlay programs (Linux overlays are Vulkan layers
+or `LD_PRELOAD` libraries that attach to the game process as it is) and the crash dump (`.dmp`) that the Windows build
+writes and Bug Report can attach; on Linux a crash is recorded in the session log only. Alienation PC requires Vulkan on Linux and
 the Steam Deck: there is no renderer setting and no fallback renderer. Online play uses the same lobby protocol, online
 version, room model (Matching2, a full mesh of up to four peers), P2P transport and relay on both platforms, so Windows
 and Linux players of the same build play together.

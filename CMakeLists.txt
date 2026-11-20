@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(alienation_pc VERSION 0.1.0 LANGUAGES C CXX)
+project(alienation_pc VERSION 0.1.1 LANGUAGES C CXX)
 set(ALN_PORT_VERSION "${PROJECT_VERSION}")
 
 if (NOT CMAKE_C_COMPILER_ID MATCHES "Clang")

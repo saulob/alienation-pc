@@ -113,7 +113,10 @@ SYSV void OnContext(uint16_t ctx, uint16_t event, uint8_t cause, int32_t error, 
 
 SYSV void OnRequest(uint16_t ctx, uint32_t id, uint16_t event, int32_t error, const void* data, void* arg) {
     (void)ctx, (void)arg;
-    Seen::Request r{id, event, error, {}};
+    Seen::Request r{};
+    r.id = id;
+    r.event = event;
+    r.error = error;
     if (data && !error && (event == 0x0101 || event == 0x0102)) {
         const uint8_t* internal = Rd<const uint8_t*>(data, 0);
         r.slots = Rd<uint16_t>(internal, 8);

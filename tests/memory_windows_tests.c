@@ -8,6 +8,7 @@ uintptr_t runtime_lookup(const RuntimeExport *table, size_t count, const char *n
     return 0;
 }
 void runtime_log_flush(void) {}
+void runtime_log_fatal(const char *what, int status) { fprintf(stderr, "%s\n", what); fflush(NULL); _Exit(status); }
 int32_t *runtime_errno(void) { static int32_t value; return &value; }
 #include <windows.h>
 #include <psapi.h>
