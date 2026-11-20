@@ -444,6 +444,14 @@ target_include_directories(aln-window-tests PRIVATE src)
 target_compile_definitions(aln-window-tests PRIVATE ALN_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 target_compile_options(aln-window-tests PRIVATE -Wall -Wextra -Werror)
 
+# Focused tests of the launcher's renderer order, module pinning, frame cap and telemetry; no window. Not part of the
+# default build.
+add_executable(aln-launcher-renderer-tests EXCLUDE_FROM_ALL tests/launcher_renderer_tests.cpp)
+set_target_properties(aln-launcher-renderer-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_include_directories(aln-launcher-renderer-tests PRIVATE launcher)
+target_compile_definitions(aln-launcher-renderer-tests PRIVATE ALN_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+target_compile_options(aln-launcher-renderer-tests PRIVATE -Wall -Wextra -Werror)
+
 # Focused tests of the swapchain image count, present mode, Gamescope detection and the Gamescope-only flip pacing;
 # not part of the default build.
 add_executable(aln-present-tests EXCLUDE_FROM_ALL tests/present_tests.cpp)
